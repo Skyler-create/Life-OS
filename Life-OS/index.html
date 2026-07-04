@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#17181A">
+<title>lifeOS</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='%23E1251B'/></svg>">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+:root{
+  --bg:#17181A; --card:#212327; --card2:#2A2D33; --line:#33363C;
+  --text:#E8E6E3; --dim:#8B8E94;
+  --accent:#E1251B;
+  --deep:#818CF8; --focus:#FBBF24; --light:#6EE7B7; --parallel:#C4B5FD;
+  --done:#4ADE80;
+  --mono:'Consolas','SF Mono',ui-monospace,Menlo,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,'Segoe UI',Roboto,sans-serif;
+  max-width:600px;margin:0 auto;padding:0 12px 130px;font-size:15px;line-height:1.45}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+input,select,textarea{font:inherit;color:var(--text);background:var(--card2);border:1px solid var(--line);
+  border-radius:6px;padding:8px 10px;outline:none;width:100%}
+input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+a{color:var(--light)}
+.mono{font-family:var(--mono)}
+.dim{color:var(--dim)}
+
+/* header */
+header{display:flex;align-items:baseline;justify-content:space-between;padding:14px 2px 8px}
+header h1{font-family:var(--mono);font-size:18px;font-weight:700;letter-spacing:.5px}
+header h1 .dot{color:var(--accent)}
+#streakChip{font-family:var(--mono);font-size:12px;color:var(--dim)}
+#streakChip b{color:var(--text)}
+
+/* nav */
+nav{display:flex;gap:4px;margin-bottom:12px;overflow-x:auto}
+nav button{font-family:var(--mono);font-size:12px;letter-spacing:.5px;padding:7px 12px;border-radius:6px;
+  color:var(--dim);border:1px solid transparent;white-space:nowrap}
+nav button.on{color:var(--text);background:var(--card);border-color:var(--line)}
+nav button.on::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;
+  background:var(--accent);margin-right:6px;vertical-align:1px}
+
+/* cards */
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
+.card h2{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:1px;color:var(--dim);
+  text-transform:uppercase;margin-bottom:8px}
+.starthere{border-left:3px solid var(--accent)}
+.starthere .task-name{font-size:16px;font-weight:600}
+
+/* energy bar */
+.ebar{display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--card2);margin:6px 0 4px}
+.ebar div{height:100%}
+.elegend{display:flex;gap:12px;flex-wrap:wrap;font-family:var(--mono);font-size:11px;color:var(--dim)}
+.elegend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px}
+
+/* filter chips */
+.chips{display:flex;gap:6px;margin-bottom:10px;overflow-x:auto;padding-bottom:2px}
+.chips button{font-family:var(--mono);font-size:11px;padding:5px 10px;border-radius:20px;
+  border:1px solid var(--line);color:var(--dim);white-space:nowrap}
+.chips button.on{color:#17181A;font-weight:700}
+
+/* task rows */
+.trow{display:flex;align-items:flex-start;gap:10px;background:var(--card);border:1px solid var(--line);
+  border-radius:8px;padding:10px;margin-bottom:6px;position:relative;overflow:hidden}
+.trow::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--rail,var(--line))}
+.tcircle{flex:0 0 auto;width:24px;height:24px;border-radius:50%;border:2px solid var(--dim);margin-top:1px;
+  display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700}
+.tcircle.done{border-color:var(--done);color:var(--done)}
+.tcircle.partial{border-color:var(--focus);color:var(--focus)}
+.tbody{flex:1;min-width:0}
+.tname{word-wrap:break-word}
+.trow.isdone .tname{color:var(--dim);text-decoration:line-through}
+.tmeta{font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:2px;display:flex;gap:8px;flex-wrap:wrap}
+.tmeta .due-today{color:var(--focus)}
+.tmeta .overdue{color:var(--accent)}
+.tmeta .hard{color:var(--accent)}
+.pname{font-family:var(--mono);font-size:11px;letter-spacing:.5px;color:var(--dim);margin:14px 2px 6px;text-transform:uppercase}
+
+/* editor */
+.editor{background:var(--card2);border-top:1px solid var(--line);margin:8px -10px -10px;padding:10px;
+  display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.editor .full{grid-column:1/-1}
+.editor label{font-family:var(--mono);font-size:10px;color:var(--dim);display:block;margin-bottom:2px;text-transform:uppercase}
+.editor .btnrow{grid-column:1/-1;display:flex;gap:8px;justify-content:flex-end}
+.btn{padding:8px 14px;border-radius:6px;border:1px solid var(--line);font-family:var(--mono);font-size:12px}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
+.btn.danger{color:var(--accent)}
+
+/* add bar */
+#addbar{position:fixed;bottom:0;left:0;right:0;background:rgba(23,24,26,.97);border-top:1px solid var(--line);
+  padding:8px 12px calc(10px + env(safe-area-inset-bottom));backdrop-filter:blur(6px)}
+#addbar .inner{max-width:576px;margin:0 auto}
+#esel{display:flex;gap:6px;margin-bottom:6px}
+#esel button{flex:1;font-family:var(--mono);font-size:11px;font-weight:700;padding:6px 0;border-radius:6px;
+  border:1px solid var(--line);color:var(--dim)}
+#esel button.on{color:#17181A}
+#addrow{display:flex;gap:6px}
+#addrow input{flex:1}
+#addrow .btn{flex:0 0 auto;background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
+#addhint{font-family:var(--mono);font-size:10px;color:var(--dim);margin-top:4px}
+
+/* reflect */
+.metric-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.metric-grid label{font-family:var(--mono);font-size:10px;color:var(--dim);display:block;margin-bottom:2px;text-transform:uppercase}
+.metric-grid .full{grid-column:1/-1}
+.goalrow{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--line)}
+.goalrow:last-child{border-bottom:none}
+.goalrow input[type=checkbox]{width:20px;height:20px;accent-color:var(--accent)}
+.goalrow .g-meta{font-family:var(--mono);font-size:11px;color:var(--dim);margin-left:auto}
+#scorePreview{font-family:var(--mono);font-size:28px;font-weight:700;text-align:center;padding:8px}
+#scorePreview small{display:block;font-size:11px;color:var(--dim);font-weight:400}
+
+/* brief markdown */
+.md h1,.md h2,.md h3{font-family:var(--mono);margin:14px 0 6px;font-size:15px}
+.md h1{font-size:17px}
+.md h2{color:var(--accent)}
+.md p,.md ul,.md ol{margin-bottom:8px}
+.md ul,.md ol{padding-left:20px}
+.md code{font-family:var(--mono);background:var(--card2);padding:1px 4px;border-radius:4px;font-size:13px}
+.md strong{color:#fff}
+
+/* log */
+table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px}
+th,td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line)}
+th{color:var(--dim);font-weight:400;text-transform:uppercase;font-size:10px}
+.hit{color:var(--done)} .miss{color:var(--accent)} .rest{color:var(--dim)}
+
+/* auth */
+#auth{max-width:340px;margin:80px auto;display:none}
+#auth .card{padding:20px}
+#auth input{margin-bottom:10px}
+#authmsg{font-family:var(--mono);font-size:12px;color:var(--focus);margin-top:8px;min-height:16px}
+.hidden{display:none!important}
+#toast{position:fixed;top:12px;left:50%;transform:translateX(-50%);background:var(--card2);
+  border:1px solid var(--line);border-radius:8px;padding:8px 16px;font-family:var(--mono);font-size:12px;
+  opacity:0;transition:opacity .3s;pointer-events:none;z-index:99}
+#toast.show{opacity:1}
+.empty{color:var(--dim);font-family:var(--mono);font-size:12px;text-align:center;padding:20px}
+</style>
+</head>
+<body>
+
+<div id="auth">
+  <div class="card">
+    <h1 style="font-family:var(--mono);margin-bottom:14px">lifeOS<span style="color:var(--accent)">.</span></h1>
+    <input id="a-email" type="email" placeholder="email" autocomplete="username">
+    <input id="a-pass" type="password" placeholder="password" autocomplete="current-password">
+    <button class="btn primary" style="width:100%" onclick="signIn()">Sign in</button>
+    <button class="btn" style="width:100%;margin-top:8px" onclick="signUp()">First time? Create account</button>
+    <div id="authmsg"></div>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+  <header>
+    <h1>lifeOS<span class="dot">.</span></h1>
+    <span id="streakChip"></span>
+  </header>
+  <nav id="nav"></nav>
+  <main id="main"></main>
+  <div id="addbar" class="hidden">
+    <div class="inner">
+      <div id="esel"></div>
+      <div id="addrow">
+        <input id="addinput" placeholder="Add task…  #project !high 90m due:tom" enterkeyhint="done">
+        <button class="btn" onclick="addTask()">Add</button>
+      </div>
+      <div id="addhint">#project · !high/!med/!low · 90m/1.5h · due:today/tom/YYYY-MM-DD · hard</div>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+/* ================= config ================= */
+const SB_URL = 'https://xebiaoycxwstrzgkjult.supabase.co';
+const SB_KEY = 'sb_publishable_ecGABp0TAZcVX_TLIjBbOQ_rqUKNATw';
+const OWNER  = 'skyler.scooty@gmail.com';
+const db = window.supabase.createClient(SB_URL, SB_KEY);
+
+const ENERGY = {
+  DEEP:    {color:'var(--deep)',     hex:'#818CF8', score:3},
+  FOCUS:   {color:'var(--focus)',    hex:'#FBBF24', score:2},
+  LIGHT:   {color:'var(--light)',    hex:'#6EE7B7', score:1},
+  PARALLEL:{color:'var(--parallel)', hex:'#C4B5FD', score:1},
+};
+const PRIO = {high:3, med:2, low:1};
+
+/* ================= state ================= */
+let S = {
+  tasks: [], goals: [], goalLogsToday: [], brief: null, todayLog: null, prevLog: null,
+  view: localStorage.getItem('view') || 'today',
+  filt: localStorage.getItem('filt') || 'ALL',
+  addEnergy: localStorage.getItem('addEnergy') || 'FOCUS',
+  showBacklog: false, search: '', editing: null,
+};
+
+const todayISO = () => new Date().toLocaleDateString('sv-SE');
+const esc = s => (s ?? '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const toast = m => { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2200); };
+
+/* ================= auth ================= */
+async function signIn(){
+  const email = document.getElementById('a-email').value.trim();
+  const pass  = document.getElementById('a-pass').value;
+  const {error} = await db.auth.signInWithPassword({email, password: pass});
+  document.getElementById('authmsg').textContent = error ? error.message : '';
+}
+async function signUp(){
+  const email = document.getElementById('a-email').value.trim();
+  const pass  = document.getElementById('a-pass').value;
+  if (email.toLowerCase() !== OWNER) { document.getElementById('authmsg').textContent = 'Single-user system.'; return; }
+  if (pass.length < 8) { document.getElementById('authmsg').textContent = 'Password: 8+ chars.'; return; }
+  const {error} = await db.auth.signUp({email, password: pass});
+  document.getElementById('authmsg').textContent = error ? error.message : 'Check your email to confirm, then sign in.';
+}
+db.auth.onAuthStateChange((_e, session) => {
+  document.getElementById('auth').style.display = session ? 'none' : 'block';
+  document.getElementById('app').classList.toggle('hidden', !session);
+  if (session) loadAll();
+});
+document.getElementById('a-email').value = OWNER;
+
+/* ================= data ================= */
+async function loadAll(){
+  const today = todayISO();
+  const [t, g, gl, b, dl] = await Promise.all([
+    db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
+    db.from('weekly_goals').select('*').eq('active', true).order('sort'),
+    db.from('goal_logs').select('*').eq('date', today),
+    db.from('briefs').select('*').eq('date', today).maybeSingle(),
+    db.from('daily_log').select('*').order('date', {ascending:false}).limit(15),
+  ]);
+  S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
+  S.brief = b.data || null;
+  const logs = dl.data || [];
+  S.todayLog = logs.find(l => l.date === today) || null;
+  S.prevLog  = logs.find(l => l.date < today) || null;
+  S.logs = logs;
+  render();
+}
+
+/* ================= task helpers ================= */
+const isDoneToday = t => t.status === 'done' && (t.completed_at || '').slice(0,10) === todayISO();
+const isPartialToday = t => t.partial_date === todayISO();
+const dueTag = t => {
+  if (!t.due) return '';
+  const today = todayISO();
+  if (t.due < today && t.status !== 'done') return `<span class="overdue">overdue ${esc(t.due.slice(5))}</span>`;
+  if (t.due === today) return `<span class="due-today">due today</span>`;
+  return `<span>due ${esc(t.due.slice(5))}</span>`;
+};
+const chunkTag = t => t.chunk_total ? ` (${t.chunk_index}/${t.chunk_total})` : '';
+
+async function cycleTask(id){
+  const t = S.tasks.find(x => x.id === id); if (!t) return;
+  let patch;
+  if (t.status === 'done')            patch = {status:'in_progress', completed_at:null, partial_date:todayISO()};
+  else if (isPartialToday(t))         patch = {status:'not_started', completed_at:null, partial_date:null};
+  else                                patch = {status:'done', completed_at:new Date().toISOString(), partial_date:null};
+  Object.assign(t, patch); render();
+  const {error} = await db.from('tasks').update(patch).eq('id', id);
+  if (error) { toast('Save failed: ' + error.message); loadAll(); }
+}
+
+/* quick-add parsing: #project !prio 90m/1.5h due:tom hard */
+function parseQuickAdd(raw){
+  let title = raw, out = {energy: S.addEnergy, bucket: (S.view === 'tasks' && S.showBacklog) ? 'backlog' : 'active'};
+  const grab = (re, fn) => { const m = title.match(re); if (m) { fn(m); title = title.replace(re, ''); } };
+  grab(/#(\S+)/,        m => out.project = m[1].replace(/-/g,' '));
+  grab(/!(high|med|low)\b/i, m => out.priority = m[1].toLowerCase());
+  grab(/\b(\d+(?:\.\d+)?)h\b/i, m => out.est_minutes = Math.round(parseFloat(m[1]) * 60));
+  grab(/\b(\d+)m\b/i,   m => out.est_minutes = parseInt(m[1]));
+  grab(/\bdue:(\S+)/i,  m => {
+    const v = m[1].toLowerCase(); const d = new Date();
+    if (v === 'today') out.due = todayISO();
+    else if (v === 'tom' || v === 'tomorrow') { d.setDate(d.getDate()+1); out.due = d.toLocaleDateString('sv-SE'); }
+    else if (/^\d{4}-\d{2}-\d{2}$/.test(v)) out.due = v;
+  });
+  grab(/\bhard\b/i, () => out.deadline_type = 'hard');
+  if (out.due && !out.deadline_type) out.deadline_type = 'self_imposed';
+  out.title = title.replace(/\s+/g,' ').trim();
+  return out;
+}
+async function addTask(){
+  const inp = document.getElementById('addinput');
+  const row = parseQuickAdd(inp.value);
+  if (!row.title) return;
+  inp.value = '';
+  const {data, error} = await db.from('tasks').insert(row).select().single();
+  if (error) { toast('Add failed: ' + error.message); return; }
+  S.tasks.push(data); render(); toast('Added');
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && document.activeElement?.id === 'addinput') addTask();
+});
+
+async function saveEdit(id){
+  const g = f => document.getElementById('e-' + f)?.value || null;
+  const patch = {
+    title: g('title'), project: g('project'), energy: g('energy'),
+    due: g('due') || null, est_minutes: g('est') ? parseInt(g('est')) : null,
+    priority: g('prio'), deadline_type: g('dtype') || null, status: g('status'),
+    bucket: g('bucket'), notes: g('notes'), parallel: g('energy') === 'PARALLEL',
+  };
+  if (patch.status === 'done') patch.completed_at = S.tasks.find(t=>t.id===id)?.completed_at || new Date().toISOString();
+  else patch.completed_at = null;
+  const {error} = await db.from('tasks').update(patch).eq('id', id);
+  if (error) { toast('Save failed: ' + error.message); return; }
+  S.editing = null; loadAll();
+}
+async function deleteTask(id){
+  if (!confirm('Delete this task?')) return;
+  await db.from('tasks').delete().eq('id', id);
+  S.editing = null; loadAll();
+}
+
+/* ================= scoring (Option A) ================= */
+function weight(item, maxMin){
+  const p = PRIO[item.priority] || 2;
+  const e = (ENERGY[item.energy] || {score:1}).score;
+  const tm = Math.min((item.est_minutes || 15) / (maxMin || 1), 1);
+  return (p/3 + e/3 + tm) / 3;
+}
+function planItems(){
+  if (S.brief?.plan?.length) return S.brief.plan;
+  // fallback: tasks due today (any status) = the day's implicit plan
+  return S.tasks.filter(t => t.bucket === 'active' && t.due === todayISO());
+}
+function computeScore(readBrief){
+  const plan = planItems();
+  const done = S.tasks.filter(isDoneToday);
+  const partial = S.tasks.filter(t => isPartialToday(t) && t.status !== 'done');
+  const actuals = S.goalLogsToday.map(gl => S.goals.find(g => g.id === gl.goal_id)).filter(g => g && g.est_minutes);
+  const planNames = new Set(plan.map(p => (p.title || '').toLowerCase()));
+  const offPlanActuals = actuals.filter(a => !planNames.has(a.name.toLowerCase()));
+  const universe = [...plan, ...done, ...partial, ...offPlanActuals];
+  const maxMin = Math.max(...universe.map(i => i.est_minutes || 15), 1);
+  const den = plan.reduce((s, i) => s + weight(i, maxMin), 0);
+  let num = done.reduce((s, i) => s + weight(i, maxMin), 0)
+          + partial.reduce((s, i) => s + 0.5 * weight(i, maxMin), 0)
+          + offPlanActuals.reduce((s, i) => s + weight(i, maxMin), 0);
+  if (den === 0) return {score: null, planCount: 0, doneCount: done.length, partialCount: partial.length};
+  let score = (num / den) * 100 + (readBrief ? 2 : 0);
+  return {score: Math.min(Math.round(score * 10) / 10, 100), planCount: plan.length, doneCount: done.length, partialCount: partial.length};
+}
+
+/* ================= reflect save ================= */
+async function toggleGoal(goalId, checked){
+  if (checked) {
+    const {data, error} = await db.from('goal_logs').insert({goal_id: goalId, date: todayISO()}).select().single();
+    if (!error) S.goalLogsToday.push(data);
+  } else {
+    const gl = S.goalLogsToday.find(x => x.goal_id === goalId);
+    if (gl) { await db.from('goal_logs').delete().eq('id', gl.id); S.goalLogsToday = S.goalLogsToday.filter(x => x.id !== gl.id); }
+  }
+  updateScorePreview();
+}
+function refVal(id){ return document.getElementById(id)?.value; }
+function updateScorePreview(){
+  const el = document.getElementById('scorePreview'); if (!el) return;
+  const rest = refVal('r-rest') === 'y';
+  if (rest) { el.innerHTML = 'REST<small>streak preserved</small>'; return; }
+  const r = computeScore(refVal('r-brief') === 'y');
+  if (r.score === null) { el.innerHTML = '—<small>no plan found for today (no brief, nothing due)</small>'; return; }
+  const hit = r.score >= 70;
+  el.style.color = hit ? 'var(--done)' : 'var(--accent)';
+  el.innerHTML = `${r.score}<small>${r.doneCount} done · ${r.partialCount} partial · plan of ${r.planCount} · ${hit ? 'streak hit' : 'below 70'}</small>`;
+}
+async function saveReflection(){
+  const rest = refVal('r-rest') === 'y';
+  const readBrief = refVal('r-brief') === 'y';
+  const r = computeScore(readBrief);
+  const prevStreak = S.prevLog?.streak_count || 0;
+  let streak_hit = null, streak_count = prevStreak;
+  if (!rest && r.score !== null) { streak_hit = r.score >= 70; streak_count = streak_hit ? prevStreak + 1 : 0; }
+  const row = {
+    date: todayISO(),
+    score: rest ? null : r.score, streak_hit, streak_count, rest_day: rest,
+    tasks_planned: r.planCount, tasks_done: r.doneCount, tasks_partial: r.partialCount,
+    wake_time: refVal('r-wake') || null,
+    focus: refVal('r-focus') ? +refVal('r-focus') : null,
+    energy_now: refVal('r-energy') ? +refVal('r-energy') : null,
+    started_with_start_here: refVal('r-sh') === '' ? null : refVal('r-sh') === 'y',
+    read_brief: readBrief,
+    notes_tomorrow: refVal('r-nt') || null, notes_new: refVal('r-nn') || null, notes_check: refVal('r-nc') || null,
+  };
+  const {error} = await db.from('daily_log').upsert(row);
+  if (error) { toast('Save failed: ' + error.message); return; }
+  toast(rest ? 'Rest day logged — streak preserved' : `Saved. Score ${r.score} · streak ${streak_count}`);
+  loadAll();
+}
+
+/* ================= rendering ================= */
+const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['reflect','REFLECT'],['log','LOG'],['chat','CHAT ↗']];
+function setView(v){
+  if (v === 'chat') {
+    let url = localStorage.getItem('chatUrl');
+    if (!url) {
+      url = prompt('One-time setup: paste your claude.ai lifeOS project URL\n(claude.ai → Projects → lifeOS → copy the address bar)');
+      if (!url || !url.includes('claude.ai')) return;
+      localStorage.setItem('chatUrl', url.trim());
+    }
+    window.open(url, '_blank');
+    return;
+  }
+  S.view = v; S.editing = null; localStorage.setItem('view', v); render();
+}
+function setFilt(f){ S.filt = f; localStorage.setItem('filt', f); render(); }
+function setAddEnergy(e){ S.addEnergy = e; localStorage.setItem('addEnergy', e); renderAddBar(); }
+
+function render(){
+  document.getElementById('nav').innerHTML = VIEWS.map(([v, l]) =>
+    `<button class="${S.view === v ? 'on' : ''}" onclick="setView('${v}')">${l}</button>`).join('');
+  const streak = S.prevLog || S.todayLog;
+  const sc = S.todayLog?.streak_count ?? S.prevLog?.streak_count ?? 0;
+  document.getElementById('streakChip').innerHTML = `streak <b>${sc}</b>d`;
+  const main = document.getElementById('main');
+  if (S.view === 'today')   main.innerHTML = rToday();
+  if (S.view === 'tasks')   main.innerHTML = rTasks();
+  if (S.view === 'brief')   main.innerHTML = rBrief();
+  if (S.view === 'reflect') { main.innerHTML = rReflect(); updateScorePreview(); }
+  if (S.view === 'log')     main.innerHTML = rLog();
+  document.getElementById('addbar').classList.toggle('hidden', !(S.view === 'today' || S.view === 'tasks'));
+  renderAddBar();
+}
+function renderAddBar(){
+  document.getElementById('esel').innerHTML = Object.keys(ENERGY).map(e =>
+    `<button class="${S.addEnergy === e ? 'on' : ''}" style="${S.addEnergy === e ? 'background:' + ENERGY[e].hex + ';border-color:' + ENERGY[e].hex : ''}"
+      onclick="setAddEnergy('${e}')">${e}</button>`).join('');
+}
+function chipsHTML(){
+  const all = ['ALL', ...Object.keys(ENERGY)];
+  return `<div class="chips">` + all.map(f => {
+    const on = S.filt === f;
+    const bg = f === 'ALL' ? 'var(--text)' : ENERGY[f].hex;
+    return `<button class="${on ? 'on' : ''}" style="${on ? 'background:' + bg + ';border-color:' + bg : ''}" onclick="setFilt('${f}')">${f}</button>`;
+  }).join('') + `</div>`;
+}
+function applyFilt(list){ return S.filt === 'ALL' ? list : list.filter(t => t.energy === S.filt); }
+
+function taskRowHTML(t){
+  const en = ENERGY[t.energy] || {};
+  const circle = t.status === 'done' ? '<span class="tcircle done">✓</span>'
+    : isPartialToday(t) ? '<span class="tcircle partial">◐</span>'
+    : '<span class="tcircle"></span>';
+  const meta = [
+    t.project ? `<span>${esc(t.project)}</span>` : '',
+    t.energy ? `<span style="color:${en.color}">${t.energy}</span>` : '',
+    t.est_minutes ? `<span>${t.est_minutes}m</span>` : '',
+    dueTag(t),
+    t.deadline_type === 'hard' ? `<span class="hard">HARD</span>` : '',
+    t.priority === 'high' ? `<span style="color:var(--focus)">high</span>` : '',
+    t.status === 'in_progress' && !isPartialToday(t) ? `<span>in progress</span>` : '',
+  ].filter(Boolean).join('');
+  const editor = S.editing === t.id ? editorHTML(t) : '';
+  return `<div class="trow ${t.status === 'done' ? 'isdone' : ''}" style="--rail:${en.color || 'var(--line)'}">
+    <button onclick="cycleTask('${t.id}')" style="display:contents">${circle}</button>
+    <div class="tbody" onclick="S.editing = S.editing === '${t.id}' ? null : '${t.id}'; render()">
+      <div class="tname">${esc(t.title)}</div>
+      <div class="tmeta">${meta}</div>
+      ${editor}
+    </div>
+  </div>`;
+}
+function editorHTML(t){
+  const opt = (list, cur) => list.map(([v, l]) => `<option value="${v}" ${v === (cur ?? '') ? 'selected' : ''}>${l}</option>`).join('');
+  return `<div class="editor" onclick="event.stopPropagation()">
+    <div class="full"><label>Title</label><input id="e-title" value="${esc(t.title)}"></div>
+    <div><label>Project</label><input id="e-project" value="${esc(t.project || '')}"></div>
+    <div><label>Energy</label><select id="e-energy">${opt(Object.keys(ENERGY).map(e => [e, e]), t.energy || 'FOCUS')}</select></div>
+    <div><label>Due</label><input id="e-due" type="date" value="${t.due || ''}"></div>
+    <div><label>Est. min</label><input id="e-est" type="number" value="${t.est_minutes ?? ''}"></div>
+    <div><label>Priority</label><select id="e-prio">${opt([['high','high'],['med','med'],['low','low']], t.priority || 'med')}</select></div>
+    <div><label>Deadline</label><select id="e-dtype">${opt([['','—'],['hard','hard'],['self_imposed','self-imposed']], t.deadline_type)}</select></div>
+    <div><label>Status</label><select id="e-status">${opt([['not_started','not started'],['in_progress','in progress'],['done','done'],['blocked','blocked']], t.status)}</select></div>
+    <div><label>Bucket</label><select id="e-bucket">${opt([['active','active'],['backlog','backlog']], t.bucket)}</select></div>
+    <div class="full"><label>Notes</label><textarea id="e-notes" rows="2">${esc(t.notes || '')}</textarea></div>
+    <div class="btnrow">
+      <button class="btn danger" onclick="deleteTask('${t.id}')">Delete</button>
+      <button class="btn" onclick="S.editing=null;render()">Cancel</button>
+      <button class="btn primary" onclick="saveEdit('${t.id}')">Save</button>
+    </div>
+  </div>`;
+}
+
+/* --- TODAY --- */
+function rToday(){
+  const today = todayISO();
+  const active = S.tasks.filter(t => t.bucket === 'active');
+  const todays = active.filter(t =>
+    (t.due && t.due <= today && t.status !== 'done') ||
+    t.status === 'in_progress' || isPartialToday(t) || isDoneToday(t));
+  const open = todays.filter(t => t.status !== 'done');
+  // energy distribution
+  const dist = {}; let total = 0;
+  open.forEach(t => { const m = t.est_minutes || 15; dist[t.energy || 'FOCUS'] = (dist[t.energy || 'FOCUS'] || 0) + m; total += m; });
+  const bar = total ? `<div class="ebar">` + Object.entries(dist).map(([e, m]) =>
+      `<div style="width:${(m / total * 100).toFixed(1)}%;background:${(ENERGY[e] || {}).hex}"></div>`).join('') + `</div>
+    <div class="elegend">` + Object.entries(dist).map(([e, m]) =>
+      `<span><i style="background:${(ENERGY[e] || {}).hex}"></i>${e} ${Math.round(m/60*10)/10}h</span>`).join('') +
+      `<span style="margin-left:auto">${Math.round(total/60*10)/10}h open</span></div>` : '';
+  const sh = S.brief?.start_here_task;
+  const shCard = sh ? `<div class="card starthere"><h2>Start here</h2><div class="task-name">${esc(sh)}</div></div>` : '';
+  const list = applyFilt(todays);
+  const sorted = [...list].sort((a, b) =>
+    (a.status === 'done') - (b.status === 'done') ||
+    (a.due || '9999').localeCompare(b.due || '9999') ||
+    (PRIO[b.priority] || 2) - (PRIO[a.priority] || 2));
+  return shCard +
+    (bar ? `<div class="card"><h2>Today's energy</h2>${bar}</div>` : '') +
+    chipsHTML() +
+    (sorted.length ? sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — add a task below or check TASKS.</div>`);
+}
+
+/* --- TASKS --- */
+function rTasks(){
+  const list = applyFilt(S.tasks.filter(t =>
+    t.bucket === (S.showBacklog ? 'backlog' : 'active') && t.status !== 'done' &&
+    (!S.search || (t.title + ' ' + (t.project || '')).toLowerCase().includes(S.search.toLowerCase()))));
+  const groups = {};
+  list.forEach(t => { const p = t.project || '(no project)'; (groups[p] = groups[p] || []).push(t); });
+  const bl = `<button class="btn" style="${S.showBacklog ? 'border-color:var(--accent);color:var(--accent)' : ''}"
+    onclick="S.showBacklog=!S.showBacklog;render()">${S.showBacklog ? 'BACKLOG' : 'ACTIVE'} ▾</button>`;
+  return `<div style="display:flex;gap:8px;margin-bottom:10px">
+      <input placeholder="search…" value="${esc(S.search)}" oninput="S.search=this.value;render()" style="flex:1">${bl}</div>` +
+    chipsHTML() +
+    (Object.keys(groups).length ? Object.entries(groups).map(([p, ts]) =>
+      `<div class="pname">${esc(p)} (${ts.length})</div>` + ts.map(taskRowHTML).join('')).join('')
+      : `<div class="empty">${S.showBacklog ? 'Backlog empty.' : 'No open tasks.'}</div>`);
+}
+
+/* --- BRIEF --- */
+function rBrief(){
+  if (!S.brief) return `<div class="empty">No brief for today yet.<br><br>The morning Cowork task writes it to the briefs table at 7 AM.</div>`;
+  return `<div class="card md">${marked.parse(S.brief.content_md || '')}</div>`;
+}
+
+/* --- REFLECT --- */
+function rReflect(){
+  const doneToday = S.tasks.filter(isDoneToday);
+  const partialToday = S.tasks.filter(t => isPartialToday(t) && t.status !== 'done');
+  const checked = new Set(S.goalLogsToday.map(g => g.goal_id));
+  const yn = (id, cur) => `<select id="${id}"><option value="" ${cur == null ? 'selected' : ''}>—</option>
+    <option value="y" ${cur === true ? 'selected' : ''}>yes</option><option value="n" ${cur === false ? 'selected' : ''}>no</option></select>`;
+  const L = S.todayLog || {};
+  return `
+  <div class="card"><div id="scorePreview">…</div></div>
+  <div class="card"><h2>Done today (from task list)</h2>
+    ${doneToday.length || partialToday.length ?
+      doneToday.map(t => `<div style="padding:2px 0">✓ ${esc(t.title)}</div>`).join('') +
+      partialToday.map(t => `<div style="padding:2px 0;color:var(--focus)">◐ ${esc(t.title)} (partial)</div>`).join('')
+      : '<span class="dim">Nothing checked off yet — tick tasks on the TODAY tab.</span>'}
+  </div>
+  <div class="card"><h2>Weekly-goal actuals</h2>
+    ${S.goals.length ? S.goals.map(g => `<div class="goalrow">
+      <input type="checkbox" id="g-${g.id}" ${checked.has(g.id) ? 'checked' : ''} onchange="toggleGoal('${g.id}', this.checked)">
+      <label for="g-${g.id}">${esc(g.name)}</label>
+      <span class="g-meta">${g.est_minutes ? g.est_minutes + 'm ' + (g.energy || '') : 'parallel — not scored'}</span>
+    </div>`).join('') : '<span class="dim">No goals defined yet (they arrive with migration).</span>'}
+  </div>
+  <div class="card"><h2>Quick metrics</h2>
+    <div class="metric-grid">
+      <div><label>Wake time</label><input id="r-wake" placeholder="08:30" value="${esc(L.wake_time || '')}"></div>
+      <div><label>Focus (1–5)</label><input id="r-focus" type="number" min="1" max="5" value="${L.focus ?? ''}" oninput="updateScorePreview()"></div>
+      <div><label>Started with START HERE${S.brief?.start_here_task ? ' — "' + esc(S.brief.start_here_task) + '"' : ' (none marked)'}</label>${yn('r-sh', L.started_with_start_here)}</div>
+      <div><label>Read brief?</label>${yn('r-brief', L.read_brief)}</div>
+      <div><label>Energy now (1–5)</label><input id="r-energy" type="number" min="1" max="5" value="${L.energy_now ?? ''}"></div>
+      <div><label>Rest day?</label>${yn('r-rest', L.rest_day === true ? true : (L.rest_day === false ? false : null))}</div>
+    </div>
+  </div>
+  <div class="card"><h2>Notes</h2>
+    <div class="metric-grid">
+      <div class="full"><label>Notes for tomorrow</label><textarea id="r-nt" rows="2">${esc(L.notes_tomorrow || '')}</textarea></div>
+      <div class="full"><label>Anything new</label><textarea id="r-nn" rows="2">${esc(L.notes_new || '')}</textarea></div>
+      <div class="full"><label>Quick check</label><textarea id="r-nc" rows="2">${esc(L.notes_check || '')}</textarea></div>
+    </div>
+  </div>
+  <button class="btn primary" style="width:100%;padding:12px" onclick="saveReflection()">Save reflection</button>
+  <div style="height:10px"></div>`;
+}
+document.addEventListener('change', e => { if (['r-rest','r-brief'].includes(e.target.id)) updateScorePreview(); });
+
+/* --- LOG --- */
+function rLog(){
+  const logs = S.logs || [];
+  const last7 = logs.filter(l => !l.rest_day && l.score != null).slice(0, 7);
+  const avg = last7.length ? Math.round(last7.reduce((s, l) => s + +l.score, 0) / last7.length) : '—';
+  const weekStart = (() => { const d = new Date(); const day = (d.getDay() + 6) % 7; d.setDate(d.getDate() - day); return d.toLocaleDateString('sv-SE'); })();
+  const doneTasks = S.tasks.filter(t => t.status === 'done').sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''));
+  const byDate = {};
+  doneTasks.slice(0, 120).forEach(t => { const d = (t.completed_at || '').slice(0, 10) || '(no date)'; (byDate[d] = byDate[d] || []).push(t); });
+  return `
+  <div class="card"><h2>Streak</h2>
+    <table><tr><th>date</th><th>score</th><th>hit</th><th>streak</th></tr>
+    ${logs.map(l => `<tr><td>${l.date}</td><td>${l.rest_day ? '<span class="rest">rest</span>' : (l.score ?? '—')}</td>
+      <td>${l.rest_day ? '<span class="rest">—</span>' : (l.streak_hit ? '<span class="hit">✓</span>' : '<span class="miss">✗</span>')}</td>
+      <td>${l.streak_count ?? ''}</td></tr>`).join('')}</table>
+    <div class="dim mono" style="margin-top:6px;font-size:11px">last-7 avg: ${avg}</div>
+  </div>
+  <div class="card"><h2>Done log</h2>
+    ${Object.keys(byDate).length ? Object.entries(byDate).map(([d, ts]) =>
+      `<div class="pname">${d}</div>` + ts.map(t =>
+        `<div style="padding:3px 0;font-size:14px">✓ ${esc(t.title)} <span class="dim mono" style="font-size:11px">${esc(t.project || '')} ${t.energy || ''}</span></div>`).join('')).join('')
+      : '<span class="dim">No completed tasks yet.</span>'}
+  </div>
+  <button class="btn" style="width:100%" onclick="db.auth.signOut()">Sign out</button>
+  <div style="height:10px"></div>`;
+}
+</script>
+</body>
+</html>
