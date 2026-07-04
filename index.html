@@ -186,6 +186,12 @@ details.bsec>.ginner{padding:0 10px 10px}
 .fc-front{font-size:17px;line-height:1.5;margin:10px 0}
 .fc-back{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);line-height:1.5}
 
+/* calendar events */
+.evrow{display:flex;gap:10px;align-items:baseline;background:var(--card);border:1px solid var(--line);
+  border-left:3px solid var(--dim);border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:13px}
+.evrow .mono{color:var(--dim);font-size:11px;white-space:nowrap}
+.evb{position:absolute;top:2px;right:4px;font-size:8px;color:var(--dim);font-weight:400;font-style:normal;font-family:var(--mono)}
+
 /* auth */
 #auth{max-width:340px;margin:80px auto;display:none}
 #auth .card{padding:20px}
@@ -289,16 +295,17 @@ document.getElementById('a-email').value = OWNER;
 /* ================= data ================= */
 async function loadAll(){
   const today = todayISO();
-  const [t, g, gl, b, dl, cd] = await Promise.all([
+  const [t, g, gl, b, dl, cd, ev] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
     db.from('briefs').select('*').eq('date', today).maybeSingle(),
     db.from('daily_log').select('*').order('date', {ascending:false}).limit(90),
     db.from('cards').select('*').lte('due', today).eq('suspended', false).order('due').limit(50),
+    db.from('events').select('*').order('date').limit(300),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
-  S.cards = cd.data || [];
+  S.cards = cd.data || []; S.events = ev.data || [];
   S.brief = b.data || null;
   const logs = dl.data || [];
   S.todayLog = logs.find(l => l.date === today) || null;
@@ -709,12 +716,15 @@ function rToday(){
   const sh = S.brief?.start_here_task;
   const shCard = sh ? `<div class="card starthere"><h2>Start here</h2><div class="task-name">${esc(sh)}</div></div>` : '';
   const meter = rMeter();
+  const todaysEv = (S.events || []).filter(e => e.date === today).sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
+  const evCard = todaysEv.length ? `<div class="card"><h2>Calendar</h2>${todaysEv.map(e =>
+    `<div class="evrow" style="margin-bottom:4px"><span class="mono">${e.start_time ? esc(e.start_time) + (e.end_time ? '–' + esc(e.end_time) : '') : 'all-day'}</span><span>${esc(e.title)}</span></div>`).join('')}</div>` : '';
   const list = applyFilt(todays);
   const sorted = [...list].sort((a, b) =>
     (a.status === 'done') - (b.status === 'done') ||
     (a.due || '9999').localeCompare(b.due || '9999') ||
     (PRIO[b.priority] || 2) - (PRIO[a.priority] || 2));
-  return shCard + meter +
+  return shCard + meter + evCard +
     (bar ? `<div class="card"><h2>Today's energy</h2>${bar}</div>` : '') +
     chipsHTML() +
     (sorted.length ? sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — add a task below or check TASKS.</div>`);
@@ -942,28 +952,33 @@ function rCal(){
   const y = S.calY, m = S.calM;
   const startDow = (new Date(y, m, 1).getDay() + 6) % 7;
   const days = new Date(y, m + 1, 0).getDate();
-  const byDay = {};
+  const byDay = {}, evByDay = {};
   S.tasks.forEach(t => { if (t.due && t.bucket === 'active' && t.status !== 'done') (byDay[t.due] = byDay[t.due] || []).push(t); });
+  (S.events || []).forEach(e => { (evByDay[e.date] = evByDay[e.date] || []).push(e); });
   let cells = '';
   for (let i = 0; i < startDow; i++) cells += '<span></span>';
   for (let d = 1; d <= days; d++) {
     const iso = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     const ts = byDay[iso] || [];
+    const evN = (evByDay[iso] || []).length;
     const marks = ts.slice(0, 4).map(t => `<i style="background:${(ENERGY[t.energy] || {}).hex || '#666'}"></i>`).join('');
     cells += `<button class="cal-d big ${S.calSel === iso ? 'sel' : ''} ${iso === todayISO() ? 'today' : ''}" onclick="selDay('${iso}')">
-      <span>${d}</span><div class="marks">${marks}${ts.length > 4 ? '<em>+</em>' : ''}</div></button>`;
+      ${evN ? `<em class="evb">${evN}▸</em>` : ''}<span>${d}</span><div class="marks">${marks}${ts.length > 4 ? '<em>+</em>' : ''}</div></button>`;
   }
   const mn = new Date(y, m, 1).toLocaleString('en-US', {month: 'long', year: 'numeric'});
   const sel = S.calSel;
   const selOpen = byDay[sel] || [];
   const selDone = S.tasks.filter(t => t.due === sel && t.status === 'done');
+  const selEv = (evByDay[sel] || []).sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
   return `<div class="card">
-    <div class="cal-h" style="margin-bottom:10px"><button onclick="calNav2(-1)">‹</button><span class="mono">${mn}</span><button onclick="calNav2(1)">›</button></div>
+    <div class="cal-h" style="margin-bottom:10px"><button onclick="calNav2(-1)">‹</button><span class="mono">${mn}</span>
+      <span><button class="btn" style="padding:2px 10px;font-size:10px;margin-right:6px" onclick="const n=new Date();S.calY=n.getFullYear();S.calM=n.getMonth();S.calSel=todayISO();render()">today</button><button onclick="calNav2(1)">›</button></span></div>
     <div class="cal-g">${['M','T','W','T','F','S','S'].map(d => `<span class="dow">${d}</span>`).join('')}${cells}</div>
-    <div class="elegend" style="margin-top:8px">${Object.keys(ENERGY).map(e => `<span><i style="background:${ENERGY[e].hex}"></i>${e}</span>`).join('')}</div>
+    <div class="elegend" style="margin-top:8px">${Object.keys(ENERGY).map(e => `<span><i style="background:${ENERGY[e].hex}"></i>${e}</span>`).join('')}<span style="margin-left:auto" class="dim">n▸ = calendar events</span></div>
   </div>
-  <div class="pname">${sel || ''} — ${selOpen.length} open${selDone.length ? ' · ' + selDone.length + ' done' : ''}</div>
-  ${selOpen.map(taskRowHTML).join('') || '<div class="empty">Nothing due this day.</div>'}
+  <div class="pname">${sel || ''} — ${selEv.length ? selEv.length + ' events · ' : ''}${selOpen.length} open${selDone.length ? ' · ' + selDone.length + ' done' : ''}</div>
+  ${selEv.map(e => `<div class="evrow"><span class="mono">${e.start_time ? esc(e.start_time) + (e.end_time ? '–' + esc(e.end_time) : '') : 'all-day'}</span><span>${esc(e.title)}</span></div>`).join('')}
+  ${selOpen.map(taskRowHTML).join('') || (selEv.length ? '' : '<div class="empty">Nothing on this day.</div>')}
   ${sel ? `<button class="btn" style="width:100%" onclick="addForDay()">+ add task due ${sel}</button>` : ''}
   <div style="height:10px"></div>`;
 }
