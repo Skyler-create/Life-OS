@@ -21,7 +21,7 @@
 *{box-sizing:border-box;margin:0;padding:0}
 html{-webkit-text-size-adjust:100%}
 body{background:var(--bg);color:var(--text);font-family:-apple-system,'Segoe UI',Roboto,sans-serif;
-  max-width:600px;margin:0 auto;padding:0 12px 130px;font-size:15px;line-height:1.45}
+  max-width:600px;margin:0 auto;padding:0 12px 200px;font-size:15px;line-height:1.45}
 button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 input,select,textarea{font:inherit;color:var(--text);background:var(--card2);border:1px solid var(--line);
   border-radius:6px;padding:8px 10px;outline:none;width:100%}
@@ -37,10 +37,13 @@ header h1 .dot{color:var(--accent)}
 #streakChip{font-family:var(--mono);font-size:12px;color:var(--dim)}
 #streakChip b{color:var(--text)}
 
-/* nav */
-nav{display:flex;gap:4px;margin-bottom:12px;overflow-x:auto}
-nav button{font-family:var(--mono);font-size:12px;letter-spacing:.5px;padding:7px 12px;border-radius:6px;
-  color:var(--dim);border:1px solid transparent;white-space:nowrap}
+/* nav — bottom tab bar, Instagram-style, scrolls sideways */
+nav{position:fixed;bottom:0;left:0;right:0;z-index:45;display:flex;gap:4px;overflow-x:auto;
+  background:rgba(23,24,26,.97);border-top:1px solid var(--line);backdrop-filter:blur(6px);
+  padding:8px 10px calc(8px + env(safe-area-inset-bottom));scrollbar-width:none}
+nav::-webkit-scrollbar{display:none}
+nav button{font-family:var(--mono);font-size:12px;letter-spacing:.5px;padding:10px 14px;border-radius:8px;
+  color:var(--dim);border:1px solid transparent;white-space:nowrap;flex:0 0 auto}
 nav button.on{color:var(--text);background:var(--card);border-color:var(--line)}
 nav button.on::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;
   background:var(--accent);margin-right:6px;vertical-align:1px}
@@ -91,9 +94,10 @@ nav button.on::before{content:"";display:inline-block;width:6px;height:6px;borde
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
 .btn.danger{color:var(--accent)}
 
-/* add bar */
-#addbar{position:fixed;bottom:0;left:0;right:0;background:rgba(23,24,26,.97);border-top:1px solid var(--line);
-  padding:8px 12px calc(10px + env(safe-area-inset-bottom));backdrop-filter:blur(6px)}
+/* add bar — sits ABOVE the bottom nav */
+#addbar{position:fixed;bottom:calc(54px + env(safe-area-inset-bottom));left:0;right:0;z-index:44;
+  background:rgba(23,24,26,.97);border-top:1px solid var(--line);
+  padding:8px 12px;backdrop-filter:blur(6px)}
 #addbar .inner{max-width:576px;margin:0 auto}
 #esel{display:flex;gap:6px;margin-bottom:6px}
 #esel button{flex:1;font-family:var(--mono);font-size:11px;font-weight:700;padding:6px 0;border-radius:6px;
@@ -630,7 +634,25 @@ function render(){
   if (S.view === 'chat')    { main.innerHTML = rChat(); const cl = document.getElementById('chatlog'); if (cl) cl.scrollTop = cl.scrollHeight; }
   document.getElementById('addbar').classList.toggle('hidden', !(S.view === 'today' || S.view === 'tasks') || !!S.sheet);
   document.getElementById('sheetroot').innerHTML = sheetHTML();
+  document.querySelector('nav button.on')?.scrollIntoView({block: 'nearest', inline: 'center'});
 }
+
+/* swipe left/right on content to switch tabs */
+let _swx = null, _swy = null;
+document.getElementById('main').addEventListener('touchstart', e => {
+  _swx = e.touches[0].clientX; _swy = e.touches[0].clientY;
+}, {passive: true});
+document.getElementById('main').addEventListener('touchend', e => {
+  if (_swx == null) return;
+  const dx = e.changedTouches[0].clientX - _swx, dy = e.changedTouches[0].clientY - _swy;
+  _swx = _swy = null;
+  if (S.sheet || S.editing || S.sending) return;
+  if (e.target.closest('input,textarea,select,.chips,.chiprow,#chatlog,button.cal-d')) return;
+  if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+  const i = VIEWS.findIndex(v => v[0] === S.view);
+  const ni = i + (dx < 0 ? 1 : -1);
+  if (ni >= 0 && ni < VIEWS.length) setView(VIEWS[ni][0]);
+}, {passive: true});
 function bionicify(root){
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
   const nodes = []; let n;
