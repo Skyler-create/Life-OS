@@ -29,6 +29,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--accent)}
 a{color:var(--light)}
 .mono{font-family:var(--mono)}
 .dim{color:var(--dim)}
+main{touch-action:pan-y;display:block}
 
 /* header */
 header{display:flex;align-items:baseline;justify-content:space-between;padding:14px 2px 8px}
@@ -637,22 +638,71 @@ function render(){
   document.querySelector('nav button.on')?.scrollIntoView({block: 'nearest', inline: 'center'});
 }
 
-/* swipe left/right on content to switch tabs */
-let _swx = null, _swy = null;
-document.getElementById('main').addEventListener('touchstart', e => {
-  _swx = e.touches[0].clientX; _swy = e.touches[0].clientY;
-}, {passive: true});
-document.getElementById('main').addEventListener('touchend', e => {
-  if (_swx == null) return;
-  const dx = e.changedTouches[0].clientX - _swx, dy = e.changedTouches[0].clientY - _swy;
-  _swx = _swy = null;
-  if (S.sheet || S.editing || S.sending) return;
-  if (e.target.closest('input,textarea,select,.chips,.chiprow,#chatlog,button.cal-d')) return;
-  if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-  const i = VIEWS.findIndex(v => v[0] === S.view);
-  const ni = i + (dx < 0 ? 1 : -1);
-  if (ni >= 0 && ni < VIEWS.length) setView(VIEWS[ni][0]);
-}, {passive: true});
+/* swipe left/right (touch OR mouse drag) to switch tabs — page follows the finger */
+(() => {
+  const mainEl = document.getElementById('main');
+  let sw = null;
+  mainEl.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (e.target.closest('input,textarea,select,.chips,.chiprow,#chatlog')) return;
+    sw = {x: e.clientX, y: e.clientY, t: Date.now(), active: false};
+  }, {passive: true});
+  mainEl.addEventListener('pointermove', e => {
+    if (!sw) return;
+    const dx = e.clientX - sw.x, dy = e.clientY - sw.y;
+    if (!sw.active && Math.abs(dx) > 25 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      sw.active = true;
+      mainEl.style.userSelect = 'none';
+    }
+    if (sw.active) {
+      mainEl.style.transition = 'none';
+      mainEl.style.transform = `translateX(${dx}px)`;
+      mainEl.style.opacity = String(Math.max(0.4, 1 - Math.abs(dx) / 600));
+    }
+  }, {passive: true});
+  function slideTo(ni, dir, fromX){
+    const w = Math.min(window.innerWidth, 640);
+    // finish sliding the current page out in the direction of travel
+    mainEl.style.transition = 'transform .13s ease-in, opacity .13s ease-in';
+    mainEl.style.transform = `translateX(${-dir * w}px)`;
+    mainEl.style.opacity = '0';
+    setTimeout(() => {
+      setView(VIEWS[ni][0]);
+      // place the new page just off-screen on the other side, then slide it in
+      mainEl.style.transition = 'none';
+      mainEl.style.transform = `translateX(${dir * w * 0.55}px)`;
+      mainEl.style.opacity = '0.3';
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        mainEl.style.transition = 'transform .2s cubic-bezier(.2,.8,.3,1), opacity .2s';
+        mainEl.style.transform = ''; mainEl.style.opacity = '';
+      }));
+    }, 130);
+  }
+  const endSwipe = e => {
+    if (!sw) return;
+    const dx = e.clientX - sw.x, dy = e.clientY - sw.y, dt = Date.now() - sw.t;
+    const wasActive = sw.active; sw = null;
+    mainEl.style.userSelect = '';
+    const snapBack = () => {
+      mainEl.style.transition = 'transform .18s cubic-bezier(.2,.8,.3,1), opacity .18s';
+      mainEl.style.transform = ''; mainEl.style.opacity = '';
+    };
+    if (!wasActive || S.sheet || S.editing) { snapBack(); return; }
+    // a real drag shouldn't also count as a click on whatever's under the finger
+    const kill = ev => { ev.stopPropagation(); ev.preventDefault(); };
+    document.addEventListener('click', kill, {capture: true, once: true});
+    setTimeout(() => document.removeEventListener('click', kill, {capture: true}), 120);
+    const flick = dt < 250 && Math.abs(dx) > 40;             // quick flick
+    const drag  = Math.abs(dx) > 70;                          // deliberate drag
+    if ((!flick && !drag) || Math.abs(dx) < Math.abs(dy) * 1.2) { snapBack(); return; }
+    const i = VIEWS.findIndex(v => v[0] === S.view);
+    const ni = i + (dx < 0 ? 1 : -1);
+    if (ni < 0 || ni >= VIEWS.length) { snapBack(); return; }
+    slideTo(ni, dx < 0 ? 1 : -1);
+  };
+  mainEl.addEventListener('pointerup', endSwipe);
+  mainEl.addEventListener('pointercancel', () => { if (sw) { sw = null; mainEl.style.transform = ''; mainEl.style.opacity = ''; mainEl.style.userSelect = ''; } });
+})();
 function bionicify(root){
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
   const nodes = []; let n;
