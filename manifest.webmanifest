@@ -1,6 +1,6 @@
 {
-  "name": "lifeOS",
-  "short_name": "lifeOS",
+  "name": "LifeOS",
+  "short_name": "LifeOS",
   "start_url": "/Life-OS/",
   "scope": "/Life-OS/",
   "display": "standalone",

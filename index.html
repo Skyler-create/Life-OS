@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#17181A">
 <link rel="manifest" href="manifest.webmanifest">
-<title>lifeOS</title>
+<title>LifeOS</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='%23E1251B'/></svg>">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -193,7 +193,7 @@ details.bsec>.ginner{padding:0 10px 10px}
 
 <div id="auth">
   <div class="card">
-    <h1 style="font-family:var(--mono);margin-bottom:14px">lifeOS<span style="color:var(--accent)">.</span></h1>
+    <h1 style="font-family:var(--mono);margin-bottom:14px">LifeOS<span style="color:var(--accent)">.</span></h1>
     <input id="a-email" type="email" placeholder="email" autocomplete="username">
     <input id="a-pass" type="password" placeholder="password" autocomplete="current-password">
     <button class="btn primary" style="width:100%" onclick="signIn()">Sign in</button>
@@ -204,19 +204,17 @@ details.bsec>.ginner{padding:0 10px 10px}
 
 <div id="app" class="hidden">
   <header>
-    <h1>lifeOS<span class="dot">.</span></h1>
+    <h1>LifeOS<span class="dot">.</span></h1>
     <span id="streakChip"></span>
   </header>
   <nav id="nav"></nav>
   <main id="main"></main>
   <div id="addbar" class="hidden">
     <div class="inner">
-      <div id="esel"></div>
       <div id="addrow">
-        <input id="addinput" placeholder="Add task…  #project !high 90m due:tom" enterkeyhint="done">
+        <input id="addinput" placeholder="Add task ..." enterkeyhint="done">
         <button class="btn" onclick="addTask()">Add</button>
       </div>
-      <div id="addhint">#project · !high/!med/!low · 90m/1.5h · due:today/tom/YYYY-MM-DD · hard</div>
     </div>
   </div>
 </div>
@@ -302,8 +300,10 @@ function subscribeRealtime(){
   if (rtChannel) return;
   rtChannel = db.channel('lifeos-sync')
     .on('postgres_changes', {event: '*', schema: 'public'}, () => {
+      // ignore the echo of our own writes — they're already on screen
+      if (Date.now() - (S.lastWrite || 0) < 2500) return;
       clearTimeout(rtTimer);
-      rtTimer = setTimeout(() => { if (!S.editing && !S.sending) loadAll(); }, 600);
+      rtTimer = setTimeout(() => { if (!S.editing && !S.sending && !S.sheet) loadAll(); }, 600);
     })
     .subscribe();
 }
@@ -326,7 +326,12 @@ async function cycleTask(id){
   if (t.status === 'done')            patch = {status:'in_progress', completed_at:null, partial_date:todayISO()};
   else if (isPartialToday(t))         patch = {status:'not_started', completed_at:null, partial_date:null};
   else                                patch = {status:'done', completed_at:new Date().toISOString(), partial_date:null};
-  Object.assign(t, patch); render();
+  Object.assign(t, patch);
+  // patch just this row in place — no full re-render, no flicker
+  const node = document.getElementById('t-' + id);
+  if (node) { const tmp = document.createElement('div'); tmp.innerHTML = taskRowHTML(t); node.replaceWith(tmp.firstElementChild); }
+  else render();
+  S.lastWrite = Date.now();
   const {error} = await db.from('tasks').update(patch).eq('id', id);
   if (error) { toast('Save failed: ' + error.message); loadAll(); }
 }
@@ -373,6 +378,7 @@ async function saveSheet(){
     priority: sh.priority, deadline_type: sh.deadline_type || (sh.due ? 'self_imposed' : null),
     parallel: sh.energy === 'PARALLEL', bucket: sh.bucket || 'active',
   };
+  S.lastWrite = Date.now();
   const {data, error} = await db.from('tasks').insert(row).select().single();
   if (error) { toast('Add failed: ' + error.message); return; }
   S.tasks.push(data); S.sheet = null; render(); toast('Added');
@@ -499,6 +505,7 @@ function computeScore(readBrief){
 
 /* ================= reflect save ================= */
 async function toggleGoal(goalId, checked){
+  S.lastWrite = Date.now();
   if (checked) {
     const {data, error} = await db.from('goal_logs').insert({goal_id: goalId, date: todayISO()}).select().single();
     if (!error) S.goalLogsToday.push(data);
@@ -547,7 +554,6 @@ async function saveReflection(){
 const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['chat','CHAT'],['reflect','REFLECT'],['log','LOG']];
 function setView(v){ S.view = v; S.editing = null; localStorage.setItem('view', v); render(); }
 function setFilt(f){ S.filt = f; localStorage.setItem('filt', f); render(); }
-function setAddEnergy(e){ S.addEnergy = e; localStorage.setItem('addEnergy', e); renderAddBar(); }
 
 function render(){
   document.getElementById('nav').innerHTML = VIEWS.map(([v, l]) =>
@@ -563,7 +569,6 @@ function render(){
   if (S.view === 'log')     main.innerHTML = rLog();
   if (S.view === 'chat')    { main.innerHTML = rChat(); const cl = document.getElementById('chatlog'); if (cl) cl.scrollTop = cl.scrollHeight; }
   document.getElementById('addbar').classList.toggle('hidden', !(S.view === 'today' || S.view === 'tasks') || !!S.sheet);
-  renderAddBar();
   document.getElementById('sheetroot').innerHTML = sheetHTML();
 }
 function bionicify(root){
@@ -595,11 +600,6 @@ async function regenBrief(btn){
   } catch (e) { toast('⚠ ' + e.message); }
   if (btn) btn.disabled = false;
 }
-function renderAddBar(){
-  document.getElementById('esel').innerHTML = Object.keys(ENERGY).map(e =>
-    `<button class="${S.addEnergy === e ? 'on' : ''}" style="${S.addEnergy === e ? 'background:' + ENERGY[e].hex + ';border-color:' + ENERGY[e].hex : ''}"
-      onclick="setAddEnergy('${e}')">${e}</button>`).join('');
-}
 function chipsHTML(){
   const all = ['ALL', ...Object.keys(ENERGY)];
   return `<div class="chips">` + all.map(f => {
@@ -625,7 +625,7 @@ function taskRowHTML(t){
     t.status === 'in_progress' && !isPartialToday(t) ? `<span>in progress</span>` : '',
   ].filter(Boolean).join('');
   const editor = S.editing === t.id ? editorHTML(t) : '';
-  return `<div class="trow ${t.status === 'done' ? 'isdone' : ''}" style="--rail:${en.color || 'var(--line)'}">
+  return `<div class="trow ${t.status === 'done' ? 'isdone' : ''}" id="t-${t.id}" style="--rail:${en.color || 'var(--line)'}">
     <button onclick="cycleTask('${t.id}')" style="display:contents">${circle}</button>
     <div class="tbody" onclick="S.editing = S.editing === '${t.id}' ? null : '${t.id}'; render()">
       <div class="tname">${esc(t.title)}</div>
@@ -813,7 +813,7 @@ function rChat(){
   return `
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-      <h2 style="margin:0">lifeOS chat</h2>
+      <h2 style="margin:0">LifeOS chat</h2>
       <button class="btn" style="padding:4px 10px;font-size:11px" onclick="clearChat()">Clear</button>
     </div>
     <div id="chatlog">${msgs || '<div class="empty">Talk to your system. "done with X" · "whats next" · "im gassed" · "add task: ..."</div>'}${S.sending ? '<div class="typing">thinking…</div>' : ''}</div>
