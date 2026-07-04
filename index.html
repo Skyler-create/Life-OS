@@ -638,7 +638,7 @@ function rChat(){
       <h2 style="margin:0">lifeOS chat</h2>
       <button class="btn" style="padding:4px 10px;font-size:11px" onclick="clearChat()">Clear</button>
     </div>
-    <div id="chatlog">${msgs || '<div class="empty">Talk to your system. "done with X" · "what\\'s next" · "I\\'m gassed" · "add task: ..."</div>'}${S.sending ? '<div class="typing">thinking…</div>' : ''}</div>
+    <div id="chatlog">${msgs || '<div class="empty">Talk to your system. "done with X" · "whats next" · "im gassed" · "add task: ..."</div>'}${S.sending ? '<div class="typing">thinking…</div>' : ''}</div>
     <div id="chatrow">
       <input id="chatinput" placeholder="what's next?" enterkeyhint="send" ${S.sending ? 'disabled' : ''}>
       <button class="btn primary" onclick="sendChat()" ${S.sending ? 'disabled' : ''}>Send</button>
