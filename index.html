@@ -151,6 +151,30 @@ details.bsec summary::after{content:'+';color:var(--dim);font-size:15px}
 details.bsec[open] summary::after{content:'\2212'}
 details.bsec>.md{padding:0 12px 12px}
 details.bsec.hot summary{border-left:3px solid var(--accent);padding-left:9px}
+details.bsec>.ginner{padding:0 10px 10px}
+.md li{margin:3px 0}
+.md{line-height:1.55}
+.bio b{font-weight:700;color:#fff}
+
+/* add-task sheet */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:50;display:flex;align-items:flex-end;justify-content:center}
+.sheet{background:var(--card);border:1px solid var(--line);border-radius:16px 16px 0 0;padding:16px;width:100%;max-width:600px;max-height:88vh;overflow-y:auto}
+.sheet h2{font-family:var(--mono);font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px}
+.sheet label{display:block;font-family:var(--mono);font-size:10px;color:var(--dim);text-transform:uppercase;margin:12px 0 6px}
+.chiprow{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px}
+.chiprow.wrap{flex-wrap:wrap;overflow:visible}
+.schip{font-family:var(--mono);font-size:12px;padding:7px 12px;border-radius:8px;border:1px solid var(--line);color:var(--dim);white-space:nowrap;flex:0 0 auto;background:none;cursor:pointer}
+.schip.on{background:var(--text);border-color:var(--text);color:#17181A;font-weight:700}
+.cal{margin-top:10px;background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:10px}
+.cal-h{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:12px;margin-bottom:8px}
+.cal-h button{padding:2px 12px;color:var(--dim);font-size:16px}
+.cal-g{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.cal-g .dow{text-align:center;font-family:var(--mono);font-size:9px;color:var(--dim)}
+.cal-d{position:relative;aspect-ratio:1;border-radius:6px;font-size:12px;color:var(--text);border:1px solid transparent;background:none}
+.cal-d.today{border-color:var(--dim)}
+.cal-d.sel{background:var(--accent);color:#fff;font-weight:700}
+.cal-d i{position:absolute;bottom:1px;left:50%;transform:translateX(-50%);font-style:normal;font-size:8px;color:var(--focus)}
+.cal-d.sel i{color:#fff}
 
 /* auth */
 #auth{max-width:340px;margin:80px auto;display:none}
@@ -197,6 +221,7 @@ details.bsec.hot summary{border-left:3px solid var(--accent);padding-left:9px}
   </div>
 </div>
 <div id="toast"></div>
+<div id="sheetroot"></div>
 
 <script>
 /* ================= config ================= */
@@ -221,6 +246,8 @@ let S = {
   addEnergy: localStorage.getItem('addEnergy') || 'FOCUS',
   showBacklog: false, search: '', editing: null,
   chat: JSON.parse(localStorage.getItem('chatHistory') || '[]'), sending: false,
+  sheet: null, expandAll: false, openGroups: new Set(),
+  bionic: localStorage.getItem('bionic') === '1',
 };
 
 const todayISO = () => new Date().toLocaleDateString('sv-SE');
@@ -323,14 +350,98 @@ function parseQuickAdd(raw){
   out.title = title.replace(/\s+/g,' ').trim();
   return out;
 }
-async function addTask(){
+function addTask(){
   const inp = document.getElementById('addinput');
-  const row = parseQuickAdd(inp.value);
-  if (!row.title) return;
+  const parsed = parseQuickAdd(inp.value);
+  if (!parsed.title) return;
   inp.value = '';
+  const now = new Date();
+  S.sheet = {
+    title: parsed.title, energy: parsed.energy, est: parsed.est_minutes || null,
+    project: parsed.project || null, due: parsed.due || null,
+    priority: parsed.priority || 'med', deadline_type: parsed.deadline_type || null,
+    bucket: parsed.bucket, calY: now.getFullYear(), calM: now.getMonth(),
+  };
+  render();
+}
+async function saveSheet(){
+  const sh = S.sheet;
+  const title = (document.getElementById('sh-title')?.value || sh.title || '').trim();
+  if (!title) return;
+  const row = {
+    title, energy: sh.energy, est_minutes: sh.est, project: sh.project, due: sh.due,
+    priority: sh.priority, deadline_type: sh.deadline_type || (sh.due ? 'self_imposed' : null),
+    parallel: sh.energy === 'PARALLEL', bucket: sh.bucket || 'active',
+  };
   const {data, error} = await db.from('tasks').insert(row).select().single();
   if (error) { toast('Add failed: ' + error.message); return; }
-  S.tasks.push(data); render(); toast('Added');
+  S.tasks.push(data); S.sheet = null; render(); toast('Added');
+}
+function distinctProjects(){ return [...new Set(S.tasks.map(t => t.project).filter(Boolean))].sort(); }
+window._projList = [];
+function pickProject(i){ S.sheet.project = i < 0 ? null : window._projList[i]; render(); }
+function newProject(){ const p = prompt('New project name:'); if (p && p.trim()) { S.sheet.project = p.trim(); render(); } }
+function calNav(d){ let m = S.sheet.calM + d, y = S.sheet.calY; if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; } S.sheet.calM = m; S.sheet.calY = y; render(); }
+function setDue(v){ S.sheet.due = v; render(); }
+function dueIn(days){ const d = new Date(); d.setDate(d.getDate() + days); setDue(d.toLocaleDateString('sv-SE')); }
+function calHTML(){
+  const sh = S.sheet, y = sh.calY, m = sh.calM;
+  const startDow = (new Date(y, m, 1).getDay() + 6) % 7;
+  const days = new Date(y, m + 1, 0).getDate();
+  const counts = {};
+  S.tasks.forEach(t => { if (t.due && t.status !== 'done') counts[t.due] = (counts[t.due] || 0) + 1; });
+  let cells = '';
+  for (let i = 0; i < startDow; i++) cells += '<span></span>';
+  for (let d = 1; d <= days; d++) {
+    const iso = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const n = counts[iso] || 0;
+    cells += `<button class="cal-d ${sh.due === iso ? 'sel' : ''} ${iso === todayISO() ? 'today' : ''}" onclick="setDue('${iso}')">${d}${n ? `<i>${n}</i>` : ''}</button>`;
+  }
+  const mn = new Date(y, m, 1).toLocaleString('en-US', {month: 'long', year: 'numeric'});
+  return `<div class="cal"><div class="cal-h"><button onclick="calNav(-1)">‹</button><span>${mn}</span><button onclick="calNav(1)">›</button></div>
+    <div class="cal-g">${['M','T','W','T','F','S','S'].map(d => `<span class="dow">${d}</span>`).join('')}${cells}</div></div>`;
+}
+function sheetHTML(){
+  const sh = S.sheet; if (!sh) return '';
+  const ests = [15, 30, 45, 60, 90, 120, 180, 240];
+  window._projList = distinctProjects();
+  const chunkHint = sh.energy === 'DEEP' ? 'over 90m gets auto-chunked into 90s' : 'over 60m gets auto-chunked into 60s';
+  return `<div class="overlay" onclick="if(event.target===this){S.sheet=null;render()}">
+  <div class="sheet">
+    <h2>New task ${sh.bucket === 'backlog' ? '(backlog)' : ''}</h2>
+    <input id="sh-title" value="${esc(sh.title)}" placeholder="Task name">
+    <label>Energy</label>
+    <div class="chiprow">${Object.keys(ENERGY).map(e =>
+      `<button class="schip ${sh.energy === e ? 'on' : ''}" style="${sh.energy === e ? 'background:' + ENERGY[e].hex + ';border-color:' + ENERGY[e].hex + ';color:#17181A' : ''}" onclick="S.sheet.energy='${e}';render()">${e}</button>`).join('')}</div>
+    <label>Est. time — ${chunkHint}</label>
+    <div class="chiprow">${ests.map(v =>
+      `<button class="schip ${sh.est === v ? 'on' : ''}" onclick="S.sheet.est=${v};render()">${v}m</button>`).join('')}</div>
+    <label>Project</label>
+    <div class="chiprow wrap">
+      <button class="schip ${!sh.project ? 'on' : ''}" onclick="pickProject(-1)">none</button>
+      ${window._projList.map((p, i) => `<button class="schip ${sh.project === p ? 'on' : ''}" onclick="pickProject(${i})">${esc(p)}</button>`).join('')}
+      <button class="schip" onclick="newProject()">+ new</button>
+    </div>
+    <label>Due ${sh.due ? '— ' + sh.due : ''}</label>
+    <div class="chiprow">
+      <button class="schip ${!sh.due ? 'on' : ''}" onclick="setDue(null)">none</button>
+      <button class="schip" onclick="dueIn(0)">today</button>
+      <button class="schip" onclick="dueIn(1)">tomorrow</button>
+      <button class="schip" onclick="dueIn(7)">+7d</button>
+    </div>
+    ${calHTML()}
+    <label>Priority · Deadline type</label>
+    <div class="chiprow">
+      ${['low','med','high'].map(p => `<button class="schip ${sh.priority === p ? 'on' : ''}" onclick="S.sheet.priority='${p}';render()">${p}</button>`).join('')}
+      <span style="flex:0 0 12px"></span>
+      <button class="schip ${sh.deadline_type === 'self_imposed' ? 'on' : ''}" onclick="S.sheet.deadline_type='self_imposed';render()">self</button>
+      <button class="schip ${sh.deadline_type === 'hard' ? 'on' : ''}" onclick="S.sheet.deadline_type='hard';render()">HARD</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn" style="flex:1" onclick="S.sheet=null;render()">Cancel</button>
+      <button class="btn primary" style="flex:2" onclick="saveSheet()">Add task</button>
+    </div>
+  </div></div>`;
 }
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && document.activeElement?.id === 'addinput') addTask();
@@ -447,12 +558,42 @@ function render(){
   const main = document.getElementById('main');
   if (S.view === 'today')   main.innerHTML = rToday();
   if (S.view === 'tasks')   main.innerHTML = rTasks();
-  if (S.view === 'brief')   main.innerHTML = rBrief();
+  if (S.view === 'brief')   { main.innerHTML = rBrief(); if (S.bionic) main.querySelectorAll('.md').forEach(bionicify); }
   if (S.view === 'reflect') { main.innerHTML = rReflect(); updateScorePreview(); }
   if (S.view === 'log')     main.innerHTML = rLog();
   if (S.view === 'chat')    { main.innerHTML = rChat(); const cl = document.getElementById('chatlog'); if (cl) cl.scrollTop = cl.scrollHeight; }
-  document.getElementById('addbar').classList.toggle('hidden', !(S.view === 'today' || S.view === 'tasks'));
+  document.getElementById('addbar').classList.toggle('hidden', !(S.view === 'today' || S.view === 'tasks') || !!S.sheet);
   renderAddBar();
+  document.getElementById('sheetroot').innerHTML = sheetHTML();
+}
+function bionicify(root){
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  const nodes = []; let n;
+  while ((n = walker.nextNode())) nodes.push(n);
+  nodes.forEach(node => {
+    const txt = node.nodeValue;
+    if (!txt.trim()) return;
+    if (node.parentElement.closest('code,pre')) return;
+    const span = document.createElement('span'); span.className = 'bio';
+    span.innerHTML = esc(txt).replace(/[A-Za-zÀ-ɏ]{2,}/g, w => {
+      const k = Math.ceil(w.length * 0.45);
+      return '<b>' + w.slice(0, k) + '</b>' + w.slice(k);
+    });
+    node.parentNode.replaceChild(span, node);
+  });
+}
+async function regenBrief(btn){
+  if (!confirm('Trigger a fresh brief? Takes ~2 min to land, then refresh.')) return;
+  if (btn) btn.disabled = true;
+  try {
+    const {data: {session}} = await db.auth.getSession();
+    const r = await fetch(SB_URL + '/functions/v1/regen-brief', {
+      method: 'POST', headers: {'Authorization': 'Bearer ' + session.access_token},
+    });
+    const d = await r.json();
+    toast(d.ok ? 'Brief regeneration triggered — check back in ~2 min' : '⚠ ' + (d.error || 'HTTP ' + r.status));
+  } catch (e) { toast('⚠ ' + e.message); }
+  if (btn) btn.disabled = false;
 }
 function renderAddBar(){
   document.getElementById('esel').innerHTML = Object.keys(ENERGY).map(e =>
@@ -552,23 +693,37 @@ function rTasks(){
   list.forEach(t => { const p = t.project || '(no project)'; (groups[p] = groups[p] || []).push(t); });
   const bl = `<button class="btn" style="${S.showBacklog ? 'border-color:var(--accent);color:var(--accent)' : ''}"
     onclick="S.showBacklog=!S.showBacklog;render()">${S.showBacklog ? 'BACKLOG' : 'ACTIVE'} ▾</button>`;
+  const ea = `<button class="btn" onclick="S.expandAll=!S.expandAll;S.openGroups.clear();render()">${S.expandAll ? 'COLLAPSE' : 'EXPAND ALL'}</button>`;
+  window._gn = Object.keys(groups);
   return `<div style="display:flex;gap:8px;margin-bottom:10px">
-      <input placeholder="search…" value="${esc(S.search)}" oninput="S.search=this.value;render()" style="flex:1">${bl}</div>` +
+      <input placeholder="search…" value="${esc(S.search)}" oninput="S.search=this.value;render()" style="flex:1">${bl}${ea}</div>` +
     chipsHTML() +
-    (Object.keys(groups).length ? Object.entries(groups).map(([p, ts]) =>
-      `<div class="pname">${esc(p)} (${ts.length})</div>` + ts.map(taskRowHTML).join('')).join('')
+    (window._gn.length ? window._gn.map((p, i) => {
+      const ts = groups[p];
+      const open = S.expandAll || S.openGroups.has(p) || !!S.search;
+      return `<details class="bsec" ${open ? 'open' : ''} ontoggle="tgGroup(${i}, this.open)">
+        <summary>${esc(p)} (${ts.length})</summary>
+        <div class="ginner">${ts.map(taskRowHTML).join('')}</div></details>`;
+    }).join('')
       : `<div class="empty">${S.showBacklog ? 'Backlog empty.' : 'No open tasks.'}</div>`);
+}
+function tgGroup(i, open){
+  const p = (window._gn || [])[i]; if (p == null) return;
+  if (open) S.openGroups.add(p); else S.openGroups.delete(p);
 }
 
 /* --- BRIEF --- */
 function rBrief(){
-  if (!S.brief) return `<div class="empty">No brief for today yet.<br><br>The 7 AM routine writes it to the briefs table.</div>`;
+  const ctl = `<div style="display:flex;gap:6px;margin-bottom:10px;justify-content:flex-end">
+    <button class="btn ${S.bionic ? 'primary' : ''}" onclick="S.bionic=!S.bionic;localStorage.setItem('bionic',S.bionic?'1':'0');render()">Aa bionic</button>
+    <button class="btn" onclick="regenBrief(this)">⟳ new brief</button></div>`;
+  if (!S.brief) return ctl + `<div class="empty">No brief for today yet.<br><br>The 7 AM routine writes it to the briefs table — or hit ⟳ new brief.</div>`;
   const md = S.brief.content_md || '';
   const parts = md.split(/\n(?=## )/);
   const head = parts.length && !parts[0].startsWith('## ') ? parts.shift() : '';
   const openByDefault = /^(START HERE|REALITY CHECK)/i;
   const hot = /^(START HERE|REALITY CHECK|TODAY'S DEADLINES)/i;
-  return (head ? `<div class="card md" style="padding:10px 12px">${marked.parse(head)}</div>` : '') +
+  return ctl + (head ? `<div class="card md" style="padding:10px 12px">${marked.parse(head)}</div>` : '') +
     (parts.length ? parts.map(sec => {
       const m = sec.match(/^## (.+)/);
       const title = m ? m[1].trim() : 'SECTION';
