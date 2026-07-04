@@ -422,7 +422,7 @@ async function saveReflection(){
 }
 
 /* ================= rendering ================= */
-const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['reflect','REFLECT'],['log','LOG'],['chat','CHAT']];
+const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['chat','CHAT'],['reflect','REFLECT'],['log','LOG']];
 function setView(v){ S.view = v; S.editing = null; localStorage.setItem('view', v); render(); }
 function setFilt(f){ S.filt = f; localStorage.setItem('filt', f); render(); }
 function setAddEnergy(e){ S.addEnergy = e; localStorage.setItem('addEnergy', e); renderAddBar(); }
