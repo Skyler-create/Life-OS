@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#17181A">
+<link rel="manifest" href="manifest.webmanifest">
 <title>lifeOS</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='%23E1251B'/></svg>">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -129,6 +130,17 @@ th,td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line)}
 th{color:var(--dim);font-weight:400;text-transform:uppercase;font-size:10px}
 .hit{color:var(--done)} .miss{color:var(--accent)} .rest{color:var(--dim)}
 
+/* chat */
+#chatlog{display:flex;flex-direction:column;gap:8px;min-height:40vh;max-height:60vh;overflow-y:auto;margin-bottom:10px;padding:2px}
+.msg{max-width:86%;padding:9px 12px;border-radius:12px;font-size:14px;line-height:1.45;overflow-wrap:break-word}
+.msg.user{align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:4px}
+.msg.bot{align-self:flex-start;background:var(--card);border:1px solid var(--line);border-bottom-left-radius:4px}
+.msg.bot p{margin:0 0 6px}.msg.bot p:last-child{margin:0}
+.msg.bot ul,.msg.bot ol{margin:0 0 6px;padding-left:18px}
+.msg.bot code{font-family:var(--mono);background:var(--card2);padding:1px 4px;border-radius:4px;font-size:12px}
+#chatrow{display:flex;gap:6px}
+.typing{color:var(--dim);font-family:var(--mono);font-size:12px;align-self:flex-start;padding:6px 2px}
+
 /* auth */
 #auth{max-width:340px;margin:80px auto;display:none}
 #auth .card{padding:20px}
@@ -197,6 +209,7 @@ let S = {
   filt: localStorage.getItem('filt') || 'ALL',
   addEnergy: localStorage.getItem('addEnergy') || 'FOCUS',
   showBacklog: false, search: '', editing: null,
+  chat: JSON.parse(localStorage.getItem('chatHistory') || '[]'), sending: false,
 };
 
 const todayISO = () => new Date().toLocaleDateString('sv-SE');
@@ -242,6 +255,19 @@ async function loadAll(){
   S.prevLog  = logs.find(l => l.date < today) || null;
   S.logs = logs;
   render();
+  subscribeRealtime();
+}
+
+/* ================= live sync ================= */
+let rtChannel = null, rtTimer = null;
+function subscribeRealtime(){
+  if (rtChannel) return;
+  rtChannel = db.channel('lifeos-sync')
+    .on('postgres_changes', {event: '*', schema: 'public'}, () => {
+      clearTimeout(rtTimer);
+      rtTimer = setTimeout(() => { if (!S.editing && !S.sending) loadAll(); }, 600);
+    })
+    .subscribe();
 }
 
 /* ================= task helpers ================= */
@@ -396,20 +422,8 @@ async function saveReflection(){
 }
 
 /* ================= rendering ================= */
-const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['reflect','REFLECT'],['log','LOG'],['chat','CHAT ↗']];
-function setView(v){
-  if (v === 'chat') {
-    let url = localStorage.getItem('chatUrl');
-    if (!url) {
-      url = prompt('One-time setup: paste your claude.ai lifeOS project URL\n(claude.ai → Projects → lifeOS → copy the address bar)');
-      if (!url || !url.includes('claude.ai')) return;
-      localStorage.setItem('chatUrl', url.trim());
-    }
-    window.open(url, '_blank');
-    return;
-  }
-  S.view = v; S.editing = null; localStorage.setItem('view', v); render();
-}
+const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['reflect','REFLECT'],['log','LOG'],['chat','CHAT']];
+function setView(v){ S.view = v; S.editing = null; localStorage.setItem('view', v); render(); }
 function setFilt(f){ S.filt = f; localStorage.setItem('filt', f); render(); }
 function setAddEnergy(e){ S.addEnergy = e; localStorage.setItem('addEnergy', e); renderAddBar(); }
 
@@ -425,6 +439,7 @@ function render(){
   if (S.view === 'brief')   main.innerHTML = rBrief();
   if (S.view === 'reflect') { main.innerHTML = rReflect(); updateScorePreview(); }
   if (S.view === 'log')     main.innerHTML = rLog();
+  if (S.view === 'chat')    { main.innerHTML = rChat(); const cl = document.getElementById('chatlog'); if (cl) cl.scrollTop = cl.scrollHeight; }
   document.getElementById('addbar').classList.toggle('hidden', !(S.view === 'today' || S.view === 'tasks'));
   renderAddBar();
 }
@@ -611,6 +626,59 @@ function rLog(){
   <button class="btn" style="width:100%" onclick="db.auth.signOut()">Sign out</button>
   <div style="height:10px"></div>`;
 }
+
+/* --- CHAT (embedded, via Supabase edge function -> Claude API) --- */
+function rChat(){
+  const msgs = S.chat.map(m => m.role === 'user'
+    ? `<div class="msg user">${esc(m.content)}</div>`
+    : `<div class="msg bot">${marked.parse(m.content || '')}</div>`).join('');
+  return `
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <h2 style="margin:0">lifeOS chat</h2>
+      <button class="btn" style="padding:4px 10px;font-size:11px" onclick="clearChat()">Clear</button>
+    </div>
+    <div id="chatlog">${msgs || '<div class="empty">Talk to your system. "done with X" · "what\\'s next" · "I\\'m gassed" · "add task: ..."</div>'}${S.sending ? '<div class="typing">thinking…</div>' : ''}</div>
+    <div id="chatrow">
+      <input id="chatinput" placeholder="what's next?" enterkeyhint="send" ${S.sending ? 'disabled' : ''}>
+      <button class="btn primary" onclick="sendChat()" ${S.sending ? 'disabled' : ''}>Send</button>
+    </div>
+  </div>`;
+}
+function clearChat(){
+  if (S.chat.length && !confirm('Clear conversation?')) return;
+  S.chat = []; localStorage.removeItem('chatHistory'); render();
+}
+async function sendChat(){
+  const inp = document.getElementById('chatinput');
+  const text = (inp?.value || '').trim();
+  if (!text || S.sending) return;
+  S.chat.push({role: 'user', content: text});
+  S.sending = true; render();
+  try {
+    const {data: {session}} = await db.auth.getSession();
+    const r = await fetch(SB_URL + '/functions/v1/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + session.access_token},
+      body: JSON.stringify({messages: S.chat.slice(-20)}),
+    });
+    const d = await r.json();
+    S.chat.push({role: 'assistant', content: d.reply || ('⚠ ' + (d.error || 'HTTP ' + r.status))});
+  } catch (e) {
+    S.chat.push({role: 'assistant', content: '⚠ Network error: ' + e.message});
+  }
+  S.sending = false;
+  S.chat = S.chat.slice(-40);
+  localStorage.setItem('chatHistory', JSON.stringify(S.chat));
+  render();
+  loadAll(); // chat may have written to the DB
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && document.activeElement?.id === 'chatinput') sendChat();
+});
+
+/* ================= PWA ================= */
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>
 </html>
