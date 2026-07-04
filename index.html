@@ -141,6 +141,17 @@ th{color:var(--dim);font-weight:400;text-transform:uppercase;font-size:10px}
 #chatrow{display:flex;gap:6px}
 .typing{color:var(--dim);font-family:var(--mono);font-size:12px;align-self:flex-start;padding:6px 2px}
 
+/* brief accordion */
+details.bsec{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:8px;overflow:hidden}
+details.bsec summary{cursor:pointer;padding:12px;font-family:var(--mono);font-size:11px;font-weight:600;
+  letter-spacing:1px;text-transform:uppercase;color:var(--text);list-style:none;display:flex;
+  justify-content:space-between;align-items:center;user-select:none}
+details.bsec summary::-webkit-details-marker{display:none}
+details.bsec summary::after{content:'+';color:var(--dim);font-size:15px}
+details.bsec[open] summary::after{content:'\2212'}
+details.bsec>.md{padding:0 12px 12px}
+details.bsec.hot summary{border-left:3px solid var(--accent);padding-left:9px}
+
 /* auth */
 #auth{max-width:340px;margin:80px auto;display:none}
 #auth .card{padding:20px}
@@ -551,8 +562,20 @@ function rTasks(){
 
 /* --- BRIEF --- */
 function rBrief(){
-  if (!S.brief) return `<div class="empty">No brief for today yet.<br><br>The morning Cowork task writes it to the briefs table at 7 AM.</div>`;
-  return `<div class="card md">${marked.parse(S.brief.content_md || '')}</div>`;
+  if (!S.brief) return `<div class="empty">No brief for today yet.<br><br>The 7 AM routine writes it to the briefs table.</div>`;
+  const md = S.brief.content_md || '';
+  const parts = md.split(/\n(?=## )/);
+  const head = parts.length && !parts[0].startsWith('## ') ? parts.shift() : '';
+  const openByDefault = /^(START HERE|REALITY CHECK)/i;
+  const hot = /^(START HERE|REALITY CHECK|TODAY'S DEADLINES)/i;
+  return (head ? `<div class="card md" style="padding:10px 12px">${marked.parse(head)}</div>` : '') +
+    (parts.length ? parts.map(sec => {
+      const m = sec.match(/^## (.+)/);
+      const title = m ? m[1].trim() : 'SECTION';
+      const body = sec.replace(/^## .+\n?/, '');
+      return `<details class="bsec ${hot.test(title) ? 'hot' : ''}" ${openByDefault.test(title) ? 'open' : ''}>
+        <summary>${esc(title)}</summary><div class="md">${marked.parse(body)}</div></details>`;
+    }).join('') : `<div class="card md">${marked.parse(md)}</div>`);
 }
 
 /* --- REFLECT --- */
