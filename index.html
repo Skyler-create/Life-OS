@@ -176,6 +176,16 @@ details.bsec>.ginner{padding:0 10px 10px}
 .cal-d i{position:absolute;bottom:1px;left:50%;transform:translateX(-50%);font-style:normal;font-size:8px;color:var(--focus)}
 .cal-d.sel i{color:#fff}
 
+/* full calendar tab */
+.cal-d.big{aspect-ratio:auto;min-height:48px;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding-top:4px;cursor:pointer}
+.cal-d.big .marks{display:flex;gap:2px;margin-top:3px;align-items:center}
+.cal-d.big .marks i{position:static;transform:none;width:5px;height:5px;border-radius:50%;display:block}
+.cal-d.big .marks em{font-size:9px;color:var(--dim);font-style:normal;line-height:1}
+
+/* flashcards */
+.fc-front{font-size:17px;line-height:1.5;margin:10px 0}
+.fc-back{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);line-height:1.5}
+
 /* auth */
 #auth{max-width:340px;margin:80px auto;display:none}
 #auth .card{padding:20px}
@@ -246,6 +256,7 @@ let S = {
   chat: JSON.parse(localStorage.getItem('chatHistory') || '[]'), sending: false,
   sheet: null, expandAll: false, openGroups: new Set(),
   bionic: localStorage.getItem('bionic') === '1',
+  cards: [], showBack: false, calY: null, calM: 0, calSel: null,
 };
 
 const todayISO = () => new Date().toLocaleDateString('sv-SE');
@@ -277,14 +288,16 @@ document.getElementById('a-email').value = OWNER;
 /* ================= data ================= */
 async function loadAll(){
   const today = todayISO();
-  const [t, g, gl, b, dl] = await Promise.all([
+  const [t, g, gl, b, dl, cd] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
     db.from('briefs').select('*').eq('date', today).maybeSingle(),
     db.from('daily_log').select('*').order('date', {ascending:false}).limit(90),
+    db.from('cards').select('*').lte('due', today).eq('suspended', false).order('due').limit(50),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
+  S.cards = cd.data || [];
   S.brief = b.data || null;
   const logs = dl.data || [];
   S.todayLog = logs.find(l => l.date === today) || null;
@@ -551,7 +564,7 @@ async function saveReflection(){
 }
 
 /* ================= rendering ================= */
-const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['chat','CHAT'],['reflect','REFLECT'],['log','LOG'],['trends','TRENDS']];
+const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['chat','CHAT'],['cal','CAL'],['reflect','REFLECT'],['log','LOG'],['trends','TRENDS'],['cards','CARDS']];
 function setView(v){ S.view = v; S.editing = null; localStorage.setItem('view', v); render(); }
 function setFilt(f){ S.filt = f; localStorage.setItem('filt', f); render(); }
 
@@ -568,6 +581,8 @@ function render(){
   if (S.view === 'reflect') { main.innerHTML = rReflect(); updateScorePreview(); }
   if (S.view === 'log')     main.innerHTML = rLog();
   if (S.view === 'trends')  main.innerHTML = rTrends();
+  if (S.view === 'cal')     main.innerHTML = rCal();
+  if (S.view === 'cards')   main.innerHTML = rCards();
   if (S.view === 'chat')    { main.innerHTML = rChat(); const cl = document.getElementById('chatlog'); if (cl) cl.scrollTop = cl.scrollHeight; }
   document.getElementById('addbar').classList.toggle('hidden', !(S.view === 'today' || S.view === 'tasks') || !!S.sheet);
   document.getElementById('sheetroot').innerHTML = sheetHTML();
@@ -892,6 +907,88 @@ function rTrends(){
     <tr><td>avg focus</td><td>${focusAvg}/5</td></tr>
     <tr><td>rest days in window</td><td>${logs.filter(l => l.rest_day).length}</td></tr>
   </table></div>`;
+}
+
+/* --- CAL (month view of task due-dates) --- */
+function calNav2(d){ let m = S.calM + d, y = S.calY; if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; } S.calM = m; S.calY = y; render(); }
+function selDay(iso){ S.calSel = iso; render(); }
+function addForDay(){
+  const n = new Date();
+  S.sheet = {title: '', energy: 'FOCUS', est: null, project: null, due: S.calSel,
+    priority: 'med', deadline_type: 'self_imposed', bucket: 'active', calY: n.getFullYear(), calM: n.getMonth()};
+  render();
+}
+function rCal(){
+  if (S.calY == null) { const n = new Date(); S.calY = n.getFullYear(); S.calM = n.getMonth(); S.calSel = todayISO(); }
+  const y = S.calY, m = S.calM;
+  const startDow = (new Date(y, m, 1).getDay() + 6) % 7;
+  const days = new Date(y, m + 1, 0).getDate();
+  const byDay = {};
+  S.tasks.forEach(t => { if (t.due && t.bucket === 'active' && t.status !== 'done') (byDay[t.due] = byDay[t.due] || []).push(t); });
+  let cells = '';
+  for (let i = 0; i < startDow; i++) cells += '<span></span>';
+  for (let d = 1; d <= days; d++) {
+    const iso = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const ts = byDay[iso] || [];
+    const marks = ts.slice(0, 4).map(t => `<i style="background:${(ENERGY[t.energy] || {}).hex || '#666'}"></i>`).join('');
+    cells += `<button class="cal-d big ${S.calSel === iso ? 'sel' : ''} ${iso === todayISO() ? 'today' : ''}" onclick="selDay('${iso}')">
+      <span>${d}</span><div class="marks">${marks}${ts.length > 4 ? '<em>+</em>' : ''}</div></button>`;
+  }
+  const mn = new Date(y, m, 1).toLocaleString('en-US', {month: 'long', year: 'numeric'});
+  const sel = S.calSel;
+  const selOpen = byDay[sel] || [];
+  const selDone = S.tasks.filter(t => t.due === sel && t.status === 'done');
+  return `<div class="card">
+    <div class="cal-h" style="margin-bottom:10px"><button onclick="calNav2(-1)">‹</button><span class="mono">${mn}</span><button onclick="calNav2(1)">›</button></div>
+    <div class="cal-g">${['M','T','W','T','F','S','S'].map(d => `<span class="dow">${d}</span>`).join('')}${cells}</div>
+    <div class="elegend" style="margin-top:8px">${Object.keys(ENERGY).map(e => `<span><i style="background:${ENERGY[e].hex}"></i>${e}</span>`).join('')}</div>
+  </div>
+  <div class="pname">${sel || ''} — ${selOpen.length} open${selDone.length ? ' · ' + selDone.length + ' done' : ''}</div>
+  ${selOpen.map(taskRowHTML).join('') || '<div class="empty">Nothing due this day.</div>'}
+  ${sel ? `<button class="btn" style="width:100%" onclick="addForDay()">+ add task due ${sel}</button>` : ''}
+  <div style="height:10px"></div>`;
+}
+
+/* --- CARDS (spaced-repetition flashcards, replaces Anki) --- */
+function rCards(){
+  const q = S.cards || [];
+  if (!q.length) return `<div class="empty">No cards due.<br><br>New cards arrive with each morning brief that has a call-learning topic.<br>Reviews reschedule themselves — come back tomorrow.</div>`;
+  const c = q[0];
+  return `<div class="pname">${q.length} due</div>
+  <div class="card">
+    <h2>${esc(c.category || 'card')}${c.topic ? ' · ' + esc(c.topic) : ''}</h2>
+    <div class="fc-front">${esc(c.front)}</div>
+    ${S.showBack ? `<div class="fc-back">${esc(c.back)}</div>` : ''}
+  </div>
+  ${S.showBack
+    ? `<div style="display:flex;gap:8px">
+        <button class="btn" style="flex:1;color:var(--accent)" onclick="gradeCard(0)">Again</button>
+        <button class="btn" style="flex:1" onclick="gradeCard(1)">Good</button>
+        <button class="btn" style="flex:1;color:var(--done)" onclick="gradeCard(2)">Easy</button>
+      </div>
+      <button class="btn" style="width:100%;margin-top:8px;color:var(--dim)" onclick="suspendCard()">suspend card</button>`
+    : `<button class="btn primary" style="width:100%;padding:12px" onclick="S.showBack=true;render()">Show answer</button>`}
+  <div style="height:10px"></div>`;
+}
+async function gradeCard(g){
+  const c = (S.cards || [])[0]; if (!c) return;
+  let iv = c.interval_days, ease = +c.ease, reps = c.reps, lapses = c.lapses;
+  if (g === 0)      { lapses++; iv = 0; ease = Math.max(1.3, ease - 0.2); }
+  else if (g === 1) { iv = iv < 1 ? 1 : Math.round(iv * ease); reps++; }
+  else              { ease += 0.15; iv = Math.max(2, Math.round((iv || 1) * ease * 1.3)); reps++; }
+  const d = new Date(); d.setDate(d.getDate() + iv);
+  const patch = {interval_days: iv, ease, reps, lapses, due: g === 0 ? todayISO() : d.toLocaleDateString('sv-SE')};
+  S.lastWrite = Date.now();
+  db.from('cards').update(patch).eq('id', c.id).then(({error}) => { if (error) toast('Save failed: ' + error.message); });
+  S.cards.shift();
+  if (g === 0) S.cards.push({...c, ...patch}); // failed cards come back this session
+  S.showBack = false; render();
+}
+async function suspendCard(){
+  const c = (S.cards || [])[0]; if (!c) return;
+  S.lastWrite = Date.now();
+  await db.from('cards').update({suspended: true}).eq('id', c.id);
+  S.cards.shift(); S.showBack = false; render(); toast('Suspended');
 }
 
 /* --- CHAT (embedded, via Supabase edge function -> Claude API) --- */
