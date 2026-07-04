@@ -305,6 +305,24 @@ async function loadAll(){
   S.logs = logs;
   render();
   subscribeRealtime();
+  captureWake();
+}
+
+/* auto-capture wake time: first app open of the day, morning window only */
+async function captureWake(){
+  const today = todayISO();
+  if (localStorage.getItem('wakeStamped') === today) return;
+  if (S.todayLog?.wake_time) { localStorage.setItem('wakeStamped', today); return; }
+  const now = new Date(), h = now.getHours();
+  if (h < 4 || h >= 13) return; // opening the app at 3 AM or 8 PM is not "waking up"
+  const hhmm = String(h).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+  S.lastWrite = Date.now();
+  const {error} = await db.from('daily_log').upsert({date: today, wake_time: hhmm}, {onConflict: 'date'});
+  if (!error) {
+    localStorage.setItem('wakeStamped', today);
+    if (S.todayLog) S.todayLog.wake_time = hhmm; else S.todayLog = {date: today, wake_time: hhmm};
+    toast('Wake captured: ' + hhmm);
+  }
 }
 
 /* ================= live sync ================= */
