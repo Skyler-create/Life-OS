@@ -192,6 +192,23 @@ details.bsec>.ginner{padding:0 10px 10px}
 .evrow .mono{color:var(--dim);font-size:11px;white-space:nowrap}
 .evb{position:absolute;top:2px;right:4px;font-size:8px;color:var(--dim);font-weight:400;font-style:normal;font-family:var(--mono)}
 
+/* day view timeline */
+.daygrid{position:relative;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:8px}
+.hrow{position:absolute;left:0;right:0;border-top:1px solid var(--line);opacity:.55}
+.hrow span{position:absolute;top:0;left:6px;font-family:var(--mono);font-size:9px;color:var(--dim)}
+.evblk{position:absolute;left:52px;right:8px;background:rgba(225,37,27,.16);border:1px solid var(--accent);
+  border-left:3px solid var(--accent);border-radius:6px;padding:2px 8px;font-size:12px;overflow:hidden;z-index:1}
+.evblk b{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--dim);display:block}
+.nowline{position:absolute;left:0;right:0;height:2px;background:var(--focus);z-index:2}
+
+/* week agenda */
+.wkday{font-family:var(--mono);font-size:12px;font-weight:700;margin-bottom:4px;cursor:pointer;letter-spacing:.5px}
+.wkday.now{color:var(--accent)}
+.wkline{font-size:13px;padding:3px 0;display:flex;gap:8px;align-items:center}
+.wkline .mono{color:var(--dim);font-size:11px;min-width:46px}
+.wkline i{width:6px;height:6px;border-radius:50%;flex:0 0 auto;display:inline-block}
+.wkline.dim{color:var(--dim)}
+
 /* auth */
 #auth{max-width:340px;margin:80px auto;display:none}
 #auth .card{padding:20px}
@@ -264,6 +281,7 @@ let S = {
   sheet: null, expandAll: false, openGroups: new Set(),
   bionic: localStorage.getItem('bionic') === '1',
   cards: [], showBack: false, calY: null, calM: 0, calSel: null,
+  calView: localStorage.getItem('calView') || 'month',
 };
 
 const todayISO = () => new Date().toLocaleDateString('sv-SE');
@@ -939,22 +957,61 @@ function rTrends(){
 }
 
 /* --- CAL (month view of task due-dates) --- */
-function calNav2(d){ let m = S.calM + d, y = S.calY; if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; } S.calM = m; S.calY = y; render(); }
-function selDay(iso){ S.calSel = iso; render(); }
+const fromISO = iso => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d); };
+function setCalView(v){ S.calView = v; localStorage.setItem('calView', v); render(); }
+function navCal(dir){
+  if (S.calView === 'month') {
+    let m = S.calM + dir, y = S.calY;
+    if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; }
+    S.calM = m; S.calY = y; render(); return;
+  }
+  const d = fromISO(S.calSel || todayISO());
+  d.setDate(d.getDate() + (S.calView === 'week' ? 7 : 1) * dir);
+  S.calSel = d.toLocaleDateString('sv-SE');
+  S.calY = d.getFullYear(); S.calM = d.getMonth();
+  render();
+}
+function calToday(){ const n = new Date(); S.calY = n.getFullYear(); S.calM = n.getMonth(); S.calSel = todayISO(); render(); }
+function selDay(iso){ S.calSel = iso; const d = fromISO(iso); S.calY = d.getFullYear(); S.calM = d.getMonth(); setCalView('day'); }
 function addForDay(){
   const n = new Date();
   S.sheet = {title: '', energy: 'FOCUS', est: null, project: null, due: S.calSel,
     priority: 'med', deadline_type: 'self_imposed', bucket: 'active', calY: n.getFullYear(), calM: n.getMonth()};
   render();
 }
-function rCal(){
-  if (S.calY == null) { const n = new Date(); S.calY = n.getFullYear(); S.calM = n.getMonth(); S.calSel = todayISO(); }
-  const y = S.calY, m = S.calM;
-  const startDow = (new Date(y, m, 1).getDay() + 6) % 7;
-  const days = new Date(y, m + 1, 0).getDate();
+function calMaps(){
   const byDay = {}, evByDay = {};
   S.tasks.forEach(t => { if (t.due && t.bucket === 'active' && t.status !== 'done') (byDay[t.due] = byDay[t.due] || []).push(t); });
   (S.events || []).forEach(e => { (evByDay[e.date] = evByDay[e.date] || []).push(e); });
+  return {byDay, evByDay};
+}
+function rCal(){
+  if (S.calY == null) { const n = new Date(); S.calY = n.getFullYear(); S.calM = n.getMonth(); }
+  if (!S.calSel) S.calSel = todayISO();
+  const {byDay, evByDay} = calMaps();
+  const sel = fromISO(S.calSel);
+  let label;
+  if (S.calView === 'month') label = new Date(S.calY, S.calM, 1).toLocaleString('en-US', {month: 'long', year: 'numeric'});
+  else if (S.calView === 'day') label = sel.toLocaleDateString('en-US', {weekday: 'short', month: 'short', day: 'numeric'});
+  else {
+    const mon = new Date(sel); mon.setDate(sel.getDate() - ((sel.getDay() + 6) % 7));
+    const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+    label = mon.toLocaleDateString('en-US', {month: 'short', day: 'numeric'}) + ' – ' + sun.toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
+  }
+  const header = `<div class="cal-h" style="margin-bottom:8px">
+    <button onclick="navCal(-1)">‹</button><span class="mono">${label}</span>
+    <span><button class="btn" style="padding:2px 10px;font-size:10px;margin-right:6px" onclick="calToday()">today</button><button onclick="navCal(1)">›</button></span></div>
+  <div class="chiprow" style="margin-bottom:10px">${['day','week','month'].map(v =>
+    `<button class="schip ${S.calView === v ? 'on' : ''}" style="flex:1" onclick="setCalView('${v}')">${v.toUpperCase()}</button>`).join('')}</div>`;
+  const body = S.calView === 'day' ? calDayHTML(S.calSel, byDay, evByDay)
+             : S.calView === 'week' ? calWeekHTML(byDay, evByDay)
+             : calMonthHTML(byDay, evByDay);
+  return header + body;
+}
+function calMonthHTML(byDay, evByDay){
+  const y = S.calY, m = S.calM;
+  const startDow = (new Date(y, m, 1).getDay() + 6) % 7;
+  const days = new Date(y, m + 1, 0).getDate();
   let cells = '';
   for (let i = 0; i < startDow; i++) cells += '<span></span>';
   for (let d = 1; d <= days; d++) {
@@ -965,21 +1022,54 @@ function rCal(){
     cells += `<button class="cal-d big ${S.calSel === iso ? 'sel' : ''} ${iso === todayISO() ? 'today' : ''}" onclick="selDay('${iso}')">
       ${evN ? `<em class="evb">${evN}▸</em>` : ''}<span>${d}</span><div class="marks">${marks}${ts.length > 4 ? '<em>+</em>' : ''}</div></button>`;
   }
-  const mn = new Date(y, m, 1).toLocaleString('en-US', {month: 'long', year: 'numeric'});
-  const sel = S.calSel;
-  const selOpen = byDay[sel] || [];
-  const selDone = S.tasks.filter(t => t.due === sel && t.status === 'done');
-  const selEv = (evByDay[sel] || []).sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
   return `<div class="card">
-    <div class="cal-h" style="margin-bottom:10px"><button onclick="calNav2(-1)">‹</button><span class="mono">${mn}</span>
-      <span><button class="btn" style="padding:2px 10px;font-size:10px;margin-right:6px" onclick="const n=new Date();S.calY=n.getFullYear();S.calM=n.getMonth();S.calSel=todayISO();render()">today</button><button onclick="calNav2(1)">›</button></span></div>
     <div class="cal-g">${['M','T','W','T','F','S','S'].map(d => `<span class="dow">${d}</span>`).join('')}${cells}</div>
-    <div class="elegend" style="margin-top:8px">${Object.keys(ENERGY).map(e => `<span><i style="background:${ENERGY[e].hex}"></i>${e}</span>`).join('')}<span style="margin-left:auto" class="dim">n▸ = calendar events</span></div>
-  </div>
-  <div class="pname">${sel || ''} — ${selEv.length ? selEv.length + ' events · ' : ''}${selOpen.length} open${selDone.length ? ' · ' + selDone.length + ' done' : ''}</div>
-  ${selEv.map(e => `<div class="evrow"><span class="mono">${e.start_time ? esc(e.start_time) + (e.end_time ? '–' + esc(e.end_time) : '') : 'all-day'}</span><span>${esc(e.title)}</span></div>`).join('')}
-  ${selOpen.map(taskRowHTML).join('') || (selEv.length ? '' : '<div class="empty">Nothing on this day.</div>')}
-  ${sel ? `<button class="btn" style="width:100%" onclick="addForDay()">+ add task due ${sel}</button>` : ''}
+    <div class="elegend" style="margin-top:8px">${Object.keys(ENERGY).map(e => `<span><i style="background:${ENERGY[e].hex}"></i>${e}</span>`).join('')}<span style="margin-left:auto" class="dim">n▸ = events · tap a day</span></div>
+  </div>`;
+}
+function calWeekHTML(byDay, evByDay){
+  const anchor = fromISO(S.calSel);
+  const mon = new Date(anchor); mon.setDate(anchor.getDate() - ((anchor.getDay() + 6) % 7));
+  let out = '';
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(mon); d.setDate(mon.getDate() + i);
+    const iso = d.toLocaleDateString('sv-SE');
+    const evs = (evByDay[iso] || []).slice().sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
+    const ts = byDay[iso] || [];
+    out += `<div class="card" style="padding:8px 12px">
+      <div class="wkday ${iso === todayISO() ? 'now' : ''}" onclick="selDay('${iso}')">${d.toLocaleDateString('en-US', {weekday: 'short'}).toUpperCase()} ${d.getDate()}${iso === todayISO() ? ' · TODAY' : ''}</div>
+      ${evs.map(e => `<div class="wkline"><span class="mono">${e.start_time ? esc(e.start_time) : 'all-day'}</span><span>${esc(e.title)}</span></div>`).join('')}
+      ${ts.map(t => `<div class="wkline"><i style="background:${(ENERGY[t.energy] || {}).hex || '#666'}"></i><span>${esc(t.title)}</span></div>`).join('')}
+      ${!evs.length && !ts.length ? '<div class="wkline dim">—</div>' : ''}
+    </div>`;
+  }
+  return out;
+}
+function calDayHTML(iso, byDay, evByDay){
+  const evs = (evByDay[iso] || []).slice().sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
+  const allday = evs.filter(e => !e.start_time);
+  const timed = evs.filter(e => e.start_time);
+  const H0 = 6, H1 = 24, PPH = 48;
+  const blocks = timed.map(e => {
+    const [sh, sm] = e.start_time.split(':').map(Number);
+    let dur = 60;
+    if (e.end_time) { const [eh, em] = e.end_time.split(':').map(Number); dur = Math.max(20, (eh * 60 + em) - (sh * 60 + sm)); }
+    const top = Math.max(0, ((sh - H0) * 60 + sm) * (PPH / 60));
+    const h = Math.max(22, dur * (PPH / 60));
+    return `<div class="evblk" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px"><b>${esc(e.start_time)}${e.end_time ? '–' + esc(e.end_time) : ''}</b>${esc(e.title)}</div>`;
+  }).join('');
+  const rail = [...Array(H1 - H0)].map((_, i) => `<div class="hrow" style="top:${i * PPH}px"><span>${String(H0 + i).padStart(2, '0')}:00</span></div>`).join('');
+  const nowLine = iso === todayISO() ? (() => {
+    const n = new Date(); const mins = (n.getHours() - H0) * 60 + n.getMinutes();
+    return (mins > 0 && mins < (H1 - H0) * 60) ? `<div class="nowline" style="top:${(mins * PPH / 60).toFixed(0)}px"></div>` : '';
+  })() : '';
+  const due = byDay[iso] || [];
+  const doneDay = S.tasks.filter(t => t.due === iso && t.status === 'done');
+  return `${allday.map(e => `<div class="evrow"><span class="mono">all-day</span><span>${esc(e.title)}</span></div>`).join('')}
+  ${due.length || doneDay.length ? `<div class="pname">due — ${due.length} open${doneDay.length ? ' · ' + doneDay.length + ' done' : ''}</div>` : ''}
+  ${due.map(taskRowHTML).join('')}
+  <div class="daygrid" style="height:${(H1 - H0) * PPH}px">${rail}${blocks}${nowLine}</div>
+  <button class="btn" style="width:100%;margin-top:8px" onclick="addForDay()">+ add task due ${iso}</button>
   <div style="height:10px"></div>`;
 }
 
