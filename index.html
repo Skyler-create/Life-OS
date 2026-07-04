@@ -396,8 +396,20 @@ async function saveReflection(){
 }
 
 /* ================= rendering ================= */
-const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['reflect','REFLECT'],['log','LOG']];
-function setView(v){ S.view = v; S.editing = null; localStorage.setItem('view', v); render(); }
+const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['reflect','REFLECT'],['log','LOG'],['chat','CHAT ↗']];
+function setView(v){
+  if (v === 'chat') {
+    let url = localStorage.getItem('chatUrl');
+    if (!url) {
+      url = prompt('One-time setup: paste your claude.ai lifeOS project URL\n(claude.ai → Projects → lifeOS → copy the address bar)');
+      if (!url || !url.includes('claude.ai')) return;
+      localStorage.setItem('chatUrl', url.trim());
+    }
+    window.open(url, '_blank');
+    return;
+  }
+  S.view = v; S.editing = null; localStorage.setItem('view', v); render();
+}
 function setFilt(f){ S.filt = f; localStorage.setItem('filt', f); render(); }
 function setAddEnergy(e){ S.addEnergy = e; localStorage.setItem('addEnergy', e); renderAddBar(); }
 
