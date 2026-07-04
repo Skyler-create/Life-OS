@@ -282,7 +282,7 @@ async function loadAll(){
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
     db.from('briefs').select('*').eq('date', today).maybeSingle(),
-    db.from('daily_log').select('*').order('date', {ascending:false}).limit(15),
+    db.from('daily_log').select('*').order('date', {ascending:false}).limit(90),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   S.brief = b.data || null;
@@ -551,7 +551,7 @@ async function saveReflection(){
 }
 
 /* ================= rendering ================= */
-const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['chat','CHAT'],['reflect','REFLECT'],['log','LOG']];
+const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['chat','CHAT'],['reflect','REFLECT'],['log','LOG'],['trends','TRENDS']];
 function setView(v){ S.view = v; S.editing = null; localStorage.setItem('view', v); render(); }
 function setFilt(f){ S.filt = f; localStorage.setItem('filt', f); render(); }
 
@@ -567,6 +567,7 @@ function render(){
   if (S.view === 'brief')   { main.innerHTML = rBrief(); if (S.bionic) main.querySelectorAll('.md').forEach(bionicify); }
   if (S.view === 'reflect') { main.innerHTML = rReflect(); updateScorePreview(); }
   if (S.view === 'log')     main.innerHTML = rLog();
+  if (S.view === 'trends')  main.innerHTML = rTrends();
   if (S.view === 'chat')    { main.innerHTML = rChat(); const cl = document.getElementById('chatlog'); if (cl) cl.scrollTop = cl.scrollHeight; }
   document.getElementById('addbar').classList.toggle('hidden', !(S.view === 'today' || S.view === 'tasks') || !!S.sheet);
   document.getElementById('sheetroot').innerHTML = sheetHTML();
@@ -803,6 +804,65 @@ function rLog(){
   </div>
   <button class="btn" style="width:100%" onclick="db.auth.signOut()">Sign out</button>
   <div style="height:10px"></div>`;
+}
+
+/* --- TRENDS (read-only analytics from daily_log + tasks) --- */
+function rTrends(){
+  const logs = [...(S.logs || [])].reverse(); // chronological
+  const W = 560, H = 150, P = 10;
+  // score line — last 30 scored (non-rest) days
+  const pts = logs.filter(l => l.score != null && !l.rest_day).slice(-30);
+  const line = pts.map((l, i) => ({
+    x: P + i * (W - 2*P) / Math.max(pts.length - 1, 1),
+    y: H - P - (Math.min(+l.score, 100) / 100) * (H - 2*P),
+    hit: l.streak_hit, d: l.date, s: +l.score,
+  }));
+  const y70 = H - P - 0.7 * (H - 2*P);
+  const scoreSvg = line.length > 1 ? `<svg viewBox="0 0 ${W} ${H}" style="width:100%">
+      <line x1="${P}" y1="${y70}" x2="${W-P}" y2="${y70}" stroke="var(--line)" stroke-dasharray="4 4"/>
+      <polyline fill="none" stroke="var(--accent)" stroke-width="2" points="${line.map(p => p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' ')}"/>
+      ${line.map(p => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5" fill="${p.hit ? '#4ADE80' : '#E1251B'}"><title>${p.d}: ${p.s}</title></circle>`).join('')}
+    </svg><div class="dim mono" style="font-size:10px">green dot = streak hit · dashed line = 70</div>`
+    : '<div class="empty">Not enough scored days yet — this fills in as you save reflections.</div>';
+  // energy minutes done per day — last 14 days, stacked by energy
+  const days = [...Array(14)].map((_, i) => { const d = new Date(); d.setDate(d.getDate() - 13 + i); return d.toLocaleDateString('sv-SE'); });
+  const per = days.map(d => {
+    const o = {DEEP: 0, FOCUS: 0, LIGHT: 0, PARALLEL: 0};
+    S.tasks.forEach(t => { if (t.status === 'done' && (t.completed_at || '').slice(0, 10) === d) o[t.energy || 'FOCUS'] += (t.est_minutes || 15); });
+    return {d, o, total: Object.values(o).reduce((a, b) => a + b, 0)};
+  });
+  const max = Math.max(...per.map(p => p.total), 60);
+  const BW = (W - 2*P) / 14;
+  const barsSvg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%">${per.map((p, i) => {
+      let y = H - P;
+      return Object.entries(p.o).map(([e, m]) => {
+        if (!m) return '';
+        const h = (m / max) * (H - 2*P); y -= h;
+        return `<rect x="${(P + i*BW + 2).toFixed(1)}" y="${y.toFixed(1)}" width="${(BW - 4).toFixed(1)}" height="${h.toFixed(1)}" fill="${ENERGY[e].hex}" rx="2"><title>${p.d} ${e}: ${Math.round(m/60*10)/10}h</title></rect>`;
+      }).join('');
+    }).join('')}</svg>`;
+  // stats
+  const wakes = logs.filter(l => l.wake_time).slice(-7);
+  const wakeAvg = wakes.length ? (() => {
+    const m = wakes.reduce((s, l) => { const [h, mm] = (l.wake_time || '0:0').split(':').map(Number); return s + (h || 0) * 60 + (mm || 0); }, 0) / wakes.length;
+    return `${Math.floor(m/60)}:${String(Math.round(m % 60)).padStart(2, '0')}`;
+  })() : '—';
+  const best = Math.max(...logs.map(l => l.streak_count || 0), 0);
+  const fl = logs.filter(l => l.focus);
+  const focusAvg = fl.length ? (fl.reduce((s, l) => s + l.focus, 0) / fl.length).toFixed(1) : '—';
+  const deep7 = per.slice(-7).reduce((s, p) => s + p.o.DEEP, 0);
+  return `
+  <div class="card"><h2>Score — last ${line.length} scored days</h2>${scoreSvg}</div>
+  <div class="card"><h2>Done work by energy — 14 days</h2>${barsSvg}
+    <div class="elegend" style="margin-top:6px">${Object.keys(ENERGY).map(e => `<span><i style="background:${ENERGY[e].hex}"></i>${e}</span>`).join('')}</div></div>
+  <div class="card"><h2>Stats</h2><table>
+    <tr><td>current streak</td><td>${S.todayLog?.streak_count ?? S.prevLog?.streak_count ?? 0}d</td></tr>
+    <tr><td>best recorded streak</td><td>${best}d</td></tr>
+    <tr><td>DEEP hours, last 7 days</td><td>${Math.round(deep7/60*10)/10}h</td></tr>
+    <tr><td>avg wake (last ${wakes.length} logged)</td><td>${wakeAvg}</td></tr>
+    <tr><td>avg focus</td><td>${focusAvg}/5</td></tr>
+    <tr><td>rest days in window</td><td>${logs.filter(l => l.rest_day).length}</td></tr>
+  </table></div>`;
 }
 
 /* --- CHAT (embedded, via Supabase edge function -> Claude API) --- */
