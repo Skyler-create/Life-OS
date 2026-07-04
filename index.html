@@ -674,15 +674,44 @@ function rToday(){
       `<span style="margin-left:auto">${Math.round(total/60*10)/10}h open</span></div>` : '';
   const sh = S.brief?.start_here_task;
   const shCard = sh ? `<div class="card starthere"><h2>Start here</h2><div class="task-name">${esc(sh)}</div></div>` : '';
+  const meter = rMeter();
   const list = applyFilt(todays);
   const sorted = [...list].sort((a, b) =>
     (a.status === 'done') - (b.status === 'done') ||
     (a.due || '9999').localeCompare(b.due || '9999') ||
     (PRIO[b.priority] || 2) - (PRIO[a.priority] || 2));
-  return shCard +
+  return shCard + meter +
     (bar ? `<div class="card"><h2>Today's energy</h2>${bar}</div>` : '') +
     chipsHTML() +
     (sorted.length ? sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — add a task below or check TASKS.</div>`);
+}
+/* live "what do I need tonight" meter */
+function rMeter(){
+  const r = computeScore(S.todayLog?.read_brief ?? false);
+  if (r.score === null) return '';
+  const hit = r.score >= 70;
+  const plan = planItems();
+  const doneTitles = new Set(S.tasks.filter(isDoneToday).map(t => (t.title || '').toLowerCase()));
+  const open = plan.filter(p => !doneTitles.has((p.title || '').toLowerCase()));
+  const universe = [...plan, ...S.tasks.filter(isDoneToday)];
+  const maxMin = Math.max(...universe.map(i => i.est_minutes || 15), 1);
+  const den = plan.reduce((s, i) => s + weight(i, maxMin), 0);
+  let hint = 'streak already hit — everything else is bonus';
+  if (!hit && den > 0) {
+    const sorted = [...open].sort((a, b) => weight(b, maxMin) - weight(a, maxMin));
+    let s = r.score; const picks = [];
+    for (const p of sorted) { if (s >= 70) break; s += weight(p, maxMin) / den * 100; picks.push(p.title); }
+    hint = (picks.length && s >= 70)
+      ? `finish <b>${picks.map(esc).join('</b> + <b>')}</b> → ~${Math.round(s)} · streak safe`
+      : 'streak needs most of the plan — start with the heaviest item';
+  }
+  return `<div class="card"><h2>Score meter</h2>
+    <div style="display:flex;align-items:baseline;gap:10px">
+      <span class="mono" style="font-size:26px;font-weight:700;color:${hit ? 'var(--done)' : 'var(--accent)'}">${r.score}</span>
+      <span class="dim" style="font-size:12px">${hint}</span>
+    </div>
+    <div class="ebar" style="margin-top:8px"><div style="width:${Math.min(r.score, 100)}%;background:${hit ? '#4ADE80' : '#E1251B'}"></div></div>
+  </div>`;
 }
 
 /* --- TASKS --- */
