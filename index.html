@@ -232,10 +232,11 @@ details.bsec>.ginner{padding:0 10px 10px}
 <div id="sheetroot"></div>
 
 <script>
-/* ================= config ================= */
-const SB_URL = 'https://xebiaoycxwstrzgkjult.supabase.co';
-const SB_KEY = 'sb_publishable_ecGABp0TAZcVX_TLIjBbOQ_rqUKNATw';
-const OWNER  = 'skyler.scooty@gmail.com';
+/* ================= CONFIG — the ONLY three lines a new user changes ==== */
+/* (setting up your own LifeOS? See SETUP.md in this repo — Claude does it) */
+const SB_URL = 'https://xebiaoycxwstrzgkjult.supabase.co';   // your Supabase project URL
+const SB_KEY = 'sb_publishable_ecGABp0TAZcVX_TLIjBbOQ_rqUKNATw'; // your publishable key
+const OWNER  = 'skyler.scooty@gmail.com';                    // your email, lowercase
 const db = window.supabase.createClient(SB_URL, SB_KEY);
 
 const ENERGY = {
