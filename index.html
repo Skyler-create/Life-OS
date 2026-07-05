@@ -1021,16 +1021,15 @@ function creditsCardHTML(){
       <span class="dim" style="font-size:11px">Clock in:</span>
       ${['DEEP','FOCUS','LIGHT'].map(e => `<button class="schip" style="border-color:${ENERGY[e].hex};color:${ENERGY[e].hex}" onclick="clockIn('${e}')">${e} · ${CREDIT_RATE[e]}m/cr</button>`).join('')}</div>`;
   }
-  const active = c.active ? `<div style="color:var(--done);font-family:var(--mono);font-size:11px;margin-top:4px">▶ scroll session until ${new Date(c.session_until).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</div>` : '';
+  const scroll = c.scroll_open
+    ? `<div style="color:var(--accent);font-family:var(--mono);font-size:11px;margin-top:6px">📱 ${esc(c.scroll_open)} meter running — 1 credit/min</div>`
+    : `<div class="dim" style="font-family:var(--mono);font-size:11px;margin-top:6px">📱 scrolled ${c.metered || 0}m today · balance = minutes left, metered as you scroll</div>`;
   return `<div class="card"><h2>Screen-time credits</h2>
     <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
       <span class="mono" style="font-size:26px;font-weight:700">${c.balance}</span>
-      <span class="dim" style="font-size:11px">of ${c.gross} today · ${c.free} free + ${c.timer} clocked + ${c.bonus} task bonus − ${c.spent} spent</span>
+      <span class="dim" style="font-size:11px">min left of ${c.gross} today · ${c.free} free + ${c.timer} clocked + ${c.bonus} task bonus</span>
     </div>
-    ${timer}
-    <div style="display:flex;gap:6px;margin-top:8px">
-      ${[5,10,15].map(m => `<button class="btn" style="flex:1" ${c.balance < m ? 'disabled style="flex:1;opacity:.4"' : ''} onclick="spendCredits(${m})">📱 ${m} min</button>`).join('')}
-    </div>${active}
+    ${timer}${scroll}
   </div>`;
 }
 async function clockIn(energy){
