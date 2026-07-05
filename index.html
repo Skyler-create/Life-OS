@@ -41,6 +41,8 @@ header h1{font-family:var(--mono);font-size:18px;font-weight:700;letter-spacing:
 header h1 .dot{color:var(--accent)}
 #streakChip{font-family:var(--mono);font-size:12px;color:var(--dim)}
 #streakChip b{color:var(--text)}
+#pushBtn{background:none;border:none;font-size:14px;cursor:pointer;opacity:.35;padding:2px 4px}
+#pushBtn.on{opacity:1}
 
 /* nav — bottom tab bar, Instagram-style, scrolls sideways */
 nav{position:fixed;bottom:0;left:0;right:0;z-index:45;display:flex;gap:4px;overflow-x:auto;
@@ -277,6 +279,7 @@ details.bsec>.ginner{padding:0 10px 10px}
   <header>
     <h1>LifeOS<span class="dot">.</span></h1>
     <span id="streakChip"></span>
+    <button id="pushBtn" onclick="enablePush()" title="Push notifications">🔔</button>
   </header>
   <nav id="nav"></nav>
   <main id="main"></main>
@@ -299,6 +302,7 @@ const SB_URL = 'https://xebiaoycxwstrzgkjult.supabase.co';   // your Supabase pr
 const SB_KEY = 'sb_publishable_ecGABp0TAZcVX_TLIjBbOQ_rqUKNATw'; // your publishable key
 const OWNER  = 'skyler.scooty@gmail.com';                    // your email, lowercase
 const GCAL_CLIENT_ID = '118493693943-6l9gncbacaip7d4fct7cgdkr5l51nm1j.apps.googleusercontent.com'; // optional: live Google Calendar (blank = use routine sync only)
+const VAPID_PUBLIC = 'BIV0Jfwa19Q54frhQNxbdR2a8dN6Bw9zCSd_SPIXEeD2YFZbtX6YU3gVcH6bnbD3JHcxmNkXt_nDH2lpO3LDEVk'; // push notifications (GET /functions/v1/notify shows yours)
 const db = window.supabase.createClient(SB_URL, SB_KEY);
 
 const ENERGY = {
@@ -353,7 +357,7 @@ document.getElementById('a-email').value = OWNER;
 /* ================= data ================= */
 async function loadAll(){
   const today = todayISO();
-  const [t, g, gl, b, dl, cd, ev] = await Promise.all([
+  const [t, g, gl, b, dl, cd, ev, fz] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
@@ -361,9 +365,10 @@ async function loadAll(){
     db.from('daily_log').select('*').order('date', {ascending:false}).limit(90),
     db.from('cards').select('*').lte('due', today).eq('suspended', false).order('due').limit(50),
     db.from('events').select('*').order('date').limit(300),
+    db.from('freezes').select('*').gte('end_date', today).order('start_date'),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
-  S.cards = cd.data || []; S.events = ev.data || [];
+  S.cards = cd.data || []; S.events = ev.data || []; S.freezes = fz.data || [];
   S.brief = b.data || null;
   const logs = dl.data || [];
   S.todayLog = logs.find(l => l.date === today) || null;
@@ -372,6 +377,8 @@ async function loadAll(){
   render();
   subscribeRealtime();
   captureWake();
+  updatePushBtn();
+  refreshPushSub();
   // previously-connected Google Calendar: refresh the token silently
   if (localStorage.getItem('gconn') === '1' && !gcalToken()) setTimeout(() => gcalConnect(true), 800);
 }
@@ -393,6 +400,51 @@ async function captureWake(){
   }
 }
 
+/* ================= push notifications ================= */
+const frozenToday = () => (S.freezes || []).some(f => f.start_date <= todayISO() && todayISO() <= f.end_date);
+function urlB64ToU8(s){
+  const pad = '='.repeat((4 - s.length % 4) % 4);
+  const raw = atob((s + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+function pushSupported(){ return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window; }
+function updatePushBtn(){
+  const b = document.getElementById('pushBtn'); if (!b) return;
+  b.classList.toggle('on', pushSupported() && Notification.permission === 'granted');
+}
+async function savePushSub(sub){
+  S.lastWrite = Date.now();
+  const row = { endpoint: sub.endpoint, subscription: sub.toJSON(), ua: navigator.userAgent.slice(0, 120) };
+  const {error} = await db.from('push_subs').upsert(row, {onConflict: 'endpoint'});
+  if (error) toast('Push save failed: ' + error.message);
+  return !error;
+}
+async function enablePush(){
+  if (!pushSupported()) {
+    const ios = /iPhone|iPad/.test(navigator.userAgent);
+    toast(ios ? 'iOS: install first — Share → Add to Home Screen, then open from the icon' : 'Push not supported in this browser');
+    return;
+  }
+  const perm = await Notification.requestPermission();   // must be inside a user gesture (this click)
+  if (perm !== 'granted') { toast('Notifications blocked — enable in Settings if you change your mind'); return; }
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToU8(VAPID_PUBLIC) });
+    if (await savePushSub(sub)) toast('Push enabled — brief, streak-risk + reflection nudges are live');
+  } catch (e) { toast('Subscribe failed: ' + (e.message || e)); }
+  updatePushBtn();
+}
+/* keep the stored subscription fresh (endpoints rotate) — silent, only if already granted */
+async function refreshPushSub(){
+  if (!pushSupported() || Notification.permission !== 'granted') return;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) await savePushSub(sub);
+  } catch { /* offline etc — next open */ }
+}
+
 /* ================= live sync ================= */
 let rtChannel = null, rtTimer = null;
 function subscribeRealtime(){
@@ -408,7 +460,10 @@ function subscribeRealtime(){
 }
 
 /* ================= task helpers ================= */
-const isDoneToday = t => t.status === 'done' && (t.completed_at || '').slice(0,10) === todayISO();
+/* local calendar day of a timestamptz — NOT the UTC slice. Tasks finished after
+   7 PM CT used to land on "tomorrow" because toISOString() is UTC. */
+const localDay = ts => ts ? new Date(ts).toLocaleDateString('sv-SE') : '';
+const isDoneToday = t => t.status === 'done' && localDay(t.completed_at) === todayISO();
 const isPartialToday = t => t.partial_date === todayISO();
 const dueTag = t => {
   if (!t.due) return '';
@@ -573,6 +628,7 @@ async function saveEdit(id){
   const patch = {
     title: g('title'), project: g('project'), energy: g('energy'),
     due: g('due') || null, est_minutes: g('est') ? parseInt(g('est')) : null,
+    actual_minutes: g('actual') ? parseInt(g('actual')) : null,
     priority: g('prio'), deadline_type: g('dtype') || null, status: g('status'),
     bucket: g('bucket'), notes: g('notes'), parallel: g('energy') === 'PARALLEL',
   };
@@ -631,8 +687,31 @@ async function toggleGoal(goalId, checked){
   updateScorePreview();
 }
 function refVal(id){ return document.getElementById(id)?.value; }
+async function logActual(id, val){
+  S.lastWrite = Date.now();
+  const mins = val ? parseInt(val) : null;
+  const {error} = await db.from('tasks').update({actual_minutes: mins}).eq('id', id);
+  if (error) { toast('Save failed: ' + error.message); return; }
+  const t = S.tasks.find(x => x.id === id); if (t) t.actual_minutes = mins;
+}
+/* --- vacation / streak freeze --- */
+async function addFreeze(){
+  const s = refVal('fz-start'), e = refVal('fz-end');
+  if (!s || !e || e < s) { toast('Pick a valid date range'); return; }
+  S.lastWrite = Date.now();
+  const {error} = await db.from('freezes').insert({start_date: s, end_date: e, reason: refVal('fz-reason') || null});
+  if (error) { toast('Freeze failed: ' + error.message); return; }
+  toast('Frozen ' + s + ' → ' + e + ' — streak safe, notifications paused');
+  loadAll();
+}
+async function delFreeze(id){
+  S.lastWrite = Date.now();
+  await db.from('freezes').delete().eq('id', id);
+  loadAll();
+}
 function updateScorePreview(){
   const el = document.getElementById('scorePreview'); if (!el) return;
+  if (frozenToday()) { el.innerHTML = 'FROZEN<small>vacation mode — streak preserved, no score needed</small>'; return; }
   const rest = refVal('r-rest') === 'y';
   if (rest) { el.innerHTML = 'REST<small>streak preserved</small>'; return; }
   const r = computeScore(refVal('r-brief') === 'y');
@@ -642,7 +721,7 @@ function updateScorePreview(){
   el.innerHTML = `${r.score}<small>${r.doneCount} done · ${r.partialCount} partial · plan of ${r.planCount} · ${hit ? 'streak hit' : 'below 70'}</small>`;
 }
 async function saveReflection(){
-  const rest = refVal('r-rest') === 'y';
+  const rest = frozenToday() || refVal('r-rest') === 'y';   // vacation counts as rest — streak carries
   const readBrief = refVal('r-brief') === 'y';
   const r = computeScore(readBrief);
   const prevStreak = S.prevLog?.streak_count || 0;
@@ -855,6 +934,7 @@ function editorHTML(t){
     <div><label>Energy</label><select id="e-energy">${opt(Object.keys(ENERGY).map(e => [e, e]), t.energy || 'FOCUS')}</select></div>
     <div><label>Due</label><input id="e-due" type="date" value="${t.due || ''}"></div>
     <div><label>Est. min</label><input id="e-est" type="number" value="${t.est_minutes ?? ''}"></div>
+    <div><label>Actual min</label><input id="e-actual" type="number" value="${t.actual_minutes ?? ''}"></div>
     <div><label>Priority</label><select id="e-prio">${opt([['high','high'],['med','med'],['low','low']], t.priority || 'med')}</select></div>
     <div><label>Deadline</label><select id="e-dtype">${opt([['','—'],['hard','hard'],['self_imposed','self-imposed']], t.deadline_type)}</select></div>
     <div><label>Status</label><select id="e-status">${opt([['not_started','not started'],['in_progress','in progress'],['done','done'],['blocked','blocked']], t.status)}</select></div>
@@ -902,6 +982,7 @@ function rToday(){
 }
 /* live "what do I need tonight" meter */
 function rMeter(){
+  if (frozenToday()) return `<div class="card"><h2>Score meter</h2><div class="dim">❄ Vacation mode — streak frozen, nothing owed today.</div></div>`;
   const r = computeScore(S.todayLog?.read_brief ?? false);
   if (r.score === null) return '';
   const hit = r.score >= 70;
@@ -987,10 +1068,14 @@ function rReflect(){
     <option value="y" ${cur === true ? 'selected' : ''}>yes</option><option value="n" ${cur === false ? 'selected' : ''}>no</option></select>`;
   const L = S.todayLog || {};
   return `
+  ${frozenToday() ? `<div class="card" style="border-color:var(--focus)"><b>❄ Vacation mode active</b><div class="dim" style="font-size:12px">Saving logs today as rest — streak preserved. Manage on the LOG tab.</div></div>` : ''}
   <div class="card"><div id="scorePreview">…</div></div>
   <div class="card"><h2>Done today (from task list)</h2>
     ${doneToday.length || partialToday.length ?
-      doneToday.map(t => `<div style="padding:2px 0">✓ ${esc(t.title)}</div>`).join('') +
+      doneToday.map(t => `<div style="display:flex;align-items:center;gap:8px;padding:2px 0">✓ ${esc(t.title)}
+        <input type="number" placeholder="${t.est_minutes ?? 15}m est" value="${t.actual_minutes ?? ''}" min="1"
+          style="width:74px;margin-left:auto" title="actual minutes"
+          onchange="logActual('${t.id}', this.value)"></div>`).join('') +
       partialToday.map(t => `<div style="padding:2px 0;color:var(--focus)">◐ ${esc(t.title)} (partial)</div>`).join('')
       : '<span class="dim">Nothing checked off yet — tick tasks on the TODAY tab.</span>'}
   </div>
@@ -1031,7 +1116,7 @@ function rLog(){
   const weekStart = (() => { const d = new Date(); const day = (d.getDay() + 6) % 7; d.setDate(d.getDate() - day); return d.toLocaleDateString('sv-SE'); })();
   const doneTasks = S.tasks.filter(t => t.status === 'done').sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''));
   const byDate = {};
-  doneTasks.slice(0, 120).forEach(t => { const d = (t.completed_at || '').slice(0, 10) || '(no date)'; (byDate[d] = byDate[d] || []).push(t); });
+  doneTasks.slice(0, 120).forEach(t => { const d = localDay(t.completed_at) || '(no date)'; (byDate[d] = byDate[d] || []).push(t); });
   return `
   <div class="card"><h2>Streak</h2>
     <table><tr><th>date</th><th>score</th><th>hit</th><th>streak</th></tr>
@@ -1045,6 +1130,18 @@ function rLog(){
       `<div class="pname">${d}</div>` + ts.map(t =>
         `<div style="padding:3px 0;font-size:14px">✓ ${esc(t.title)} <span class="dim mono" style="font-size:11px">${esc(t.project || '')} ${t.energy || ''}</span></div>`).join('')).join('')
       : '<span class="dim">No completed tasks yet.</span>'}
+  </div>
+  <div class="card"><h2>Vacation / streak freeze</h2>
+    ${(S.freezes || []).length ? S.freezes.map(f => `<div style="display:flex;align-items:center;gap:8px;padding:3px 0">
+      <span>❄ ${f.start_date} → ${f.end_date}${f.reason ? ' · ' + esc(f.reason) : ''}</span>
+      <button class="btn" style="margin-left:auto;padding:2px 8px" onclick="delFreeze('${f.id}')">✕</button></div>`).join('')
+      : '<span class="dim">No freezes scheduled. Frozen days preserve the streak and mute all notifications.</span>'}
+    <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+      <input id="fz-start" type="date" style="flex:1;min-width:120px">
+      <input id="fz-end" type="date" style="flex:1;min-width:120px">
+      <input id="fz-reason" placeholder="reason (optional)" style="flex:2;min-width:140px">
+      <button class="btn primary" onclick="addFreeze()">Freeze</button>
+    </div>
   </div>
   <button class="btn" style="width:100%" onclick="db.auth.signOut()">Sign out</button>
   <div style="height:10px"></div>`;
@@ -1072,7 +1169,7 @@ function rTrends(){
   const days = [...Array(14)].map((_, i) => { const d = new Date(); d.setDate(d.getDate() - 13 + i); return d.toLocaleDateString('sv-SE'); });
   const per = days.map(d => {
     const o = {DEEP: 0, FOCUS: 0, LIGHT: 0, PARALLEL: 0};
-    S.tasks.forEach(t => { if (t.status === 'done' && (t.completed_at || '').slice(0, 10) === d) o[t.energy || 'FOCUS'] += (t.est_minutes || 15); });
+    S.tasks.forEach(t => { if (t.status === 'done' && localDay(t.completed_at) === d) o[t.energy || 'FOCUS'] += (t.est_minutes || 15); });
     return {d, o, total: Object.values(o).reduce((a, b) => a + b, 0)};
   });
   const max = Math.max(...per.map(p => p.total), 60);
@@ -1106,7 +1203,22 @@ function rTrends(){
     <tr><td>avg wake (last ${wakes.length} logged)</td><td>${wakeAvg}</td></tr>
     <tr><td>avg focus</td><td>${focusAvg}/5</td></tr>
     <tr><td>rest days in window</td><td>${logs.filter(l => l.rest_day).length}</td></tr>
-  </table></div>`;
+  </table></div>
+  ${(() => {
+    const cal = S.tasks.filter(t => t.status === 'done' && t.actual_minutes && t.est_minutes);
+    if (cal.length < 3) return `<div class="card"><h2>Estimate accuracy</h2><div class="dim">Log actual minutes on done tasks (REFLECT tab) — after 3+ this shows how honest your estimates are, per energy.</div></div>`;
+    const byE = {};
+    cal.forEach(t => { const e = t.energy || 'FOCUS'; (byE[e] = byE[e] || []).push(t.actual_minutes / t.est_minutes); });
+    const med = a => { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+    const rows = Object.entries(byE).map(([e, rs]) => {
+      const m = med(rs);
+      const verdict = m > 1.25 ? 'underestimating' : (m < 0.8 ? 'overestimating' : 'calibrated');
+      return `<tr><td>${e}</td><td>${rs.length}</td><td>${Math.round(m * 100)}%</td><td style="color:${m > 1.25 ? 'var(--accent)' : 'var(--dim)'}">${verdict}</td></tr>`;
+    }).join('');
+    return `<div class="card"><h2>Estimate accuracy — actual vs estimated</h2>
+      <table><tr><th>energy</th><th>n</th><th>median actual/est</th><th></th></tr>${rows}</table>
+      <div class="dim mono" style="font-size:10px;margin-top:4px">over 125% = pad your estimates for that energy</div></div>`;
+  })()}`;
 }
 
 /* --- CAL (month view of task due-dates) --- */
