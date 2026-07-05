@@ -646,10 +646,10 @@ async function deleteTask(id){
 }
 
 /* ================= scoring (Option A) ================= */
-function weight(item, maxMin){
+function weight(item, _maxMin){
   const p = PRIO[item.priority] || 2;
   const e = (ENERGY[item.energy] || {score:1}).score;
-  const tm = Math.min((item.est_minutes || 15) / (maxMin || 1), 1);
+  const tm = Math.min((item.est_minutes || 15) / 90, 1);   // fixed-90 normalizer: task value is stable across days
   return (p/3 + e/3 + tm) / 3;
 }
 function planItems(){
@@ -726,11 +726,22 @@ async function saveReflection(){
   const readBrief = refVal('r-brief') === 'y';
   const r = computeScore(readBrief);
   const prevStreak = S.prevLog?.streak_count || 0;
-  let streak_hit = null, streak_count = prevStreak;
-  if (!rest && r.score !== null) { streak_hit = r.score >= 70; streak_count = streak_hit ? prevStreak + 1 : 0; }
+  const prevShields = S.prevLog?.shields ?? 0;
+  let streak_hit = null, streak_count = prevStreak, shields = prevShields, shieldUsed = false;
+  if (!rest && r.score !== null) {
+    streak_hit = r.score >= 70;
+    if (streak_hit) {
+      streak_count = prevStreak + 1;
+      if (streak_count % 7 === 0) shields = Math.min(2, prevShields + 1);   // bank a shield every 7 straight hits (max 2)
+    } else if (prevShields > 0) {
+      shields = prevShields - 1; streak_count = prevStreak; shieldUsed = true;   // shield absorbs the miss — streak survives
+    } else {
+      streak_count = 0;
+    }
+  }
   const row = {
     date: todayISO(),
-    score: rest ? null : r.score, streak_hit, streak_count, rest_day: rest,
+    score: rest ? null : r.score, streak_hit, streak_count, shields, rest_day: rest,
     tasks_planned: r.planCount, tasks_done: r.doneCount, tasks_partial: r.partialCount,
     wake_time: refVal('r-wake') || null,
     focus: refVal('r-focus') ? +refVal('r-focus') : null,
@@ -741,7 +752,7 @@ async function saveReflection(){
   };
   const {error} = await db.from('daily_log').upsert(row);
   if (error) { toast('Save failed: ' + error.message); return; }
-  toast(rest ? 'Rest day logged — streak preserved' : `Saved. Score ${r.score} · streak ${streak_count}`);
+  toast(rest ? 'Rest day logged — streak preserved' : shieldUsed ? `Below 70 — 🛡 shield used, streak ${streak_count} survives` : `Saved. Score ${r.score} · streak ${streak_count}`);
   loadAll();
 }
 
@@ -755,7 +766,8 @@ function render(){
     `<button class="${S.view === v ? 'on' : ''}" onclick="setView('${v}')">${l}</button>`).join('');
   const streak = S.prevLog || S.todayLog;
   const sc = S.todayLog?.streak_count ?? S.prevLog?.streak_count ?? 0;
-  document.getElementById('streakChip').innerHTML = `streak <b>${sc}</b>d`;
+  const sh = S.todayLog?.shields ?? S.prevLog?.shields ?? 0;
+  document.getElementById('streakChip').innerHTML = `streak <b>${sc}</b>d${sh ? ' ' + '🛡'.repeat(sh) : ''}`;
   const main = document.getElementById('main');
   if (S.view === 'today')   main.innerHTML = rToday();
   if (S.view === 'tasks')   main.innerHTML = rTasks();
@@ -1052,18 +1064,49 @@ function rBrief(){
     <button class="btn" onclick="regenBrief(this)">⟳ new brief</button></div>`;
   if (!S.brief) return ctl + `<div class="empty">No brief for today yet.<br><br>The 7 AM routine writes it to the briefs table — or hit ⟳ new brief.</div>`;
   const md = S.brief.content_md || '';
+  loadGcal(todayISO());   // populate live events for the day strip (guarded, no-ops if cached)
   const parts = md.split(/\n(?=## )/);
   const head = parts.length && !parts[0].startsWith('## ') ? parts.shift() : '';
   const openByDefault = /^(START HERE|REALITY CHECK)/i;
   const hot = /^(START HERE|REALITY CHECK|TODAY'S DEADLINES)/i;
+  const calSec = `<details class="bsec"><summary>TODAY'S CALENDAR</summary><div style="padding:6px 8px">${briefDayCal()}</div></details>`;
+  const secs = parts.map(sec => {
+    const m = sec.match(/^## (.+)/);
+    const title = m ? m[1].trim() : 'SECTION';
+    const body = sec.replace(/^## .+\n?/, '');
+    const html = `<details class="bsec ${hot.test(title) ? 'hot' : ''}" ${openByDefault.test(title) ? 'open' : ''}>
+      <summary>${esc(title)}</summary><div class="md">${marked.parse(body)}</div></details>`;
+    return {title, html};
+  });
+  const planIx = secs.findIndex(s => /TODAY.?S PLAN/i.test(s.title));
+  let out = secs.map(s => s.html);
+  if (planIx >= 0) out.splice(planIx + 1, 0, calSec); else out.unshift(calSec);
   return ctl + (head ? `<div class="card md" style="padding:10px 12px">${marked.parse(head)}</div>` : '') +
-    (parts.length ? parts.map(sec => {
-      const m = sec.match(/^## (.+)/);
-      const title = m ? m[1].trim() : 'SECTION';
-      const body = sec.replace(/^## .+\n?/, '');
-      return `<details class="bsec ${hot.test(title) ? 'hot' : ''}" ${openByDefault.test(title) ? 'open' : ''}>
-        <summary>${esc(title)}</summary><div class="md">${marked.parse(body)}</div></details>`;
-    }).join('') : `<div class="card md">${marked.parse(md)}</div>`);
+    (secs.length ? out.join('') : calSec + `<div class="card md">${marked.parse(md)}</div>`);
+}
+/* compact one-day timeline for the BRIEF tab — same tap/drag handlers as CAL */
+function briefDayCal(){
+  const iso = todayISO();
+  allEvents().forEach((e, i) => e._i = i);
+  const evs = allEvents().filter(e => e.date === iso).sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
+  const allday = evs.filter(e => !e.start_time), timed = evs.filter(e => e.start_time);
+  if (!evs.length) return `<div class="dim" style="font-size:12px;padding:4px 0">No events today${S.gcalLive ? '' : ' (connect Google on CAL for live view)'} — open day, guard the DEEP hours.</div>`;
+  const H0 = 6, H1 = 24, PPH = 26;
+  const blocks = timed.map(e => {
+    const [sh, sm] = e.start_time.split(':').map(Number);
+    let dur = 60;
+    if (e.end_time) { const [eh, em] = e.end_time.split(':').map(Number); dur = Math.max(30, (eh * 60 + em) - (sh * 60 + sm)); }
+    const top = Math.max(0, ((sh - H0) * 60 + sm) * (PPH / 60));
+    const h = Math.max(14, dur * (PPH / 60));
+    return `<div class="evblk" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px;cursor:pointer;font-size:10px" onclick="event.stopPropagation();openEv(${e._i})"><b>${esc(e.start_time)}</b> ${esc(e.title)}</div>`;
+  }).join('');
+  const rail = [...Array(H1 - H0)].map((_, i) => `<div class="hrow" style="top:${i * PPH}px"><span>${String(H0 + i).padStart(2, '0')}</span></div>`).join('');
+  const nowLine = (() => {
+    const n = new Date(); const mins = (n.getHours() - H0) * 60 + n.getMinutes();
+    return (mins > 0 && mins < (H1 - H0) * 60) ? `<div class="nowline" style="top:${(mins * PPH / 60).toFixed(0)}px"></div>` : '';
+  })();
+  return allday.map(e => `<div class="evrow" style="cursor:pointer" onclick="openEv(${e._i})"><span class="mono">all-day</span><span>${esc(e.title)}</span></div>`).join('') +
+    `<div class="daygrid" style="height:${(H1 - H0) * PPH}px;position:relative" onclick="dayGridTap(event, '${iso}', ${PPH})" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${rail}${blocks}${nowLine}</div>`;
 }
 
 /* --- REFLECT --- */
@@ -1376,10 +1419,10 @@ function weekGridTap(ev, iso){
   render();
 }
 /* GCal-style: tap an empty slot on the day grid = new event at that hour */
-function dayGridTap(ev, iso){
+function dayGridTap(ev, iso, pph){
   if (!gcalToken()) { toast('Connect Google on the CAL tab first'); return; }
   const r = ev.currentTarget.getBoundingClientRect();
-  const hr = Math.min(23, Math.max(0, 6 + Math.floor((ev.clientY - r.top) / 48)));
+  const hr = Math.min(23, Math.max(0, 6 + Math.floor((ev.clientY - r.top) / (pph || 48))));
   const cal = (S.gcalCals || []).find(c => c.primary) || (S.gcalCals || [])[0] || {id: 'primary'};
   S.evSheet = {gid: null, calId: cal.id, writable: true, title: '', date: iso, start: String(hr).padStart(2, '0') + ':00', end: ''};
   render();
@@ -1584,7 +1627,7 @@ function calDayHTML(iso, byDay, evByDay){
   return `${allday.map(e => `<div class="evrow" style="cursor:pointer" onclick="openEv(${e._i})"><span class="mono">all-day</span><span>${esc(e.title)}</span></div>`).join('')}
   ${due.length || doneDay.length ? `<div class="pname">due — ${due.length} open${doneDay.length ? ' · ' + doneDay.length + ' done' : ''}</div>` : ''}
   ${due.map(taskRowHTML).join('')}
-  <div class="daygrid" style="height:${(H1 - H0) * PPH}px;position:relative" onclick="dayGridTap(event, '${iso}')" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${rail}${blocks}${nowLine}</div>
+  <div class="daygrid" style="height:${(H1 - H0) * PPH}px;position:relative" onclick="dayGridTap(event, '${iso}', ${PPH})" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${rail}${blocks}${nowLine}</div>
   <button class="btn" style="width:100%;margin-top:8px" onclick="addForDay()">+ add task due ${iso}</button>
   <div style="height:10px"></div>`;
 }
