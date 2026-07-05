@@ -210,13 +210,26 @@ details.bsec>.ginner{padding:0 10px 10px}
 .evblk b{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--dim);display:block}
 .nowline{position:absolute;left:0;right:0;height:2px;background:var(--focus);z-index:2}
 
-/* week agenda */
-.wkday{font-family:var(--mono);font-size:12px;font-weight:700;margin-bottom:4px;cursor:pointer;letter-spacing:.5px}
-.wkday.now{color:var(--accent)}
-.wkline{font-size:13px;padding:3px 0;display:flex;gap:8px;align-items:center}
-.wkline .mono{color:var(--dim);font-size:11px;min-width:46px}
-.wkline i{width:6px;height:6px;border-radius:50%;flex:0 0 auto;display:inline-block}
-.wkline.dim{color:var(--dim)}
+/* week grid (google-style) */
+.wk-head{display:flex;margin-bottom:2px}
+.wk-gutter{flex:0 0 30px}
+.wk-col-h{flex:1;text-align:center;background:none;padding:4px 0;border-radius:8px;position:relative;min-width:0}
+.wk-col-h .wd{display:block;font-family:var(--mono);font-size:9px;color:var(--dim)}
+.wk-col-h .dn{display:block;font-size:15px;margin-top:2px}
+.wk-col-h.now .dn{background:var(--accent);color:#fff;border-radius:50%;width:26px;height:26px;line-height:26px;margin:2px auto 0}
+.wk-col-h .td{position:absolute;top:2px;right:3px;font-style:normal;font-size:8px;color:var(--focus);font-family:var(--mono)}
+.wk-allday{display:flex;margin-bottom:2px}
+.wk-ad-cell{flex:1;min-width:0;padding:0 1px}
+.wk-banner{background:rgba(129,140,248,.25);border-left:2px solid var(--deep);border-radius:4px;font-size:8px;
+  padding:1px 3px;margin-bottom:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wk-banner.more{background:none;color:var(--dim)}
+.wk-grid{position:relative;display:flex;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;padding-left:30px}
+.wk-rail{position:absolute;inset:0;pointer-events:none}
+.wk-rail .hrow span{left:4px;font-size:8px}
+.wk-col{flex:1;position:relative;border-left:1px solid var(--line);min-width:0;cursor:pointer}
+.wk-col.now{background:rgba(225,37,27,.05)}
+.wk-ev{position:absolute;left:1px;right:1px;background:rgba(225,37,27,.2);border-left:2px solid var(--accent);
+  border-radius:3px;font-size:8px;line-height:1.15;padding:1px 2px;overflow:hidden;z-index:1}
 
 /* auth */
 #auth{max-width:340px;margin:80px auto;display:none}
@@ -714,6 +727,23 @@ function render(){
     const flick = dt < 250 && Math.abs(dx) > 40;             // quick flick
     const drag  = Math.abs(dx) > 70;                          // deliberate drag
     if ((!flick && !drag) || Math.abs(dx) < Math.abs(dy) * 1.2) { snapBack(); return; }
+    // inside the calendar, horizontal swipes page through time instead of tabs
+    if (S.view === 'cal') {
+      const dir = dx < 0 ? 1 : -1;
+      const w = Math.min(window.innerWidth, 640);
+      mainEl.style.transition = 'transform .13s ease-in, opacity .13s ease-in';
+      mainEl.style.transform = `translateX(${-dir * w}px)`; mainEl.style.opacity = '0';
+      setTimeout(() => {
+        navCal(dir);
+        mainEl.style.transition = 'none';
+        mainEl.style.transform = `translateX(${dir * w * 0.55}px)`; mainEl.style.opacity = '0.3';
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          mainEl.style.transition = 'transform .2s cubic-bezier(.2,.8,.3,1), opacity .2s';
+          mainEl.style.transform = ''; mainEl.style.opacity = '';
+        }));
+      }, 130);
+      return;
+    }
     const i = VIEWS.findIndex(v => v[0] === S.view);
     const ni = i + (dx < 0 ? 1 : -1);
     if (ni < 0 || ni >= VIEWS.length) { snapBack(); return; }
@@ -1185,20 +1215,37 @@ function calMonthHTML(byDay, evByDay){
 function calWeekHTML(byDay, evByDay){
   const anchor = fromISO(S.calSel);
   const mon = new Date(anchor); mon.setDate(anchor.getDate() - ((anchor.getDay() + 6) % 7));
-  let out = '';
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(mon); d.setDate(mon.getDate() + i);
-    const iso = d.toLocaleDateString('sv-SE');
-    const evs = (evByDay[iso] || []).slice().sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
-    const ts = byDay[iso] || [];
-    out += `<div class="card" style="padding:8px 12px">
-      <div class="wkday ${iso === todayISO() ? 'now' : ''}" onclick="selDay('${iso}')">${d.toLocaleDateString('en-US', {weekday: 'short'}).toUpperCase()} ${d.getDate()}${iso === todayISO() ? ' · TODAY' : ''}</div>
-      ${evs.map(e => `<div class="wkline"><span class="mono">${e.start_time ? esc(e.start_time) : 'all-day'}</span><span>${esc(e.title)}</span></div>`).join('')}
-      ${ts.map(t => `<div class="wkline"><i style="background:${(ENERGY[t.energy] || {}).hex || '#666'}"></i><span>${esc(t.title)}</span></div>`).join('')}
-      ${!evs.length && !ts.length ? '<div class="wkline dim">—</div>' : ''}
-    </div>`;
-  }
-  return out;
+  const H0 = 6, H1 = 24, PPH = 44;
+  const days = [...Array(7)].map((_, i) => { const d = new Date(mon); d.setDate(mon.getDate() + i); return d; });
+  const isos = days.map(d => d.toLocaleDateString('sv-SE'));
+  const head = `<div class="wk-head"><span class="wk-gutter"></span>${days.map((d, i) => {
+    const iso = isos[i]; const nT = (byDay[iso] || []).length;
+    return `<button class="wk-col-h ${iso === todayISO() ? 'now' : ''}" onclick="selDay('${iso}')">
+      <span class="wd">${d.toLocaleDateString('en-US', {weekday: 'narrow'})}</span>
+      <span class="dn">${d.getDate()}</span>${nT ? `<i class="td">${nT}</i>` : ''}</button>`;
+  }).join('')}</div>`;
+  const allday = isos.map(iso => (evByDay[iso] || []).filter(e => !e.start_time));
+  const adRow = allday.some(a => a.length) ? `<div class="wk-allday"><span class="wk-gutter"></span>${allday.map(a =>
+    `<div class="wk-ad-cell">${a.slice(0, 2).map(e => `<div class="wk-banner">${esc(e.title)}</div>`).join('')}${a.length > 2 ? `<div class="wk-banner more">+${a.length - 2}</div>` : ''}</div>`).join('')}</div>` : '';
+  const rail = [...Array(H1 - H0)].map((_, i) => `<div class="hrow" style="top:${i * PPH}px"><span>${String(H0 + i).padStart(2, '0')}</span></div>`).join('');
+  const cols = isos.map(iso => {
+    const timed = (evByDay[iso] || []).filter(e => e.start_time);
+    const blocks = timed.map(e => {
+      const [sh, sm] = e.start_time.split(':').map(Number);
+      let dur = 60;
+      if (e.end_time) { const [eh, em] = e.end_time.split(':').map(Number); dur = Math.max(25, (eh * 60 + em) - (sh * 60 + sm)); }
+      const top = Math.max(0, ((sh - H0) * 60 + sm) * (PPH / 60));
+      const h = Math.max(18, dur * (PPH / 60));
+      return `<div class="wk-ev" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px">${esc(e.title)}</div>`;
+    }).join('');
+    const nowline = iso === todayISO() ? (() => {
+      const n = new Date(); const mins = (n.getHours() - H0) * 60 + n.getMinutes();
+      return (mins > 0 && mins < (H1 - H0) * 60) ? `<div class="nowline" style="top:${(mins * PPH / 60).toFixed(0)}px"></div>` : '';
+    })() : '';
+    return `<div class="wk-col ${iso === todayISO() ? 'now' : ''}" onclick="selDay('${iso}')">${blocks}${nowline}</div>`;
+  }).join('');
+  return head + adRow + `<div class="wk-grid" style="height:${(H1 - H0) * PPH}px"><div class="wk-rail">${rail}</div>${cols}</div>
+  <div class="dim mono" style="font-size:10px;margin-top:6px">tap a column for day view · number = tasks due</div>`;
 }
 function calDayHTML(iso, byDay, evByDay){
   const evs = (evByDay[iso] || []).slice().sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
