@@ -361,7 +361,7 @@ document.getElementById('a-email').value = OWNER;
 /* ================= data ================= */
 async function loadAll(){
   const today = todayISO();
-  const [t, g, gl, b, dl, cd, ev, fz, fs, cr] = await Promise.all([
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
@@ -372,12 +372,17 @@ async function loadAll(){
     db.from('freezes').select('*').gte('end_date', today).order('start_date'),
     db.from('focus_sessions').select('*').is('ended_at', null).order('started_at', {ascending: false}).limit(1),
     db.rpc('lifeos_credits'),
+    db.from('plan_blocks').select('*').eq('date', today).order('start_min'),
+    db.from('lifeos_settings').select('key,value'),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   S.cards = cd.data || []; S.events = ev.data || []; S.freezes = fz.data || [];
   S.brief = b.data || null;
   S.focusOpen = (fs.data || [])[0] || null;
   S.credits = cr.data || null;
+  S.planBlocks = pb.data || [];
+  S.settings = Object.fromEntries((st.data || []).map(r => [r.key, r.value]));
+  try { S.wakeTargets = JSON.parse(S.settings.wake_targets || '{}'); } catch(e){ S.wakeTargets = {}; }
   const logs = dl.data || [];
   S.todayLog = logs.find(l => l.date === today) || null;
   S.prevLog  = logs.find(l => l.date < today) || null;
@@ -543,7 +548,7 @@ async function saveSheet(){
   S.lastWrite = Date.now();
   const {data, error} = await db.from('tasks').insert(row).select().single();
   if (error) { toast('Add failed: ' + error.message); return; }
-  S.tasks.push(data); S.sheet = null; render(); toast('Added');
+  S.sheet = null; toast('Added'); loadAll();  // refetch so any auto-chunk split shows immediately
 }
 function distinctProjects(){ return [...new Set(S.tasks.map(t => t.project).filter(Boolean))].sort(); }
 window._projList = [];
@@ -1008,7 +1013,7 @@ function rToday(){
     (a.status === 'done') - (b.status === 'done') ||
     (a.due || '9999').localeCompare(b.due || '9999') ||
     (PRIO[b.priority] || 2) - (PRIO[a.priority] || 2));
-  return shCard + meter + capacityWarnHTML() + creditsCardHTML() + evCard +
+  return shCard + meter + capacityWarnHTML() + planBlocksHTML() + creditsCardHTML() + evCard +
     (bar ? `<div class="card"><h2>Today's energy</h2>${bar}</div>` : '') +
     chipsHTML() +
     (sorted.length ? sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — add a task below or check TASKS.</div>`);
@@ -1057,12 +1062,16 @@ function creditsCardHTML(){
   const scroll = c.scroll_open
     ? `<div style="color:var(--accent);font-family:var(--mono);font-size:11px;margin-top:6px">📱 ${esc(c.scroll_open)} meter running — 1 credit/min</div>`
     : `<div class="dim" style="font-family:var(--mono);font-size:11px;margin-top:6px">📱 scrolled ${c.metered || 0}m today · balance = minutes left, metered as you scroll</div>`;
+  const wt = c.wake_tier;
+  const wakeLine = (wt && wt !== 'none')
+    ? `<div class="dim" style="font-size:11px;margin-top:6px">⏰ woke ${c.wake ? esc(String(c.wake).slice(0,5)) : '—'} · ${wt==='full' ? 'on time — full credits' : wt==='half' ? 'a bit late — free credits halved' : 'late — 0 free credits, cap 60'}</div>`
+    : '';
   return `<div class="card"><h2>Screen-time credits</h2>
     <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
       <span class="mono" style="font-size:26px;font-weight:700">${c.balance}</span>
       <span class="dim" style="font-size:11px">min left of ${c.gross} today · ${c.free} free + ${c.timer} clocked + ${c.bonus} task bonus</span>
     </div>
-    ${timer}${scroll}
+    ${timer}${scroll}${wakeLine}${wakeTargetsHTML()}
   </div>`;
 }
 async function clockIn(energy){
@@ -1070,6 +1079,8 @@ async function clockIn(energy){
   const {data, error} = await db.from('focus_sessions').insert({energy}).select().single();
   if (error) { toast('Clock-in failed: ' + error.message); return; }
   S.focusOpen = data; render(); toast('Clocked in — ' + energy + ', 1 credit per ' + CREDIT_RATE[energy] + ' min');
+  // Fire an iOS Shortcut so a native countdown timer shows on the lock screen / Dynamic Island.
+  try { if (/iPhone|iPad/.test(navigator.userAgent)) location.href = `shortcuts://run-shortcut?name=LifeOS%20Focus&input=text&text=${energy}`; } catch(e){}
 }
 async function clockOut(){
   if (!S.focusOpen) return;
@@ -1091,6 +1102,48 @@ async function spendCredits(m){
 }
 /* tick the running timer display */
 setInterval(() => { if (S.focusOpen && S.view === 'today' && !S.editing && !S.sheet && !S.evSheet) render(); }, 30000);
+
+/* ---- Motion planner: server-packed plan blocks ---- */
+function planBlocksHTML(){
+  const bs = (S.planBlocks || []);
+  if (!bs.length) return '';
+  const fmt = m => String(Math.floor(m/60)).padStart(2,'0') + ':' + String(((m%60)+60)%60).padStart(2,'0');
+  const rows = bs.map(b => {
+    const col = (ENERGY[b.energy] || {}).hex || 'var(--accent)';
+    const isCall = b.kind === 'call';
+    return `<div class="evrow" style="margin-bottom:4px;${isCall ? 'opacity:.7' : ''}">
+      <span class="mono" style="color:${col}">${fmt(b.start_min)}–${fmt(b.end_min)}</span>
+      <span>${isCall ? '📞 ' : ''}${esc(b.title || '')}</span></div>`;
+  }).join('');
+  return `<div class="card"><h2>Today's plan <span class="dim" style="font-size:11px;font-weight:400">· auto, refreshes every 20 min</span></h2>${rows}</div>`;
+}
+/* ---- Wake-time targets editor (per weekday, controls credit stakes) ---- */
+const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+function wakeTargetsHTML(){
+  const wt = S.wakeTargets || {};
+  const rows = DOW.map((d, i) => {
+    const t = wt[i] || {full:'10:00', hard:'11:00'};
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;font-size:12px">
+      <span class="dim" style="width:34px">${d}</span>
+      <span class="dim">full by</span>
+      <input type="time" value="${t.full || '10:00'}" onchange="saveWakeTarget(${i},'full',this.value)" style="font-size:12px">
+      <span class="dim">zero after</span>
+      <input type="time" value="${t.hard || '11:00'}" onchange="saveWakeTarget(${i},'hard',this.value)" style="font-size:12px">
+    </div>`;
+  }).join('');
+  return `<details class="bsec" style="margin-top:8px"><summary style="padding:8px 10px;cursor:pointer;font-size:12px">⏰ Wake targets (per day) — credit stakes</summary>
+    <div style="padding:8px 10px">
+      <div class="dim" style="font-size:11px;margin-bottom:6px">Wake by <b>full</b> → all free credits. Between full and zero → half. After <b>zero</b> → no free credits + daily cap cut to 60.</div>
+      ${rows}
+    </div></details>`;
+}
+async function saveWakeTarget(dow, field, value){
+  S.wakeTargets = S.wakeTargets || {};
+  S.wakeTargets[dow] = Object.assign({full:'10:00', hard:'11:00'}, S.wakeTargets[dow], {[field]: value});
+  const {error} = await db.from('lifeos_settings').upsert({key:'wake_targets', value: JSON.stringify(S.wakeTargets)});
+  if (error) { toast('Save failed: ' + error.message); return; }
+  toast(`${DOW[dow]} ${field} → ${value}`); loadAll();
+}
 
 /* live "what do I need tonight" meter */
 function rMeter(){
