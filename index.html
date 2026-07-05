@@ -766,7 +766,7 @@ function render(){
   if (S.view === 'cards')   main.innerHTML = rCards();
   if (S.view === 'chat')    { main.innerHTML = rChat(); const cl = document.getElementById('chatlog'); if (cl) cl.scrollTop = cl.scrollHeight; }
   document.getElementById('addbar').classList.toggle('hidden', !(S.view === 'today' || S.view === 'tasks') || !!S.sheet);
-  document.getElementById('sheetroot').innerHTML = sheetHTML();
+  document.getElementById('sheetroot').innerHTML = S.evSheet ? evSheetHTML() : sheetHTML();
   document.querySelector('nav button.on')?.scrollIntoView({block: 'nearest', inline: 'center'});
 }
 
@@ -967,9 +967,10 @@ function rToday(){
   const sh = S.brief?.start_here_task;
   const shCard = sh ? `<div class="card starthere"><h2>Start here</h2><div class="task-name">${esc(sh)}</div></div>` : '';
   const meter = rMeter();
+  allEvents().forEach((e, i) => e._i = i);
   const todaysEv = allEvents().filter(e => e.date === today).sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
   const evCard = todaysEv.length ? `<div class="card"><h2>Calendar</h2>${todaysEv.map(e =>
-    `<div class="evrow" style="margin-bottom:4px"><span class="mono">${e.start_time ? esc(e.start_time) + (e.end_time ? '–' + esc(e.end_time) : '') : 'all-day'}</span><span>${esc(e.title)}</span></div>`).join('')}</div>` : '';
+    `<div class="evrow" style="margin-bottom:4px${e.gid ? ';cursor:pointer' : ''}" ${e.gid ? `onclick="openEv(${e._i})"` : ''}><span class="mono">${e.start_time ? esc(e.start_time) + (e.end_time ? '–' + esc(e.end_time) : '') : 'all-day'}</span><span>${esc(e.title)}</span></div>`).join('')}</div>` : '';
   const list = applyFilt(todays);
   const sorted = [...list].sort((a, b) =>
     (a.status === 'done') - (b.status === 'done') ||
@@ -1251,7 +1252,7 @@ function gcalConnect(silent){
   if (!GCAL_CLIENT_ID || !window.google?.accounts?.oauth2) { if (!silent) toast('Google auth not loaded yet — try again'); return; }
   gTokClient = gTokClient || google.accounts.oauth2.initTokenClient({
     client_id: GCAL_CLIENT_ID,
-    scope: 'https://www.googleapis.com/auth/calendar.readonly',
+    scope: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events',
     callback: r => {
       if (r.access_token) {
         localStorage.setItem('gtok', JSON.stringify({token: r.access_token, exp: Date.now() + (r.expires_in - 60) * 1000}));
@@ -1266,9 +1267,83 @@ function gcalConnect(silent){
 function gcalDisconnect(){
   if (!confirm('Disconnect Google Calendar? (Falls back to daily routine sync)')) return;
   localStorage.removeItem('gtok'); localStorage.removeItem('gconn');
-  S.gcalLive = false; S.gcalRange = null; S.gcalEvents = []; render();
+  S.gcalLive = false; S.gcalRange = null; S.gcalEvents = []; S.gcalCals = null; render();
 }
 function allEvents(){ return S.gcalLive ? S.gcalEvents : (S.events || []); }
+
+/* --- two-way event editing (Google Calendar) --- */
+function openEv(i){
+  if (!gcalToken()) { toast('Connect Google on the CAL tab first'); return; }
+  if (i == null) {
+    const cal = (S.gcalCals || []).find(c => c.primary) || (S.gcalCals || [])[0] || {id: 'primary'};
+    S.evSheet = {gid: null, calId: cal.id, writable: true, title: '', date: S.calSel || todayISO(), start: '', end: ''};
+  } else {
+    const e = allEvents()[i]; if (!e) return;
+    if (!e.gid) { toast('Cached event — tap connect Google for live editing'); return; }
+    S.evSheet = {gid: e.gid, calId: e.calId, writable: e.writable, cal: e.cal, title: e.title, date: e.date, start: e.start_time || '', end: e.end_time || ''};
+  }
+  render();
+}
+function evSheetHTML(){
+  const sh = S.evSheet; if (!sh) return '';
+  const ro = sh.gid && !sh.writable;
+  return `<div class="overlay" onclick="if(event.target===this){S.evSheet=null;render()}">
+  <div class="sheet">
+    <h2>${sh.gid ? (ro ? 'Event (read-only calendar)' : 'Edit event') : 'New event'}${sh.cal ? ' · ' + esc(sh.cal) : ''}</h2>
+    <input id="ev-title" value="${esc(sh.title)}" placeholder="Event name" ${ro ? 'disabled' : ''}>
+    <label>Date</label><input id="ev-date" type="date" value="${sh.date}" ${ro ? 'disabled' : ''}>
+    <label>Start – end (blank = all-day)</label>
+    <div style="display:flex;gap:6px">
+      <input id="ev-start" type="time" value="${sh.start}" style="flex:1" ${ro ? 'disabled' : ''}>
+      <input id="ev-end" type="time" value="${sh.end}" style="flex:1" ${ro ? 'disabled' : ''}>
+    </div>
+    ${!sh.gid && (S.gcalCals || []).filter(c => c.writable).length > 1 ? `<label>Calendar</label>
+      <div class="chiprow wrap">${S.gcalCals.filter(c => c.writable).map(c =>
+        `<button class="schip ${sh.calId === c.id ? 'on' : ''}" onclick="S.evSheet.calId='${esc(c.id)}';render()">${esc(c.name)}</button>`).join('')}</div>` : ''}
+    <div style="display:flex;gap:8px;margin-top:14px">
+      ${sh.gid && !ro ? `<button class="btn danger" onclick="delEv()">Delete</button>` : ''}
+      <button class="btn" style="flex:1" onclick="S.evSheet=null;render()">${ro ? 'Close' : 'Cancel'}</button>
+      ${!ro ? `<button class="btn primary" style="flex:2" onclick="saveEv()">${sh.gid ? 'Save' : 'Add event'}</button>` : ''}
+    </div>
+  </div></div>`;
+}
+function gcalAuthLost(){
+  localStorage.removeItem('gtok'); S.gcalCals = null; S.evSheet = null;
+  toast('Google needs fresh consent for editing — tap connect Google'); render();
+}
+async function saveEv(){
+  const sh = S.evSheet, tok = gcalToken();
+  if (!tok) { gcalAuthLost(); return; }
+  const g = id => document.getElementById(id)?.value || '';
+  const title = g('ev-title').trim() || '(untitled)';
+  const date = g('ev-date') || todayISO(), st = g('ev-start'), en = g('ev-end');
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const body = {summary: title};
+  if (st) {
+    let endT = en;
+    if (!endT || endT <= st) { const [h, m] = st.split(':').map(Number); endT = String((h + 1) % 24).padStart(2, '0') + ':' + String(m).padStart(2, '0'); }
+    body.start = {dateTime: date + 'T' + st + ':00', timeZone: tz};
+    body.end   = {dateTime: date + 'T' + endT + ':00', timeZone: tz};
+  } else {
+    const nd = fromISO(date); nd.setDate(nd.getDate() + 1);
+    body.start = {date}; body.end = {date: nd.toLocaleDateString('sv-SE')};
+  }
+  const url = 'https://www.googleapis.com/calendar/v3/calendars/' + encodeURIComponent(sh.calId) + '/events' + (sh.gid ? '/' + encodeURIComponent(sh.gid) : '');
+  const r = await fetch(url, {method: sh.gid ? 'PATCH' : 'POST',
+    headers: {Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  if (r.status === 401 || r.status === 403) { gcalAuthLost(); return; }
+  if (!r.ok) { toast('Save failed: HTTP ' + r.status); return; }
+  S.evSheet = null; S.gcalRange = null; render(); toast(sh.gid ? 'Event updated' : 'Event added');
+}
+async function delEv(){
+  const sh = S.evSheet, tok = gcalToken();
+  if (!confirm('Delete this event from Google Calendar?')) return;
+  const r = await fetch('https://www.googleapis.com/calendar/v3/calendars/' + encodeURIComponent(sh.calId) + '/events/' + encodeURIComponent(sh.gid),
+    {method: 'DELETE', headers: {Authorization: 'Bearer ' + tok}});
+  if (r.status === 401 || r.status === 403) { gcalAuthLost(); return; }
+  if (!r.ok && r.status !== 410) { toast('Delete failed: HTTP ' + r.status); return; }
+  S.evSheet = null; S.gcalRange = null; render(); toast('Event deleted');
+}
 async function loadGcal(anchorISO){
   const tok = gcalToken();
   if (!tok) { S.gcalLive = false; return; }
@@ -1279,25 +1354,38 @@ async function loadGcal(anchorISO){
   if (S.gcalRange === key || S.gcalLoading) return;
   S.gcalLoading = true;
   try {
-    const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&maxResults=250&timeMin=${start.toISOString()}&timeMax=${end.toISOString()}`,
-      {headers: {Authorization: 'Bearer ' + tok}});
-    if (r.status === 401) { localStorage.removeItem('gtok'); S.gcalLive = false; S.gcalLoading = false; render(); return; }
-    const d = await r.json();
+    // all calendars, not just primary (cached until disconnect/401)
+    if (!S.gcalCals) {
+      const cl = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=50', {headers: {Authorization: 'Bearer ' + tok}});
+      if (cl.status === 401) { localStorage.removeItem('gtok'); S.gcalLive = false; S.gcalLoading = false; render(); return; }
+      const cld = cl.ok ? await cl.json() : {};
+      S.gcalCals = (cld.items || []).filter(c => c.selected !== false)
+        .map(c => ({id: c.id, name: c.summaryOverride || c.summary || c.id, primary: !!c.primary, writable: ['owner','writer'].includes(c.accessRole)}));
+      if (!S.gcalCals.length) S.gcalCals = [{id: 'primary', name: 'primary', primary: true, writable: true}];
+    }
+    const ds = await Promise.all(S.gcalCals.map(c =>
+      fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(c.id)}/events?singleEvents=true&orderBy=startTime&maxResults=250&timeMin=${start.toISOString()}&timeMax=${end.toISOString()}`,
+        {headers: {Authorization: 'Bearer ' + tok}}).then(r => r.ok ? r.json() : {items: []}).catch(() => ({items: []}))));
     const pad = n => String(n).padStart(2, '0');
     const out = [];
-    (d.items || []).forEach(ev => {
-      if (ev.status === 'cancelled') return;
-      const title = ev.summary || '(untitled)';
-      if (ev.start?.dateTime) {
-        const sd = new Date(ev.start.dateTime), ed = ev.end?.dateTime ? new Date(ev.end.dateTime) : null;
-        out.push({date: sd.toLocaleDateString('sv-SE'), start_time: pad(sd.getHours()) + ':' + pad(sd.getMinutes()),
-          end_time: ed ? pad(ed.getHours()) + ':' + pad(ed.getMinutes()) : null, title});
-      } else if (ev.start?.date) {
-        const d0 = fromISO(ev.start.date), d1 = fromISO(ev.end?.date || ev.start.date);
-        if (d0 >= d1) out.push({date: ev.start.date, start_time: null, end_time: null, title});
-        else { const c = new Date(d0); while (c < d1) { out.push({date: c.toLocaleDateString('sv-SE'), start_time: null, end_time: null, title}); c.setDate(c.getDate() + 1); } }
-      }
+    ds.forEach((d, ci) => {
+      const cal = S.gcalCals[ci];
+      (d.items || []).forEach(ev => {
+        if (ev.status === 'cancelled') return;
+        const title = ev.summary || '(untitled)';
+        const base = {title, gid: ev.id, calId: cal.id, cal: cal.name, writable: cal.writable};
+        if (ev.start?.dateTime) {
+          const sd = new Date(ev.start.dateTime), ed = ev.end?.dateTime ? new Date(ev.end.dateTime) : null;
+          out.push({...base, date: sd.toLocaleDateString('sv-SE'), start_time: pad(sd.getHours()) + ':' + pad(sd.getMinutes()),
+            end_time: ed ? pad(ed.getHours()) + ':' + pad(ed.getMinutes()) : null});
+        } else if (ev.start?.date) {
+          const d0 = fromISO(ev.start.date), d1 = fromISO(ev.end?.date || ev.start.date);
+          if (d0 >= d1) out.push({...base, date: ev.start.date, start_time: null, end_time: null});
+          else { const c = new Date(d0); while (c < d1) { out.push({...base, date: c.toLocaleDateString('sv-SE'), start_time: null, end_time: null}); c.setDate(c.getDate() + 1); } }
+        }
+      });
     });
+    out.sort((a, b) => a.date.localeCompare(b.date) || (a.start_time || '').localeCompare(b.start_time || ''));
     S.gcalEvents = out; S.gcalRange = key; S.gcalLive = true;
   } catch (_e) { /* keep table fallback */ }
   S.gcalLoading = false;
@@ -1307,7 +1395,7 @@ async function loadGcal(anchorISO){
 function calMaps(){
   const byDay = {}, evByDay = {};
   S.tasks.forEach(t => { if (t.due && t.bucket === 'active' && t.status !== 'done') (byDay[t.due] = byDay[t.due] || []).push(t); });
-  allEvents().forEach(e => { (evByDay[e.date] = evByDay[e.date] || []).push(e); });
+  allEvents().forEach((e, i) => { e._i = i; (evByDay[e.date] = evByDay[e.date] || []).push(e); });
   return {byDay, evByDay};
 }
 function rCal(){
@@ -1329,7 +1417,7 @@ function rCal(){
   <div class="chiprow" style="margin-bottom:10px">${['day','week','month'].map(v =>
     `<button class="schip ${S.calView === v ? 'on' : ''}" style="flex:1" onclick="setCalView('${v}')">${v.toUpperCase()}</button>`).join('')}
     ${GCAL_CLIENT_ID ? (gcalToken()
-      ? `<button class="schip" style="color:${S.gcalLive ? 'var(--done)' : 'var(--dim)'}" onclick="gcalDisconnect()">● ${S.gcalLive ? 'live' : '…'}</button>`
+      ? `<button class="schip" style="color:${S.gcalLive ? 'var(--done)' : 'var(--dim)'}" onclick="gcalDisconnect()">● ${S.gcalLive ? 'live' : '…'}</button><button class="schip" onclick="openEv(null)">+ event</button>`
       : `<button class="schip" onclick="gcalConnect(false)">connect Google</button>`) : ''}</div>`;
   loadGcal(`${S.calY}-${String(S.calM + 1).padStart(2, '0')}-15`);
   const body = S.calView === 'day' ? calDayHTML(S.calSel, byDay, evByDay)
@@ -1385,7 +1473,7 @@ function calWeekHTML(byDay, evByDay){
       if (e.end_time) { const [eh, em] = e.end_time.split(':').map(Number); dur = Math.max(25, (eh * 60 + em) - (sh * 60 + sm)); }
       const top = Math.max(0, ((sh - H0) * 60 + sm) * (PPH / 60));
       const h = Math.max(18, dur * (PPH / 60));
-      return `<div class="wk-ev" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px">${esc(e.title)}</div>`;
+      return `<div class="wk-ev" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px;cursor:pointer" onclick="event.stopPropagation();openEv(${e._i})">${esc(e.title)}</div>`;
     }).join('');
     const nowline = iso === todayISO() ? (() => {
       const n = new Date(); const mins = (n.getHours() - H0) * 60 + n.getMinutes();
@@ -1407,7 +1495,7 @@ function calDayHTML(iso, byDay, evByDay){
     if (e.end_time) { const [eh, em] = e.end_time.split(':').map(Number); dur = Math.max(20, (eh * 60 + em) - (sh * 60 + sm)); }
     const top = Math.max(0, ((sh - H0) * 60 + sm) * (PPH / 60));
     const h = Math.max(22, dur * (PPH / 60));
-    return `<div class="evblk" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px"><b>${esc(e.start_time)}${e.end_time ? '–' + esc(e.end_time) : ''}</b>${esc(e.title)}</div>`;
+    return `<div class="evblk" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px;cursor:pointer" onclick="openEv(${e._i})"><b>${esc(e.start_time)}${e.end_time ? '–' + esc(e.end_time) : ''}</b>${esc(e.title)}${e.cal && !e.writable ? ' 🔒' : ''}</div>`;
   }).join('');
   const rail = [...Array(H1 - H0)].map((_, i) => `<div class="hrow" style="top:${i * PPH}px"><span>${String(H0 + i).padStart(2, '0')}:00</span></div>`).join('');
   const nowLine = iso === todayISO() ? (() => {
@@ -1416,7 +1504,7 @@ function calDayHTML(iso, byDay, evByDay){
   })() : '';
   const due = byDay[iso] || [];
   const doneDay = S.tasks.filter(t => t.due === iso && t.status === 'done');
-  return `${allday.map(e => `<div class="evrow"><span class="mono">all-day</span><span>${esc(e.title)}</span></div>`).join('')}
+  return `${allday.map(e => `<div class="evrow" style="cursor:pointer" onclick="openEv(${e._i})"><span class="mono">all-day</span><span>${esc(e.title)}</span></div>`).join('')}
   ${due.length || doneDay.length ? `<div class="pname">due — ${due.length} open${doneDay.length ? ' · ' + doneDay.length + ' done' : ''}</div>` : ''}
   ${due.map(taskRowHTML).join('')}
   <div class="daygrid" style="height:${(H1 - H0) * PPH}px">${rail}${blocks}${nowLine}</div>
