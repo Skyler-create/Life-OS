@@ -20,11 +20,14 @@
   --mono:'Consolas','SF Mono',ui-monospace,Menlo,monospace;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-html{-webkit-text-size-adjust:100%;touch-action:pan-y;overscroll-behavior-x:none;overscroll-behavior-y:none;min-height:100%;overflow-x:clip}
-body{overflow-x:clip;overscroll-behavior-y:none}
+html{-webkit-text-size-adjust:100%;touch-action:pan-y;overscroll-behavior-x:none;height:100%;overflow:hidden}
+body{overflow:hidden;height:100%;overflow-x:clip}
+/* content is its own scroller: rubber-band bounce stays INSIDE it, nav never moves */
+#app{position:fixed;inset:0;display:flex;flex-direction:column;max-width:600px;margin:0 auto;width:100%}
+#app header{flex:0 0 auto;padding-left:14px;padding-right:14px}
+main#main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-y:contain;padding:0 12px calc(132px + env(safe-area-inset-bottom))}
 body{background:var(--bg);color:var(--text);font-family:-apple-system,'Segoe UI',Roboto,sans-serif;
-  max-width:600px;margin:0 auto;padding:0 12px calc(132px + env(safe-area-inset-bottom));font-size:15px;line-height:1.45;
-  touch-action:pan-y;overscroll-behavior-x:none}
+  font-size:15px;line-height:1.45;touch-action:pan-y;overscroll-behavior-x:none}
 nav,.chips,.chiprow{touch-action:pan-x}
 button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 input,select,textarea{font:inherit;color:var(--text);background:var(--card2);border:1px solid var(--line);
@@ -775,7 +778,7 @@ function render(){
   const main = document.getElementById('main');
   if (S.view === 'today')   main.innerHTML = rToday();
   if (S.view === 'tasks')   main.innerHTML = rTasks();
-  if (S.view === 'brief')   { main.innerHTML = rBrief(); if (S.bionic) main.querySelectorAll('.md').forEach(bionicify); }
+  if (S.view === 'brief')   { main.innerHTML = rBrief(); if (S.bionic) main.querySelectorAll('.md').forEach(bionicify); markBriefRead(); }
   if (S.view === 'reflect') { main.innerHTML = rReflect(); updateScorePreview(); }
   if (S.view === 'log')     main.innerHTML = rLog();
   if (S.view === 'trends')  main.innerHTML = rTrends();
@@ -998,11 +1001,34 @@ function rToday(){
     (a.status === 'done') - (b.status === 'done') ||
     (a.due || '9999').localeCompare(b.due || '9999') ||
     (PRIO[b.priority] || 2) - (PRIO[a.priority] || 2));
-  return shCard + meter + creditsCardHTML() + evCard +
+  return shCard + meter + capacityWarnHTML() + creditsCardHTML() + evCard +
     (bar ? `<div class="card"><h2>Today's energy</h2>${bar}</div>` : '') +
     chipsHTML() +
     (sorted.length ? sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — add a task below or check TASKS.</div>`);
 }
+/* overplanning brake: plan minutes vs actual free minutes before 23:30 */
+function capacityWarnHTML(){
+  if (frozenToday()) return '';
+  const doneT = new Set(S.tasks.filter(isDoneToday).map(t => (t.title || '').toLowerCase()));
+  const open = planItems().filter(p => !doneT.has((p.title || '').toLowerCase()));
+  const planMin = open.reduce((s, p) => s + (p.est_minutes || 15), 0);
+  if (!planMin) return '';
+  const n = new Date(); const nowM = n.getHours() * 60 + n.getMinutes();
+  const endM = 23 * 60 + 30;
+  if (nowM >= endM) return '';
+  let evMin = 0;
+  allEvents().filter(e => e.date === todayISO() && e.start_time).forEach(e => {
+    const [sh, sm] = e.start_time.split(':').map(Number); let s = sh * 60 + sm;
+    let en2 = s + 60; if (e.end_time) { const [eh, em] = e.end_time.split(':').map(Number); en2 = eh * 60 + em; }
+    s = Math.max(s, nowM); if (en2 > s) evMin += en2 - s;
+  });
+  const freeMin = Math.max(endM - nowM - evMin, 0);
+  if (planMin <= freeMin) return '';
+  const h = m => Math.round(m / 60 * 10) / 10;
+  return `<div class="card" style="border-color:var(--accent)"><b style="color:var(--accent)">⚠ Overplanned</b>
+    <div class="dim" style="font-size:12px">Plan needs ${h(planMin)}h · only ${h(freeMin)}h free before 23:30. Cut or defer now, not at 9 PM.</div></div>`;
+}
+
 /* ================= credits / earned screen time ================= */
 const CREDIT_RATE = {DEEP: 3, FOCUS: 5, LIGHT: 10};   // minutes of work per credit (1 credit = 1 screen-minute)
 function creditsCardHTML(){
@@ -1142,6 +1168,16 @@ function rBrief(){
   if (planIx >= 0) out.splice(planIx + 1, 0, calSec); else out.unshift(calSec);
   return ctl + (head ? `<div class="card md" style="padding:10px 12px">${marked.parse(head)}</div>` : '') +
     (secs.length ? out.join('') : calSec + `<div class="card md">${marked.parse(md)}</div>`);
+}
+/* opening the BRIEF tab marks read_brief for today — feeds the +2 bonus, the wake gate,
+   and pre-fills the reflection question. Honest signal: you actually looked at it. */
+async function markBriefRead(){
+  const today = todayISO();
+  if (!S.brief || localStorage.getItem('briefRead') === today) return;
+  localStorage.setItem('briefRead', today);
+  S.lastWrite = Date.now();
+  const {error} = await db.from('daily_log').upsert({date: today, read_brief: true}, {onConflict: 'date'});
+  if (!error) { if (S.todayLog) S.todayLog.read_brief = true; else S.todayLog = {date: today, read_brief: true}; }
 }
 /* compact one-day timeline for the BRIEF tab — same tap/drag handlers as CAL */
 function briefDayCal(){
