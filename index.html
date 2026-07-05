@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#17181A">
 <link rel="manifest" href="manifest.webmanifest">
 <title>LifeOS</title>
@@ -30,7 +30,8 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,'Segoe UI'
   font-size:15px;line-height:1.45;touch-action:pan-y;overscroll-behavior-x:none}
 nav,.chips,.chiprow{touch-action:pan-x}
 button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
-input,select,textarea{font:inherit;color:var(--text);background:var(--card2);border:1px solid var(--line);
+/* 16px floor: anything smaller makes iOS Safari auto-zoom ~110% on focus — and it sticks */
+input,select,textarea{font:inherit;font-size:16px;color:var(--text);background:var(--card2);border:1px solid var(--line);
   border-radius:6px;padding:8px 10px;outline:none;width:100%}
 input:focus,select:focus,textarea:focus{border-color:var(--accent)}
 a{color:var(--light)}
@@ -101,6 +102,10 @@ details.goal>summary::-webkit-details-marker{display:none}
   border-radius:10px;padding:4px 7px;color:var(--dim);margin-top:1px}
 .gprog.alldone{border-color:var(--done);color:var(--done)}
 .gkids{margin:2px 0 4px 14px;border-left:2px solid var(--line);padding-left:8px}
+/* plan editor rows */
+.prow{display:flex;align-items:center;gap:6px;padding:6px 2px;border-bottom:1px solid var(--line);font-size:13px}
+.pdrag{touch-action:none;cursor:grab;color:var(--dim);padding:4px 10px;font-size:17px;flex:0 0 auto}
+.prow .schip{flex:0 0 auto}
 .tmeta .due-today{color:var(--focus)}
 .tmeta .overdue{color:var(--accent)}
 .tmeta .hard{color:var(--accent)}
@@ -335,7 +340,7 @@ let S = {
   view: localStorage.getItem('view') || 'today',
   filt: localStorage.getItem('filt') || 'ALL',
   addEnergy: localStorage.getItem('addEnergy') || 'FOCUS',
-  showBacklog: false, search: '', editing: null,
+  showBacklog: false, search: '', editing: null, editMode: false,
   chat: JSON.parse(localStorage.getItem('chatHistory') || '[]'), sending: false,
   sheet: null, expandAll: false, openGroups: new Set(),
   bionic: localStorage.getItem('bionic') === '1',
@@ -479,7 +484,7 @@ function subscribeRealtime(){
       // ignore the echo of our own writes — they're already on screen
       if (Date.now() - (S.lastWrite || 0) < 2500) return;
       clearTimeout(rtTimer);
-      rtTimer = setTimeout(() => { if (!S.editing && !S.sending && !S.sheet && !S.wakeChallenge) loadAll(); }, 600);
+      rtTimer = setTimeout(() => { if (!S.editing && !S.sending && !S.sheet && !S.wakeChallenge && !S.planEditMode) loadAll(); }, 600);
     })
     .subscribe();
 }
@@ -561,13 +566,35 @@ async function saveSheet(){
     parallel: sh.energy === 'PARALLEL', bucket: sh.bucket || 'active',
   };
   S.lastWrite = Date.now();
+  // 3-layer: nest under an existing goal, or create the goal first
+  let parentId = sh.parentId || null;
+  if (sh.newGoal) {
+    const {data: g, error: gerr} = await db.from('tasks').insert({
+      title: sh.newGoal, project: sh.project, status: 'not_started',
+      priority: sh.priority || 'med', bucket: sh.bucket || 'active', energy: sh.energy,
+    }).select().single();
+    if (gerr) { toast('Goal create failed: ' + gerr.message); return; }
+    parentId = g.id;
+  }
+  if (parentId) row.parent_id = parentId;
   const {data, error} = await db.from('tasks').insert(row).select().single();
   if (error) { toast('Add failed: ' + error.message); return; }
-  S.sheet = null; toast('Added'); loadAll();  // refetch so any auto-chunk split shows immediately
+  S.sheet = null; toast(parentId ? 'Added under goal' : 'Added'); loadAll();  // refetch so any auto-chunk split shows immediately
 }
 function distinctProjects(){ return [...new Set(S.tasks.map(t => t.project).filter(Boolean))].sort(); }
 window._projList = [];
-function pickProject(i){ S.sheet.project = i < 0 ? null : window._projList[i]; render(); }
+function pickProject(i){ S.sheet.project = i < 0 ? null : window._projList[i]; S.sheet.parentId = null; S.sheet.newGoal = null; render(); }
+/* goal picker: nest the new task under an existing top-level task of the project, or a brand-new goal */
+window._goalList = [];
+function pickGoal(i){
+  if (i < 0) { S.sheet.parentId = null; S.sheet.newGoal = null; }
+  else { S.sheet.parentId = window._goalList[i].id; S.sheet.newGoal = null; }
+  render();
+}
+function newGoalForSheet(){
+  const g = prompt('New goal name (the task you\'re creating becomes its first subtask):');
+  if (g && g.trim()) { S.sheet.newGoal = g.trim(); S.sheet.parentId = null; render(); }
+}
 function newProject(){ const p = prompt('New project name:'); if (p && p.trim()) { S.sheet.project = p.trim(); render(); } }
 function calNav(d){ let m = S.sheet.calM + d, y = S.sheet.calY; if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; } S.sheet.calM = m; S.sheet.calY = y; render(); }
 function setDue(v){ S.sheet.due = v; render(); }
@@ -626,6 +653,16 @@ function sheetHTML(){
       ${window._projList.map((p, i) => `<button class="schip ${sh.project === p ? 'on' : ''}" onclick="pickProject(${i})">${esc(p)}</button>`).join('')}
       <button class="schip" onclick="newProject()">+ new</button>
     </div>
+    ${(() => {
+      if (!sh.project) return '';
+      window._goalList = S.tasks.filter(t => !t.parent_id && t.status !== 'done' && t.project === sh.project);
+      return `<label>Under goal — optional (project → goal → subtask)</label>
+      <div class="chiprow wrap">
+        <button class="schip ${!sh.parentId && !sh.newGoal ? 'on' : ''}" onclick="pickGoal(-1)">standalone</button>
+        ${window._goalList.map((t, i) => `<button class="schip ${sh.parentId === t.id ? 'on' : ''}" onclick="pickGoal(${i})">${((S._kids || {})[t.id] || []).length ? '🎯 ' : ''}${esc(t.title)}</button>`).join('')}
+        <button class="schip ${sh.newGoal ? 'on' : ''}" onclick="newGoalForSheet()">${sh.newGoal ? '🎯 ' + esc(sh.newGoal) : '+ new goal'}</button>
+      </div>`;
+    })()}
     <label>Due ${sh.due ? '— ' + sh.due : ''}</label>
     <div class="chiprow">
       <button class="schip ${!sh.due ? 'on' : ''}" onclick="setDue(null)">none</button>
@@ -833,7 +870,7 @@ function render(){
 (() => {
   const mainEl = document.getElementById('main');
   let sw = null;
-  const excluded = t => t && t.closest && t.closest('nav,#addbar,#sheetroot,#auth,input,textarea,select,.chips,.chiprow');
+  const excluded = t => t && t.closest && t.closest('nav,#addbar,#sheetroot,#auth,input,textarea,select,.chips,.chiprow,.prow,.pdrag');
   document.addEventListener('pointerdown', e => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (excluded(e.target)) return;
@@ -990,7 +1027,7 @@ function taskRowHTML(t){
     : `<button class="tstart" onclick="event.stopPropagation();startTask('${t.id}')" title="Start task">▶</button>`;
   return `<div class="trow ${t.status === 'done' ? 'isdone' : ''}" id="t-${t.id}" style="--rail:${en.color || 'var(--line)'}">
     <button onclick="cycleTask('${t.id}')" style="display:contents">${circle}</button>
-    <div class="tbody" onclick="S.editing = S.editing === '${t.id}' ? null : '${t.id}'; render()">
+    <div class="tbody" ${S.editMode ? `onclick="S.editing = S.editing === '${t.id}' ? null : '${t.id}'; render()"` : ''}>
       <div class="tname">${esc(t.title)}</div>
       <div class="tmeta">${meta}</div>
       ${editor}
@@ -1020,8 +1057,8 @@ function goalRowHTML(g){
     <summary class="trow" style="--rail:${en.color || 'var(--line)'}">
       <span class="gprog ${done === kids.length ? 'alldone' : ''}">${done}/${kids.length}</span>
       <div class="tbody"><div class="tname">🎯 ${esc(g.title)}</div><div class="tmeta">${meta}</div>${editor}</div>
-      <button class="tstart" style="color:var(--dim)" title="Edit goal"
-        onclick="event.preventDefault();event.stopPropagation();S.editing = S.editing === '${g.id}' ? null : '${g.id}'; render()">✎</button>
+      ${S.editMode ? `<button class="tstart" style="color:var(--dim)" title="Edit goal"
+        onclick="event.preventDefault();event.stopPropagation();S.editing = S.editing === '${g.id}' ? null : '${g.id}'; render()">✎</button>` : ''}
     </summary>
     <div class="gkids">${shown.map(taskRowHTML).join('') || '<div class="empty" style="padding:8px">no subtasks match the filter</div>'}</div>
   </details>`;
@@ -1104,10 +1141,24 @@ function rToday(){
     (a.status === 'done') - (b.status === 'done') ||
     (a.due || '9999').localeCompare(b.due || '9999') ||
     (PRIO[b.priority] || 2) - (PRIO[a.priority] || 2));
+  // plan items as startable task rows (skip ones already in the deck above)
+  const planSection = (() => {
+    const deckIds = new Set(todays.map(t => t.id));
+    const seen = new Set(); const rows = [];
+    planItems().forEach(p => {
+      const key = (p.title || '').toLowerCase();
+      if (!key || seen.has(key)) return; seen.add(key);
+      const t = S.tasks.find(x => (x.title || '').toLowerCase() === key
+        && x.status !== 'done' && !(kids[x.id] || []).length);
+      if (t && !deckIds.has(t.id)) rows.push(t);
+    });
+    return rows.length ? `<div class="pname">FROM TODAY'S PLAN</div>` + rows.map(taskRowHTML).join('') : '';
+  })();
   return wakeChallengeHTML() + goalConfirmsHTML() + shCard + meter + capacityWarnHTML() + planBlocksHTML() + creditsCardHTML() + evCard +
     (bar ? `<div class="card"><h2>Today's energy</h2>${bar}</div>` : '') +
     chipsHTML() +
-    (sorted.length ? sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — add a task below or check TASKS.</div>`);
+    (sorted.length ? sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — add a task below or check TASKS.</div>`) +
+    planSection;
 }
 /* overplanning brake: plan minutes vs actual free minutes before 23:30 */
 function capacityWarnHTML(){
@@ -1162,7 +1213,11 @@ function creditsCardHTML(){
     : `<div class="dim" style="font-family:var(--mono);font-size:11px;margin-top:6px">📱 scrolled ${c.metered || 0}m today${c.windows ? ` · ${c.windows}m prepaid` : ''}</div>`;
   const wt = c.wake_tier;
   const wakeLine = (wt && wt !== 'none')
-    ? `<div class="dim" style="font-size:11px;margin-top:6px">⏰ woke ${c.wake ? esc(String(c.wake).slice(0,5)) : '—'} · ${wt==='full' ? 'on time — full free credits' : wt==='half' ? 'a bit late — free credits halved' : wt==='override' ? 'override — no free credits' : 'late — 0 free credits, cap 60'}</div>`
+    ? `<div class="dim" style="font-size:11px;margin-top:6px">⏰ woke ${c.wake ? esc(String(c.wake).slice(0,5)) : '—'} · ${
+        wt==='full' ? `early bird — +10cr, cap 100` :
+        wt==='partial' ? `wake bonus +${c.wake_bonus || 0}cr — cap ${c.cap}` :
+        wt==='override' ? 'override — no free credits today' :
+        'after the bonus window — no wake bonus (cap 90)'}</div>`
     : '';
   return `<div class="card"><h2>Screen-time credits</h2>
     <div style="display:flex;gap:8px;margin-bottom:8px">
@@ -1171,7 +1226,7 @@ function creditsCardHTML(){
       ${stat(c.gross, 'EARNED')}
     </div>
     <div class="ebar" style="margin-bottom:6px"><div style="width:${pct}%;background:${pct >= 85 ? '#E1251B' : pct >= 60 ? '#FBBF24' : '#4ADE80'}"></div></div>
-    <div class="dim" style="font-size:11px;margin-bottom:10px">earned = ${c.free} free + ${c.timer} clocked + ${c.bonus} completions · daily cap ${c.cap}${c.gross >= c.cap ? ' — HIT' : ''}</div>
+    <div class="dim" style="font-size:11px;margin-bottom:10px">earned = ${c.free} free + ${c.timer} clocked + ${c.bonus} completions${c.wake_bonus ? ` + ${c.wake_bonus} wake` : ''} · daily cap ${c.cap}${c.gross >= c.cap ? ' — HIT' : ''}</div>
     ${timer}${scroll}${wakeLine}${wakeTargetsHTML()}
   </div>`;
 }
@@ -1229,12 +1284,14 @@ async function spendCredits(m){
   loadAll();
 }
 /* tick the running timer display */
-setInterval(() => { if (S.focusOpen && S.view === 'today' && !S.editing && !S.sheet && !S.evSheet && !S.wakeChallenge) render(); }, 30000);
+setInterval(() => { if (S.focusOpen && S.view === 'today' && !S.editing && !S.sheet && !S.evSheet && !S.wakeChallenge && !S.planEditMode) render(); }, 30000);
 
-/* ---- Motion planner: server-packed plan blocks ---- */
+/* ---- Motion planner: server-packed plan blocks + user plan editor ---- */
 function planBlocksHTML(){
+  if (S.planEditMode) return planEditHTML();
   const bs = (S.planBlocks || []);
-  if (!bs.length) return '';
+  const canEdit = !!S.brief;
+  if (!bs.length && !canEdit) return '';
   const fmt = m => String(Math.floor(m/60)).padStart(2,'0') + ':' + String(((m%60)+60)%60).padStart(2,'0');
   const rows = bs.map(b => {
     const col = (ENERGY[b.energy] || {}).hex || 'var(--accent)';
@@ -1243,8 +1300,112 @@ function planBlocksHTML(){
       <span class="mono" style="color:${col}">${fmt(b.start_min)}–${fmt(b.end_min)}</span>
       <span>${isCall ? '📞 ' : ''}${esc(b.title || '')}</span></div>`;
   }).join('');
-  return `<div class="card"><h2>Today's plan <span class="dim" style="font-size:11px;font-weight:400">· auto, refreshes every 20 min</span></h2>${rows}</div>`;
+  return `<div class="card"><h2 style="display:flex;align-items:center">Today's plan
+      <span class="dim" style="font-size:11px;font-weight:400;margin-left:6px">· auto-repacks /20min</span>
+      ${canEdit ? `<button class="btn" style="margin-left:auto;padding:4px 10px" onclick="startPlanEdit()">✎ Edit</button>` : ''}</h2>
+    ${rows || '<div class="dim" style="font-size:12px">nothing packed — plan empty, all done, or no time left today</div>'}</div>`;
 }
+/* plan editor: reorder (drag ≡), add, defer to tomorrow, cut, tap est to change.
+   Saves briefs.plan (with sort) and re-runs lifeos_plan_day. */
+function startPlanEdit(){
+  S.planEdit = (S.brief?.plan || []).map(p => Object.assign({}, p));
+  S.planDefers = []; S.planAddMode = false; S.planEditMode = true;
+  render();
+}
+function cancelPlanEdit(){ S.planEditMode = false; S.planEdit = null; S.planAddMode = false; render(); }
+function planEditRowsHTML(){
+  const doneT = new Set(S.tasks.filter(isDoneToday).map(t => (t.title || '').toLowerCase()));
+  return S.planEdit.map((p, i) => {
+    const done = doneT.has((p.title || '').toLowerCase());
+    const col = (ENERGY[(p.energy || '').toUpperCase()] || {}).hex || 'var(--dim)';
+    return `<div class="prow" data-pi="${i}">
+      <span class="pdrag" onpointerdown="planDragStart(event)">≡</span>
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${done ? 'text-decoration:line-through;color:var(--dim)' : ''}">${esc(p.title || '')}</span>
+      <button class="schip" style="color:${col};border-color:${col}" onclick="planEstEdit(${i})">${p.est_minutes || 30}m</button>
+      <button class="schip" title="defer to tomorrow" onclick="planDefer(${i})">⏭</button>
+      <button class="schip" style="color:#E1251B;border-color:#E1251B" title="cut from plan" onclick="planCut(${i})">✕</button>
+    </div>`;
+  }).join('') || '<div class="dim" style="font-size:12px;padding:6px 0">plan is empty — add tasks below</div>';
+}
+function planAddListHTML(){
+  const inPlan = new Set(S.planEdit.map(p => (p.title || '').toLowerCase()));
+  const kids = S._kids || {};
+  const cands = S.tasks.filter(t => t.bucket === 'active' && t.status !== 'done'
+    && !(kids[t.id] || []).length && !inPlan.has((t.title || '').toLowerCase()));
+  return cands.slice(0, 40).map(t =>
+    `<button class="schip" style="margin:0 6px 6px 0" onclick="planAddTask('${t.id}')">${esc(t.title)}${t.est_minutes ? ' · ' + t.est_minutes + 'm' : ''}</button>`).join('')
+    || '<div class="dim" style="font-size:12px">no open tasks left to add</div>';
+}
+function planEditHTML(){
+  const total = S.planEdit.reduce((s, p) => s + (p.est_minutes || 30), 0);
+  return `<div class="card" style="border-color:var(--accent)"><h2 style="display:flex;align-items:center">✎ Edit plan
+      <span class="dim" style="font-size:11px;font-weight:400;margin-left:8px">${Math.round(total/60*10)/10}h planned · drag ≡ to reorder</span></h2>
+    <div id="planEditRows">${planEditRowsHTML()}</div>
+    <div style="margin-top:8px">
+      <button class="btn" onclick="S.planAddMode=!S.planAddMode;render()">${S.planAddMode ? '▾ hide list' : '+ add task'}</button>
+      ${S.planAddMode ? `<div style="margin-top:8px;display:flex;flex-wrap:wrap">${planAddListHTML()}</div>` : ''}
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn" style="flex:1" onclick="cancelPlanEdit()">Cancel</button>
+      <button class="btn primary" style="flex:2" onclick="savePlanEdit()">Save & repack</button>
+    </div></div>`;
+}
+function planEstEdit(i){
+  const v = prompt('Estimated minutes:', S.planEdit[i].est_minutes || 30);
+  if (v === null) return;
+  const n = parseInt(v);
+  if (n > 0) { S.planEdit[i].est_minutes = n; render(); }
+}
+function planCut(i){ S.planEdit.splice(i, 1); render(); }
+function planDefer(i){
+  S.planDefers.push(S.planEdit[i].title || '');
+  S.planEdit.splice(i, 1);
+  toast('Will move to tomorrow on save');
+  render();
+}
+function planAddTask(id){
+  const t = S.tasks.find(x => x.id === id); if (!t) return;
+  S.planEdit.push({title: t.title, energy: t.energy, priority: t.priority, est_minutes: t.est_minutes || 30});
+  render();
+}
+async function savePlanEdit(){
+  const plan = S.planEdit.map((p, i) => Object.assign({}, p, {sort: i}));
+  S.lastWrite = Date.now();
+  const {error} = await db.from('briefs').update({plan}).eq('date', todayISO());
+  if (error) { toast('Save failed: ' + error.message); return; }
+  const tom = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toLocaleDateString('sv-SE'); })();
+  for (const title of (S.planDefers || [])) {
+    const t = S.tasks.find(x => x.status !== 'done' && (x.title || '').toLowerCase() === title.toLowerCase());
+    if (t) await db.from('tasks').update({due: tom}).eq('id', t.id);
+  }
+  try { await db.rpc('lifeos_plan_day'); } catch (e) { /* cron repacks anyway */ }
+  S.planEditMode = false; S.planEdit = null; S.planDefers = []; S.planAddMode = false;
+  toast('Plan saved & repacked');
+  loadAll();
+}
+/* drag-to-reorder: pointer events, works with touch (handle has touch-action:none) */
+let PDrag = null;
+function planDragStart(e){
+  e.preventDefault();
+  const row = e.target.closest('[data-pi]'); if (!row) return;
+  PDrag = {from: +row.dataset.pi};
+  document.body.style.userSelect = 'none';
+}
+document.addEventListener('pointermove', e => {
+  if (!PDrag || !S.planEdit) return;
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  const row = el && el.closest && el.closest('[data-pi]');
+  if (!row) return;
+  const to = +row.dataset.pi;
+  if (to !== PDrag.from) {
+    const [it] = S.planEdit.splice(PDrag.from, 1);
+    S.planEdit.splice(to, 0, it);
+    PDrag.from = to;
+    const box = document.getElementById('planEditRows');
+    if (box) box.innerHTML = planEditRowsHTML();   // rows only — no scroll jump
+  }
+});
+document.addEventListener('pointerup', () => { if (PDrag) { PDrag = null; document.body.style.userSelect = ''; } });
 /* ---- Wake-time targets editor (per weekday, controls credit stakes) ---- */
 const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 function wakeTargetsHTML(){
@@ -1253,15 +1414,16 @@ function wakeTargetsHTML(){
     const t = wt[i] || {full:'10:00', hard:'11:00'};
     return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;font-size:12px">
       <span class="dim" style="width:34px">${d}</span>
-      <span class="dim">full by</span>
+      <span class="dim">+10 before</span>
       <input type="time" value="${t.full || '10:00'}" onchange="saveWakeTarget(${i},'full',this.value)" style="font-size:12px">
-      <span class="dim">zero after</span>
+      <span class="dim">bonus ends</span>
       <input type="time" value="${t.hard || '11:00'}" onchange="saveWakeTarget(${i},'hard',this.value)" style="font-size:12px">
     </div>`;
   }).join('');
-  return `<details class="bsec" style="margin-top:8px"><summary style="padding:8px 10px;cursor:pointer;font-size:12px">⏰ Wake targets (per day) — credit stakes</summary>
+  const open = S.openGroups.has('g:wt') ? 'open' : '';
+  return `<details class="bsec" style="margin-top:8px" ${open} ontoggle="tgGoal('wt', this.open)"><summary style="padding:8px 10px;cursor:pointer;font-size:12px">⏰ Wake targets (per day) — early-bird bonus</summary>
     <div style="padding:8px 10px">
-      <div class="dim" style="font-size:11px;margin-bottom:6px">Wake by <b>full</b> → all free credits. Between full and zero → half. After <b>zero</b> → no free credits + daily cap cut to 60.</div>
+      <div class="dim" style="font-size:11px;margin-bottom:6px">Wake by the <b>first</b> time → +10 credits, cap 100. Between the two → partial bonus (+9…+1), cap 90+bonus. After the <b>second</b> → no bonus, normal cap 90. Never a penalty.</div>
       ${rows}
     </div></details>`;
 }
@@ -1394,9 +1556,11 @@ function rTasks(){
   const bl = `<button class="btn" style="${S.showBacklog ? 'border-color:var(--accent);color:var(--accent)' : ''}"
     onclick="S.showBacklog=!S.showBacklog;render()">${S.showBacklog ? 'BACKLOG' : 'ACTIVE'} ▾</button>`;
   const ea = `<button class="btn" onclick="S.expandAll=!S.expandAll;S.openGroups.clear();render()">${S.expandAll ? 'COLLAPSE' : 'EXPAND ALL'}</button>`;
+  const em = `<button class="btn" style="${S.editMode ? 'border-color:var(--accent);color:var(--accent)' : ''}"
+    onclick="S.editMode=!S.editMode;S.editing=null;render()">✎ ${S.editMode ? 'EDITING' : 'EDIT'}</button>`;
   window._gn = Object.keys(groups);
   return `<div style="display:flex;gap:8px;margin-bottom:10px">
-      <input placeholder="search…" value="${esc(S.search)}" oninput="S.search=this.value;render()" style="flex:1">${bl}${ea}</div>` +
+      <input placeholder="search…" value="${esc(S.search)}" oninput="S.search=this.value;render()" style="flex:1">${bl}${ea}${em}</div>` +
     chipsHTML() +
     (window._gn.length ? window._gn.map((p, i) => {
       const ts = groups[p];
