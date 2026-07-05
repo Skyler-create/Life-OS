@@ -19,7 +19,7 @@
   --mono:'Consolas','SF Mono',ui-monospace,Menlo,monospace;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-html{-webkit-text-size-adjust:100%}
+html{-webkit-text-size-adjust:100%;touch-action:pan-y;overscroll-behavior-x:none;min-height:100%}
 body{background:var(--bg);color:var(--text);font-family:-apple-system,'Segoe UI',Roboto,sans-serif;
   max-width:600px;margin:0 auto;padding:0 12px 200px;font-size:15px;line-height:1.45;
   touch-action:pan-y;overscroll-behavior-x:none}
@@ -644,7 +644,7 @@ function render(){
 (() => {
   const mainEl = document.getElementById('main');
   let sw = null;
-  const excluded = t => t && t.closest && t.closest('nav,#addbar,#sheetroot,#auth,input,textarea,select,.chips,.chiprow,#chatlog');
+  const excluded = t => t && t.closest && t.closest('nav,#addbar,#sheetroot,#auth,input,textarea,select,.chips,.chiprow');
   document.addEventListener('pointerdown', e => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (excluded(e.target)) return;
