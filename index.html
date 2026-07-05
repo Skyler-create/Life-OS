@@ -358,7 +358,7 @@ document.getElementById('a-email').value = OWNER;
 /* ================= data ================= */
 async function loadAll(){
   const today = todayISO();
-  const [t, g, gl, b, dl, cd, ev, fz] = await Promise.all([
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
@@ -367,10 +367,14 @@ async function loadAll(){
     db.from('cards').select('*').lte('due', today).eq('suspended', false).order('due').limit(50),
     db.from('events').select('*').order('date').limit(300),
     db.from('freezes').select('*').gte('end_date', today).order('start_date'),
+    db.from('focus_sessions').select('*').is('ended_at', null).order('started_at', {ascending: false}).limit(1),
+    db.rpc('lifeos_credits'),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   S.cards = cd.data || []; S.events = ev.data || []; S.freezes = fz.data || [];
   S.brief = b.data || null;
+  S.focusOpen = (fs.data || [])[0] || null;
+  S.credits = cr.data || null;
   const logs = dl.data || [];
   S.todayLog = logs.find(l => l.date === today) || null;
   S.prevLog  = logs.find(l => l.date < today) || null;
@@ -994,11 +998,68 @@ function rToday(){
     (a.status === 'done') - (b.status === 'done') ||
     (a.due || '9999').localeCompare(b.due || '9999') ||
     (PRIO[b.priority] || 2) - (PRIO[a.priority] || 2));
-  return shCard + meter + evCard +
+  return shCard + meter + creditsCardHTML() + evCard +
     (bar ? `<div class="card"><h2>Today's energy</h2>${bar}</div>` : '') +
     chipsHTML() +
     (sorted.length ? sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — add a task below or check TASKS.</div>`);
 }
+/* ================= credits / earned screen time ================= */
+const CREDIT_RATE = {DEEP: 3, FOCUS: 5, LIGHT: 10};   // minutes of work per credit (1 credit = 1 screen-minute)
+function creditsCardHTML(){
+  const c = S.credits;
+  if (!c) return '';
+  const fo = S.focusOpen;
+  let timer;
+  if (fo) {
+    const mins = Math.floor((Date.now() - new Date(fo.started_at).getTime()) / 60000);
+    timer = `<div style="display:flex;align-items:center;gap:10px">
+      <span class="mono" style="font-size:20px;font-weight:700;color:${(ENERGY[fo.energy] || {}).hex}">⏱ ${Math.floor(mins/60)}:${String(mins%60).padStart(2,'0')}</span>
+      <span class="dim" style="font-size:11px">${fo.energy} · +1cr/${CREDIT_RATE[fo.energy]}min · ~${Math.floor(mins / CREDIT_RATE[fo.energy])}cr this session</span>
+      <button class="btn primary" style="margin-left:auto" onclick="clockOut()">Clock out</button></div>`;
+  } else {
+    timer = `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+      <span class="dim" style="font-size:11px">Clock in:</span>
+      ${['DEEP','FOCUS','LIGHT'].map(e => `<button class="schip" style="border-color:${ENERGY[e].hex};color:${ENERGY[e].hex}" onclick="clockIn('${e}')">${e} · ${CREDIT_RATE[e]}m/cr</button>`).join('')}</div>`;
+  }
+  const active = c.active ? `<div style="color:var(--done);font-family:var(--mono);font-size:11px;margin-top:4px">▶ scroll session until ${new Date(c.session_until).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</div>` : '';
+  return `<div class="card"><h2>Screen-time credits</h2>
+    <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
+      <span class="mono" style="font-size:26px;font-weight:700">${c.balance}</span>
+      <span class="dim" style="font-size:11px">of ${c.gross} today · ${c.free} free + ${c.timer} clocked + ${c.bonus} task bonus − ${c.spent} spent</span>
+    </div>
+    ${timer}
+    <div style="display:flex;gap:6px;margin-top:8px">
+      ${[5,10,15].map(m => `<button class="btn" style="flex:1" ${c.balance < m ? 'disabled style="flex:1;opacity:.4"' : ''} onclick="spendCredits(${m})">📱 ${m} min</button>`).join('')}
+    </div>${active}
+  </div>`;
+}
+async function clockIn(energy){
+  S.lastWrite = Date.now();
+  const {data, error} = await db.from('focus_sessions').insert({energy}).select().single();
+  if (error) { toast('Clock-in failed: ' + error.message); return; }
+  S.focusOpen = data; render(); toast('Clocked in — ' + energy + ', 1 credit per ' + CREDIT_RATE[energy] + ' min');
+}
+async function clockOut(){
+  if (!S.focusOpen) return;
+  S.lastWrite = Date.now();
+  const {error} = await db.from('focus_sessions').update({ended_at: new Date().toISOString()}).eq('id', S.focusOpen.id);
+  if (error) { toast('Clock-out failed: ' + error.message); return; }
+  const mins = Math.floor((Date.now() - new Date(S.focusOpen.started_at).getTime()) / 60000);
+  toast(`Clocked out — ${mins} min → ~${Math.floor(mins / CREDIT_RATE[S.focusOpen.energy])} credits`);
+  S.focusOpen = null; loadAll();
+}
+async function spendCredits(m){
+  if (!confirm(`Spend ${m} credits for ${m} minutes of scroll time?`)) return;
+  S.lastWrite = Date.now();
+  const until = new Date(Date.now() + m * 60000).toISOString();
+  const {error} = await db.from('credit_spends').insert({minutes: m, until});
+  if (error) { toast('Spend failed: ' + error.message); return; }
+  toast(`Unlocked until ${new Date(until).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})} — go scroll guilt-free`);
+  loadAll();
+}
+/* tick the running timer display */
+setInterval(() => { if (S.focusOpen && S.view === 'today' && !S.editing && !S.sheet && !S.evSheet) render(); }, 30000);
+
 /* live "what do I need tonight" meter */
 function rMeter(){
   if (frozenToday()) return `<div class="card"><h2>Score meter</h2><div class="dim">❄ Vacation mode — streak frozen, nothing owed today.</div></div>`;
