@@ -20,10 +20,10 @@
   --mono:'Consolas','SF Mono',ui-monospace,Menlo,monospace;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-html{-webkit-text-size-adjust:100%;touch-action:pan-y;overscroll-behavior-x:none;min-height:100%;overflow-x:hidden}
-body{overflow-x:hidden}
+html{-webkit-text-size-adjust:100%;touch-action:pan-y;overscroll-behavior-x:none;min-height:100%;overflow-x:clip}
+body{overflow-x:clip}
 body{background:var(--bg);color:var(--text);font-family:-apple-system,'Segoe UI',Roboto,sans-serif;
-  max-width:600px;margin:0 auto;padding:0 12px 200px;font-size:15px;line-height:1.45;
+  max-width:600px;margin:0 auto;padding:0 12px calc(132px + env(safe-area-inset-bottom));font-size:15px;line-height:1.45;
   touch-action:pan-y;overscroll-behavior-x:none}
 nav,.chips,.chiprow{touch-action:pan-x}
 button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
@@ -190,6 +190,16 @@ details.bsec>.ginner{padding:0 10px 10px}
 .cal-d.big .marks{display:flex;gap:2px;margin-top:3px;align-items:center}
 .cal-d.big .marks i{position:static;transform:none;width:5px;height:5px;border-radius:50%;display:block}
 .cal-d.big .marks em{font-size:9px;color:var(--dim);font-style:normal;line-height:1}
+
+/* month view — google-style titled chips */
+.mo-cell{position:relative;min-height:68px;border:1px solid transparent;border-radius:6px;padding:2px 1px;
+  display:flex;flex-direction:column;gap:1px;background:none;cursor:pointer;min-width:0;text-align:left}
+.mo-cell.selq{border-color:var(--line);background:var(--card2)}
+.mo-d{font-size:11px;align-self:center;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;margin-bottom:1px;color:var(--text)}
+.mo-cell.today .mo-d{background:var(--accent);color:#fff;font-weight:700}
+.mo-chip{font-size:8px;line-height:1.25;padding:1px 2px;border-left:2px solid;border-radius:2px;background:var(--card2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);max-width:100%}
+.mo-more{font-size:8px;color:var(--dim);font-family:var(--mono);padding-left:2px}
 
 /* flashcards */
 .fc-front{font-size:17px;line-height:1.5;margin:10px 0}
@@ -1224,14 +1234,19 @@ function calMonthHTML(byDay, evByDay){
   for (let d = 1; d <= days; d++) {
     const iso = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     const ts = byDay[iso] || [];
-    const evN = (evByDay[iso] || []).length;
-    const marks = ts.slice(0, 4).map(t => `<i style="background:${(ENERGY[t.energy] || {}).hex || '#666'}"></i>`).join('');
-    cells += `<button class="cal-d big ${S.calSel === iso ? 'sel' : ''} ${iso === todayISO() ? 'today' : ''}" onclick="selDay('${iso}')">
-      ${evN ? `<em class="evb">${evN}▸</em>` : ''}<span>${d}</span><div class="marks">${marks}${ts.length > 4 ? '<em>+</em>' : ''}</div></button>`;
+    const evs = (evByDay[iso] || []).slice().sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
+    const items = [
+      ...evs.map(e => ({c: 'var(--deep)', t: e.title})),
+      ...ts.map(t => ({c: (ENERGY[t.energy] || {}).hex || '#666', t: t.title})),
+    ];
+    const shown = items.slice(0, 3).map(it => `<div class="mo-chip" style="border-color:${it.c}">${esc(it.t)}</div>`).join('');
+    const more = items.length > 3 ? `<div class="mo-more">+${items.length - 3}</div>` : '';
+    cells += `<button class="mo-cell ${S.calSel === iso ? 'selq' : ''} ${iso === todayISO() ? 'today' : ''}" onclick="selDay('${iso}')">
+      <span class="mo-d">${d}</span>${shown}${more}</button>`;
   }
   return `<div class="card">
     <div class="cal-g">${['M','T','W','T','F','S','S'].map(d => `<span class="dow">${d}</span>`).join('')}${cells}</div>
-    <div class="elegend" style="margin-top:8px">${Object.keys(ENERGY).map(e => `<span><i style="background:${ENERGY[e].hex}"></i>${e}</span>`).join('')}<span style="margin-left:auto" class="dim">n▸ = events · tap a day</span></div>
+    <div class="elegend" style="margin-top:8px">${Object.keys(ENERGY).map(e => `<span><i style="background:${ENERGY[e].hex}"></i>${e}</span>`).join('')}<span><i style="background:#818CF8"></i>event</span><span style="margin-left:auto" class="dim">tap a day</span></div>
   </div>`;
 }
 function calWeekHTML(byDay, evByDay){
