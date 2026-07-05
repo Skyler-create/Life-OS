@@ -779,7 +779,7 @@ function render(){
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (excluded(e.target)) return;
     if (S.sheet || S.editing) return;
-    sw = {x: e.clientX, y: e.clientY, t: Date.now(), active: false};
+    sw = {x: e.clientX, y: e.clientY, t: Date.now(), active: false, tgt: e.target};
   }, {passive: true});
   document.addEventListener('pointermove', e => {
     if (!sw) return;
@@ -824,7 +824,7 @@ function render(){
       return;
     }
     const dx = e.clientX - sw.x, dy = e.clientY - sw.y, dt = Date.now() - sw.t;
-    const wasActive = sw.active; sw = null;
+    const wasActive = sw.active, swTgt = sw.tgt; sw = null;
     document.body.style.userSelect = '';
     const snapBack = () => {
       mainEl.style.transition = 'transform .18s cubic-bezier(.2,.8,.3,1), opacity .18s';
@@ -838,8 +838,10 @@ function render(){
     const flick = dt < 250 && Math.abs(dx) > 40;             // quick flick
     const drag  = Math.abs(dx) > 70;                          // deliberate drag
     if ((!flick && !drag) || Math.abs(dx) < Math.abs(dy) * 1.2) { snapBack(); return; }
-    // inside the calendar, horizontal swipes page through time instead of tabs
-    if (S.view === 'cal') {
+    // inside the calendar: swipes that START on the grid page through time;
+    // swipes starting on the header/top strip still switch tabs (CHAT ⟷ CAL ⟷ REFLECT)
+    const onCalGrid = swTgt && swTgt.closest && swTgt.closest('.daygrid,.wk-grid,.wk-head,.wk-allday,.cal-g,.mo-cell,.evblk,.wk-ev,.evrow');
+    if (S.view === 'cal' && onCalGrid) {
       const dir = dx < 0 ? 1 : -1;
       const w = Math.min(window.innerWidth, 640);
       mainEl.style.transition = 'transform .13s ease-in, opacity .13s ease-in';
@@ -1307,6 +1309,15 @@ function evSheetHTML(){
     </div>
   </div></div>`;
 }
+/* GCal-style: tap an empty slot on the day grid = new event at that hour */
+function dayGridTap(ev, iso){
+  if (!gcalToken()) { toast('Connect Google on the CAL tab first'); return; }
+  const r = ev.currentTarget.getBoundingClientRect();
+  const hr = Math.min(23, Math.max(0, 6 + Math.floor((ev.clientY - r.top) / 48)));
+  const cal = (S.gcalCals || []).find(c => c.primary) || (S.gcalCals || [])[0] || {id: 'primary'};
+  S.evSheet = {gid: null, calId: cal.id, writable: true, title: '', date: iso, start: String(hr).padStart(2, '0') + ':00', end: ''};
+  render();
+}
 function gcalAuthLost(){
   localStorage.removeItem('gtok'); S.gcalCals = null; S.evSheet = null;
   toast('Google needs fresh consent for editing — tap connect Google'); render();
@@ -1495,7 +1506,7 @@ function calDayHTML(iso, byDay, evByDay){
     if (e.end_time) { const [eh, em] = e.end_time.split(':').map(Number); dur = Math.max(20, (eh * 60 + em) - (sh * 60 + sm)); }
     const top = Math.max(0, ((sh - H0) * 60 + sm) * (PPH / 60));
     const h = Math.max(22, dur * (PPH / 60));
-    return `<div class="evblk" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px;cursor:pointer" onclick="openEv(${e._i})"><b>${esc(e.start_time)}${e.end_time ? '–' + esc(e.end_time) : ''}</b>${esc(e.title)}${e.cal && !e.writable ? ' 🔒' : ''}</div>`;
+    return `<div class="evblk" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px;cursor:pointer" onclick="event.stopPropagation();openEv(${e._i})"><b>${esc(e.start_time)}${e.end_time ? '–' + esc(e.end_time) : ''}</b>${esc(e.title)}${e.cal && !e.writable ? ' 🔒' : ''}</div>`;
   }).join('');
   const rail = [...Array(H1 - H0)].map((_, i) => `<div class="hrow" style="top:${i * PPH}px"><span>${String(H0 + i).padStart(2, '0')}:00</span></div>`).join('');
   const nowLine = iso === todayISO() ? (() => {
@@ -1507,7 +1518,7 @@ function calDayHTML(iso, byDay, evByDay){
   return `${allday.map(e => `<div class="evrow" style="cursor:pointer" onclick="openEv(${e._i})"><span class="mono">all-day</span><span>${esc(e.title)}</span></div>`).join('')}
   ${due.length || doneDay.length ? `<div class="pname">due — ${due.length} open${doneDay.length ? ' · ' + doneDay.length + ' done' : ''}</div>` : ''}
   ${due.map(taskRowHTML).join('')}
-  <div class="daygrid" style="height:${(H1 - H0) * PPH}px">${rail}${blocks}${nowLine}</div>
+  <div class="daygrid" style="height:${(H1 - H0) * PPH}px" onclick="dayGridTap(event, '${iso}')">${rail}${blocks}${nowLine}</div>
   <button class="btn" style="width:100%;margin-top:8px" onclick="addForDay()">+ add task due ${iso}</button>
   <div style="height:10px"></div>`;
 }
