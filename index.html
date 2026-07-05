@@ -303,7 +303,7 @@ const SB_KEY = 'sb_publishable_ecGABp0TAZcVX_TLIjBbOQ_rqUKNATw'; // your publish
 const OWNER  = 'skyler.scooty@gmail.com';                    // your email, lowercase
 const GCAL_CLIENT_ID = '118493693943-6l9gncbacaip7d4fct7cgdkr5l51nm1j.apps.googleusercontent.com'; // optional: live Google Calendar (blank = use routine sync only)
 const VAPID_PUBLIC = 'BIV0Jfwa19Q54frhQNxbdR2a8dN6Bw9zCSd_SPIXEeD2YFZbtX6YU3gVcH6bnbD3JHcxmNkXt_nDH2lpO3LDEVk'; // push notifications (GET /functions/v1/notify shows yours)
-const CLAUDE_URL = 'https://claude.ai/new'; // deep-brainstorm escape hatch in CHAT — swap in your Claude Project URL
+const CLAUDE_URL = 'https://claude.ai/projects'; // deep-brainstorm escape hatch in CHAT — swap in the lifeOS Project URL
 const db = window.supabase.createClient(SB_URL, SB_KEY);
 
 const ENERGY = {
@@ -1313,6 +1313,59 @@ function evSheetHTML(){
     </div>
   </div></div>`;
 }
+/* GCal-style press-and-drag: hold ~1/3s on a day/week grid slot, drag down to
+   set duration (30-min snaps), release to open the pre-filled event sheet. */
+let GD = null;
+function gridPressStart(ev, iso, pph, h0){
+  if (!gcalToken()) return;
+  if (ev.pointerType === 'mouse' && ev.button !== 0) return;
+  if (ev.target.closest && ev.target.closest('.evblk,.wk-ev')) return;   // press on an existing event = tap-to-edit, not create
+  GD = {iso, pph, h0, el: ev.currentTarget, y0: ev.clientY, x0: ev.clientX, endY: ev.clientY,
+        active: false, timer: setTimeout(gridDragActivate, 320)};
+}
+function gridDragActivate(){
+  if (!GD) return;
+  GD.active = true;
+  document.body.style.userSelect = 'none';
+  GD.rect = GD.el.getBoundingClientRect();
+  GD.startH = Math.max(0, Math.floor((GD.y0 - GD.rect.top) / GD.pph * 2) / 2);
+  GD.startH = Math.min(GD.startH, 24 - GD.h0 - 0.5);
+  const ghost = document.createElement('div');
+  ghost.style.cssText = 'position:absolute;left:2px;right:2px;border-radius:6px;background:rgba(225,37,27,.30);border:1px dashed var(--accent);z-index:6;pointer-events:none';
+  ghost.style.top = (GD.startH * GD.pph) + 'px';
+  ghost.style.height = (GD.pph / 2) + 'px';
+  GD.el.appendChild(ghost); GD.ghost = ghost;
+}
+function gridDragEndH(g){
+  return Math.min(24 - g.h0, Math.max(g.startH + 0.5, Math.ceil((g.endY - g.rect.top) / g.pph * 2) / 2));
+}
+document.addEventListener('pointermove', e => {
+  if (!GD) return;
+  if (!GD.active) {   // moved before the hold completed → it's a scroll/swipe, not a create
+    if (Math.abs(e.clientY - GD.y0) > 10 || Math.abs(e.clientX - GD.x0) > 10) { clearTimeout(GD.timer); GD = null; }
+    return;
+  }
+  GD.endY = e.clientY;
+  GD.ghost.style.height = ((gridDragEndH(GD) - GD.startH) * GD.pph) + 'px';
+}, {passive: true});
+document.addEventListener('touchmove', e => { if (GD && GD.active) e.preventDefault(); }, {passive: false});
+document.addEventListener('pointercancel', () => { if (GD) { clearTimeout(GD.timer); GD.ghost?.remove(); document.body.style.userSelect = ''; GD = null; } });
+document.addEventListener('pointerup', () => {
+  if (!GD) return;
+  clearTimeout(GD.timer);
+  const g = GD; GD = null;
+  document.body.style.userSelect = '';
+  if (!g.active) return;              // plain tap — the onclick handler covers it
+  g.ghost.remove();
+  const kill = ev => { ev.stopPropagation(); ev.preventDefault(); };
+  document.addEventListener('click', kill, {capture: true, once: true});
+  setTimeout(() => document.removeEventListener('click', kill, {capture: true}), 150);
+  const fmt = h => { const abs = g.h0 + h; return abs >= 24 ? '23:59' : String(Math.floor(abs)).padStart(2, '0') + ':' + (abs % 1 ? '30' : '00'); };
+  const cal = (S.gcalCals || []).find(c => c.primary) || (S.gcalCals || [])[0] || {id: 'primary'};
+  S.evSheet = {gid: null, calId: cal.id, writable: true, title: '', date: g.iso, start: fmt(g.startH), end: fmt(gridDragEndH(g))};
+  render();
+});
+
 /* GCal-style: tap an empty slot on the week grid = new event at that day+hour */
 function weekGridTap(ev, iso){
   if (!gcalToken()) { selDay(iso); return; }   // no Google: keep old behavior (go to day view)
@@ -1503,7 +1556,7 @@ function calWeekHTML(byDay, evByDay){
       const n = new Date(); const mins = (n.getHours() - H0) * 60 + n.getMinutes();
       return (mins > 0 && mins < (H1 - H0) * 60) ? `<div class="nowline" style="top:${(mins * PPH / 60).toFixed(0)}px"></div>` : '';
     })() : '';
-    return `<div class="wk-col ${iso === todayISO() ? 'now' : ''}" onclick="weekGridTap(event, '${iso}')">${blocks}${nowline}</div>`;
+    return `<div class="wk-col ${iso === todayISO() ? 'now' : ''}" style="position:relative" onclick="weekGridTap(event, '${iso}')" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${blocks}${nowline}</div>`;
   }).join('');
   return head + adRow + `<div class="wk-grid" style="height:${(H1 - H0) * PPH}px"><div class="wk-rail">${rail}</div>${cols}</div>
   <div class="dim mono" style="font-size:10px;margin-top:6px">tap a day header for day view · tap a slot to add an event · number = tasks due</div>`;
@@ -1531,7 +1584,7 @@ function calDayHTML(iso, byDay, evByDay){
   return `${allday.map(e => `<div class="evrow" style="cursor:pointer" onclick="openEv(${e._i})"><span class="mono">all-day</span><span>${esc(e.title)}</span></div>`).join('')}
   ${due.length || doneDay.length ? `<div class="pname">due — ${due.length} open${doneDay.length ? ' · ' + doneDay.length + ' done' : ''}</div>` : ''}
   ${due.map(taskRowHTML).join('')}
-  <div class="daygrid" style="height:${(H1 - H0) * PPH}px" onclick="dayGridTap(event, '${iso}')">${rail}${blocks}${nowLine}</div>
+  <div class="daygrid" style="height:${(H1 - H0) * PPH}px;position:relative" onclick="dayGridTap(event, '${iso}')" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${rail}${blocks}${nowLine}</div>
   <button class="btn" style="width:100%;margin-top:8px" onclick="addForDay()">+ add task due ${iso}</button>
   <div style="height:10px"></div>`;
 }
