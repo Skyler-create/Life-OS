@@ -210,6 +210,12 @@ details.bsec>.ginner{padding:0 10px 10px}
 .evblk b{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--dim);display:block}
 .nowline{position:absolute;left:0;right:0;height:2px;background:var(--focus);z-index:2}
 
+/* compact event/task lines (day-peek in add sheet) */
+.wkline{font-size:12px;padding:2px 0;display:flex;gap:8px;align-items:center}
+.wkline .mono{color:var(--dim);font-size:10px;min-width:42px}
+.wkline i{width:6px;height:6px;border-radius:50%;flex:0 0 auto;display:inline-block}
+.wkline.dim{color:var(--dim)}
+
 /* week grid (google-style) */
 .wk-head{display:flex;margin-bottom:2px}
 .wk-gutter{flex:0 0 30px}
@@ -477,18 +483,34 @@ function calHTML(){
   const sh = S.sheet, y = sh.calY, m = sh.calM;
   const startDow = (new Date(y, m, 1).getDay() + 6) % 7;
   const days = new Date(y, m + 1, 0).getDate();
-  const counts = {};
-  S.tasks.forEach(t => { if (t.due && t.status !== 'done') counts[t.due] = (counts[t.due] || 0) + 1; });
+  const {byDay, evByDay} = calMaps(); // same data as the full CAL tab
   let cells = '';
   for (let i = 0; i < startDow; i++) cells += '<span></span>';
   for (let d = 1; d <= days; d++) {
     const iso = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const n = counts[iso] || 0;
-    cells += `<button class="cal-d ${sh.due === iso ? 'sel' : ''} ${iso === todayISO() ? 'today' : ''}" onclick="setDue('${iso}')">${d}${n ? `<i>${n}</i>` : ''}</button>`;
+    const ts = byDay[iso] || [];
+    const evN = (evByDay[iso] || []).length;
+    const marks = ts.slice(0, 4).map(t => `<i style="background:${(ENERGY[t.energy] || {}).hex || '#666'}"></i>`).join('');
+    cells += `<button class="cal-d big ${sh.due === iso ? 'sel' : ''} ${iso === todayISO() ? 'today' : ''}" onclick="setDue('${iso}')">
+      ${evN ? `<em class="evb">${evN}▸</em>` : ''}<span>${d}</span><div class="marks">${marks}${ts.length > 4 ? '<em>+</em>' : ''}</div></button>`;
   }
   const mn = new Date(y, m, 1).toLocaleString('en-US', {month: 'long', year: 'numeric'});
+  // peek at what's already on the selected day
+  let peek = '';
+  if (sh.due) {
+    const evs = (evByDay[sh.due] || []).slice().sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
+    const ts = byDay[sh.due] || [];
+    const lines = [
+      ...evs.slice(0, 3).map(e => `<div class="wkline"><span class="mono">${e.start_time ? esc(e.start_time) : 'all-day'}</span><span>${esc(e.title)}</span></div>`),
+      ...ts.slice(0, 4).map(t => `<div class="wkline"><i style="background:${(ENERGY[t.energy] || {}).hex || '#666'}"></i><span>${esc(t.title)}${t.est_minutes ? ` <span class="dim">· ${t.est_minutes}m</span>` : ''}</span></div>`),
+    ];
+    const more = (evs.length - 3 > 0 ? evs.length - 3 : 0) + (ts.length - 4 > 0 ? ts.length - 4 : 0);
+    peek = `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
+      <div class="dim mono" style="font-size:10px;margin-bottom:4px">ALREADY ON ${sh.due}: ${evs.length} events · ${ts.length} tasks (${ts.reduce((s, t) => s + (t.est_minutes || 15), 0)}m)</div>
+      ${lines.join('') || '<div class="wkline dim">— clear day</div>'}${more ? `<div class="wkline dim">+${more} more</div>` : ''}</div>`;
+  }
   return `<div class="cal"><div class="cal-h"><button onclick="calNav(-1)">‹</button><span>${mn}</span><button onclick="calNav(1)">›</button></div>
-    <div class="cal-g">${['M','T','W','T','F','S','S'].map(d => `<span class="dow">${d}</span>`).join('')}${cells}</div></div>`;
+    <div class="cal-g">${['M','T','W','T','F','S','S'].map(d => `<span class="dow">${d}</span>`).join('')}${cells}${''}</div>${peek}</div>`;
 }
 function sheetHTML(){
   const sh = S.sheet; if (!sh) return '';
