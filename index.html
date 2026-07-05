@@ -21,7 +21,9 @@
 *{box-sizing:border-box;margin:0;padding:0}
 html{-webkit-text-size-adjust:100%}
 body{background:var(--bg);color:var(--text);font-family:-apple-system,'Segoe UI',Roboto,sans-serif;
-  max-width:600px;margin:0 auto;padding:0 12px 200px;font-size:15px;line-height:1.45}
+  max-width:600px;margin:0 auto;padding:0 12px 200px;font-size:15px;line-height:1.45;
+  touch-action:pan-y;overscroll-behavior-x:none}
+nav,.chips,.chiprow{touch-action:pan-x}
 button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 input,select,textarea{font:inherit;color:var(--text);background:var(--card2);border:1px solid var(--line);
   border-radius:6px;padding:8px 10px;outline:none;width:100%}
@@ -642,19 +644,24 @@ function render(){
 (() => {
   const mainEl = document.getElementById('main');
   let sw = null;
-  mainEl.addEventListener('pointerdown', e => {
+  const excluded = t => t && t.closest && t.closest('nav,#addbar,#sheetroot,#auth,input,textarea,select,.chips,.chiprow,#chatlog');
+  document.addEventListener('pointerdown', e => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
-    if (e.target.closest('input,textarea,select,.chips,.chiprow,#chatlog')) return;
+    if (excluded(e.target)) return;
+    if (S.sheet || S.editing) return;
     sw = {x: e.clientX, y: e.clientY, t: Date.now(), active: false};
   }, {passive: true});
-  mainEl.addEventListener('pointermove', e => {
+  document.addEventListener('pointermove', e => {
     if (!sw) return;
     const dx = e.clientX - sw.x, dy = e.clientY - sw.y;
-    if (!sw.active && Math.abs(dx) > 25 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-      sw.active = true;
-      mainEl.style.userSelect = 'none';
+    if (!sw.active) {
+      if (Math.abs(dy) > 14 && Math.abs(dy) > Math.abs(dx)) { sw = null; return; } // clearly vertical: scrolling wins
+      if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.2) {               // claim horizontal intent EARLY
+        sw.active = true;
+        document.body.style.userSelect = 'none';
+      }
     }
-    if (sw.active) {
+    if (sw && sw.active) {
       mainEl.style.transition = 'none';
       mainEl.style.transform = `translateX(${dx}px)`;
       mainEl.style.opacity = String(Math.max(0.4, 1 - Math.abs(dx) / 600));
@@ -680,9 +687,15 @@ function render(){
   }
   const endSwipe = e => {
     if (!sw) return;
+    if (e.type === 'pointercancel' && !e.clientX && !e.clientY) { // browser stole it and gave us nothing
+      sw = null; document.body.style.userSelect = '';
+      mainEl.style.transition = 'transform .18s ease, opacity .18s';
+      mainEl.style.transform = ''; mainEl.style.opacity = '';
+      return;
+    }
     const dx = e.clientX - sw.x, dy = e.clientY - sw.y, dt = Date.now() - sw.t;
     const wasActive = sw.active; sw = null;
-    mainEl.style.userSelect = '';
+    document.body.style.userSelect = '';
     const snapBack = () => {
       mainEl.style.transition = 'transform .18s cubic-bezier(.2,.8,.3,1), opacity .18s';
       mainEl.style.transform = ''; mainEl.style.opacity = '';
@@ -700,8 +713,8 @@ function render(){
     if (ni < 0 || ni >= VIEWS.length) { snapBack(); return; }
     slideTo(ni, dx < 0 ? 1 : -1);
   };
-  mainEl.addEventListener('pointerup', endSwipe);
-  mainEl.addEventListener('pointercancel', () => { if (sw) { sw = null; mainEl.style.transform = ''; mainEl.style.opacity = ''; mainEl.style.userSelect = ''; } });
+  document.addEventListener('pointerup', endSwipe);
+  document.addEventListener('pointercancel', endSwipe); // gesture stolen mid-drag still commits if it traveled far enough
 })();
 function bionicify(root){
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
