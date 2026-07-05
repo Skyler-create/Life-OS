@@ -1276,14 +1276,18 @@ async function clockOut(){
   if (fo.task_id) {
     // server does the 90%-of-est logic: done + reward, or shrink est and stay open
     const {data, error} = await db.rpc('lifeos_task_clockout', {p_session: fo.id});
-    if (error) { toast('Clock-out failed: ' + error.message); return; }
-    const r = data || {};
-    if (r.completed) toast(`⏹ ${r.minutes}m — task done ✓ +5cr${r.parent_confirm ? ' · goal complete? see TODAY' : ''}`);
-    else if (r.error) toast(`⏹ ${r.minutes || 0}m — ${r.error}`);
-    else toast(`⏹ ${r.minutes}m — ${r.remaining}m left on the task`);
+    if (error) {
+      // never trap the user — end the session anyway
+      await db.from('focus_sessions').update({ended_at: new Date().toISOString()}).eq('id', fo.id);
+      toast('⏹ clocked out (task update skipped)');
+    } else {
+      const r = data || {};
+      if (r.completed) toast(`⏹ ${r.minutes}m — task done ✓ +5cr${r.parent_confirm ? ' · goal complete? see TODAY' : ''}`);
+      else if (r.error) toast(`⏹ ${r.minutes || 0}m — ${r.error}`);
+      else toast(`⏹ ${r.minutes}m — ${r.remaining}m left on the task`);
+    }
   } else {
-    const {error} = await db.from('focus_sessions').update({ended_at: new Date().toISOString()}).eq('id', fo.id);
-    if (error) { toast('Clock-out failed: ' + error.message); return; }
+    await db.from('focus_sessions').update({ended_at: new Date().toISOString()}).eq('id', fo.id);
     const mins = Math.floor((Date.now() - new Date(fo.started_at).getTime()) / 60000);
     toast(`Clocked out — ${mins} min → ~${Math.floor(mins / CREDIT_RATE[fo.energy])} credits`);
   }
@@ -1300,6 +1304,23 @@ async function spendCredits(m){
 }
 /* tick the running timer display */
 setInterval(() => { if (S.focusOpen && S.view === 'today' && !S.editing && !S.sheet && !S.evSheet && !S.wakeChallenge && !S.planEditMode) render(); }, 30000);
+
+/* auto-complete a task-clocked session once it reaches the task's estimate,
+   then DETACH so the clock keeps running as general time (still earning). */
+async function checkTaskAutocomplete(){
+  const fo = S.focusOpen;
+  if (!fo || !fo.task_id) return;
+  const t = S.tasks.find(x => x.id === fo.task_id);
+  if (!t || !t.est_minutes) return;
+  const mins = (Date.now() - new Date(fo.started_at).getTime()) / 60000;
+  if (mins < t.est_minutes) return;
+  const {data, error} = await db.rpc('lifeos_task_autocomplete', {p_session: fo.id});
+  if (error || !data || !data.done) return;
+  if (S.focusOpen) S.focusOpen.task_id = null;   // detached; clock continues as general
+  toast(`✓ ${data.title} done — +5cr, clock still running${data.parent_confirm ? ' · goal complete? see TODAY' : ''}`);
+  loadAll();
+}
+setInterval(checkTaskAutocomplete, 30000);
 
 /* ---- Motion planner: server-packed plan blocks + user plan editor ---- */
 function planBlocksHTML(){
