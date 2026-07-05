@@ -106,6 +106,14 @@ details.goal>summary::-webkit-details-marker{display:none}
 .prow{display:flex;align-items:center;gap:6px;padding:6px 2px;border-bottom:1px solid var(--line);font-size:13px}
 .pdrag{touch-action:none;cursor:grab;color:var(--dim);padding:4px 10px;font-size:17px;flex:0 0 auto}
 .prow .schip{flex:0 0 auto}
+/* plan blocks on calendar grids (dashed = AI/suggestion, solid+📌 = locked) */
+.pblk{position:absolute;left:52px;right:4px;border:1.5px dashed;border-radius:6px;font-size:10px;
+  padding:2px 6px;overflow:hidden;background:rgba(23,24,26,.55);z-index:5;cursor:grab}
+.pblk.locked{border-style:solid;background:rgba(255,255,255,.06)}
+.wk-col .pblk{left:1px;right:1px;font-size:9px;padding:1px 3px}
+/* scrollable 24h grid wrapper — opens at 6 AM, scroll up for 12 AM–6 AM */
+.gridwrap{max-height:62vh;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+  border:1px solid var(--line);border-radius:8px}
 .tmeta .due-today{color:var(--focus)}
 .tmeta .overdue{color:var(--accent)}
 .tmeta .hard{color:var(--accent)}
@@ -389,7 +397,7 @@ async function loadAll(){
     db.from('freezes').select('*').gte('end_date', today).order('start_date'),
     db.from('focus_sessions').select('*').is('ended_at', null).order('started_at', {ascending: false}).limit(1),
     db.rpc('lifeos_credits'),
-    db.from('plan_blocks').select('*').eq('date', today).order('start_min'),
+    db.from('plan_blocks').select('*').gte('date', today).order('date').order('start_min'),
     db.from('lifeos_settings').select('key,value'),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
@@ -860,9 +868,16 @@ function render(){
   if (oldTitle && S.sheet) S.sheet.title = oldTitle.value;
   const oldSheetEl = document.querySelector('#sheetroot .sheet');
   const sheetScroll = oldSheetEl ? oldSheetEl.scrollTop : 0;
-  document.getElementById('sheetroot').innerHTML = S.evSheet ? evSheetHTML() : sheetHTML();
+  document.getElementById('sheetroot').innerHTML = S.dropAsk ? dropAskHTML() : S.evSheet ? evSheetHTML() : sheetHTML();
   const newSheetEl = document.querySelector('#sheetroot .sheet');
   if (newSheetEl && sheetScroll) newSheetEl.scrollTop = sheetScroll;
+  // 24h grids open scrolled to 6 AM; keep the user's grid scroll across re-renders
+  const gw = document.getElementById('gridScroll');
+  if (gw) {
+    const key = S.view + ':' + S.calView + ':' + (S.calSel || '');
+    if (S._gsKey !== key) { gw.scrollTop = +gw.dataset.h6 || 0; S._gsKey = key; S._gsPos = gw.scrollTop; }
+    else gw.scrollTop = S._gsPos ?? (+gw.dataset.h6 || 0);
+  } else { S._gsKey = null; }
   document.querySelector('nav button.on')?.scrollIntoView({block: 'nearest', inline: 'center'});
 }
 
@@ -1289,7 +1304,7 @@ setInterval(() => { if (S.focusOpen && S.view === 'today' && !S.editing && !S.sh
 /* ---- Motion planner: server-packed plan blocks + user plan editor ---- */
 function planBlocksHTML(){
   if (S.planEditMode) return planEditHTML();
-  const bs = (S.planBlocks || []);
+  const bs = (S.planBlocks || []).filter(b => b.date === todayISO());
   const canEdit = !!S.brief;
   if (!bs.length && !canEdit) return '';
   const fmt = m => String(Math.floor(m/60)).padStart(2,'0') + ':' + String(((m%60)+60)%60).padStart(2,'0');
@@ -1298,7 +1313,7 @@ function planBlocksHTML(){
     const isCall = b.kind === 'call';
     return `<div class="evrow" style="margin-bottom:4px;${isCall ? 'opacity:.7' : ''}">
       <span class="mono" style="color:${col}">${fmt(b.start_min)}–${fmt(b.end_min)}</span>
-      <span>${isCall ? '📞 ' : ''}${esc(b.title || '')}</span></div>`;
+      <span>${isCall ? '📞 ' : b.locked ? '📌 ' : b.source === 'soft' ? '💡 ' : ''}${esc(b.title || '')}</span></div>`;
   }).join('');
   return `<div class="card"><h2 style="display:flex;align-items:center">Today's plan
       <span class="dim" style="font-size:11px;font-weight:400;margin-left:6px">· auto-repacks /20min</span>
@@ -1322,8 +1337,8 @@ function planEditRowsHTML(){
       <span class="pdrag" onpointerdown="planDragStart(event)">≡</span>
       <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${done ? 'text-decoration:line-through;color:var(--dim)' : ''}">${esc(p.title || '')}</span>
       <button class="schip" style="color:${col};border-color:${col}" onclick="planEstEdit(${i})">${p.est_minutes || 30}m</button>
-      <button class="schip" title="defer to tomorrow" onclick="planDefer(${i})">⏭</button>
-      <button class="schip" style="color:#E1251B;border-color:#E1251B" title="cut from plan" onclick="planCut(${i})">✕</button>
+      <button class="schip" title="defer: due moves to tomorrow" onclick="planDefer(${i})">⏭</button>
+      <button class="schip" style="color:#E1251B;border-color:#E1251B" title="cut from today's plan only — the task itself stays in TASKS" onclick="planCut(${i})">✕</button>
     </div>`;
   }).join('') || '<div class="dim" style="font-size:12px;padding:6px 0">plan is empty — add tasks below</div>';
 }
@@ -1383,16 +1398,22 @@ async function savePlanEdit(){
   toast('Plan saved & repacked');
   loadAll();
 }
-/* drag-to-reorder: pointer events, works with touch (handle has touch-action:none) */
+/* drag-to-reorder with a floating clone that follows the finger */
 let PDrag = null;
 function planDragStart(e){
   e.preventDefault();
   const row = e.target.closest('[data-pi]'); if (!row) return;
-  PDrag = {from: +row.dataset.pi};
+  const r = row.getBoundingClientRect();
+  const g = row.cloneNode(true);
+  g.style.cssText += ';position:fixed;left:' + r.left + 'px;top:' + r.top + 'px;width:' + r.width + 'px;margin:0;z-index:99;pointer-events:none;background:var(--card);border:1px solid var(--accent);border-radius:8px;box-shadow:0 10px 28px rgba(0,0,0,.55)';
+  document.body.appendChild(g);
+  PDrag = {from: +row.dataset.pi, ghost: g, x0: e.clientX, y0: e.clientY};
   document.body.style.userSelect = 'none';
+  if (navigator.vibrate) navigator.vibrate(10);
 }
 document.addEventListener('pointermove', e => {
   if (!PDrag || !S.planEdit) return;
+  PDrag.ghost.style.transform = `translate(0px, ${e.clientY - PDrag.y0}px)`;
   const el = document.elementFromPoint(e.clientX, e.clientY);
   const row = el && el.closest && el.closest('[data-pi]');
   if (!row) return;
@@ -1405,7 +1426,14 @@ document.addEventListener('pointermove', e => {
     if (box) box.innerHTML = planEditRowsHTML();   // rows only — no scroll jump
   }
 });
-document.addEventListener('pointerup', () => { if (PDrag) { PDrag = null; document.body.style.userSelect = ''; } });
+document.addEventListener('pointerup', () => {
+  if (PDrag) {
+    PDrag.ghost?.remove(); PDrag = null;
+    document.body.style.userSelect = '';
+    const box = document.getElementById('planEditRows');
+    if (box) box.innerHTML = planEditRowsHTML();
+  }
+});
 /* ---- Wake-time targets editor (per weekday, controls credit stakes) ---- */
 const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 function wakeTargetsHTML(){
@@ -1618,39 +1646,9 @@ function briefDayCal(){
   allEvents().forEach((e, i) => e._i = i);
   const evs = allEvents().filter(e => e.date === iso).sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
   const allday = evs.filter(e => !e.start_time), timed = evs.filter(e => e.start_time);
-  const H0 = 6, H1 = 24, PPH = 26;
-  // auto-layout: pack open plan tasks into free gaps from "now" forward — a suggestion, not a schedule
-  const doneT = new Set(S.tasks.filter(isDoneToday).map(t => (t.title || '').toLowerCase()));
-  const openPlan = planItems().filter(p => !doneT.has((p.title || '').toLowerCase()));
-  const busy = timed.map(e => {
-    const [sh, sm] = e.start_time.split(':').map(Number);
-    let end = sh * 60 + sm + 60;
-    if (e.end_time) { const [eh, em] = e.end_time.split(':').map(Number); end = eh * 60 + em; }
-    return [sh * 60 + sm, end];
-  }).sort((a, b) => a[0] - b[0]);
-  const nnow = new Date();
-  let cur = Math.max(H0 * 60, nnow.getHours() * 60 + nnow.getMinutes());
-  const ghosts = [];
-  for (const p of openPlan) {
-    const dur = Math.min(p.est_minutes || 15, 180);
-    let placed = false, guard = 0;
-    while (!placed && guard++ < 60 && cur + dur <= H1 * 60) {
-      const clash = busy.find(([s, e2]) => cur < e2 && cur + dur > s);
-      if (clash) { cur = clash[1]; continue; }
-      ghosts.push({start: cur, dur, title: p.title, energy: p.energy});
-      busy.push([cur, cur + dur]); busy.sort((a, b) => a[0] - b[0]);
-      cur += dur + 10;
-      placed = true;
-    }
-    if (!placed) break;
-  }
-  if (!evs.length && !ghosts.length) return `<div class="dim" style="font-size:12px;padding:4px 0">No events and nothing left on the plan${S.gcalLive ? '' : ' (connect Google on CAL for live events)'} — open day.</div>`;
-  const ghostBlocks = ghosts.map(g => {
-    const top = (g.start - H0 * 60) * (PPH / 60);
-    const h = Math.max(14, g.dur * (PPH / 60));
-    const col = (ENERGY[g.energy] || {}).hex || '#888';
-    return `<div style="position:absolute;left:56px;right:4px;top:${top.toFixed(0)}px;height:${h.toFixed(0)}px;border:1px dashed ${col};border-radius:6px;color:${col};font-size:10px;padding:1px 5px;overflow:hidden;opacity:.85;pointer-events:none;z-index:4">${esc(g.title)} · ${g.dur}m</div>`;
-  }).join('');
+  const H0 = 0, H1 = 24, PPH = 26;   // full 24h; opens scrolled to 6 AM
+  const pbs = (S.planBlocks || []).filter(b => b.date === iso && b.kind !== 'call');
+  if (!evs.length && !pbs.length) return `<div class="dim" style="font-size:12px;padding:4px 0">No events and nothing planned${S.gcalLive ? '' : ' (connect Google on CAL for live events)'} — open day.</div>`;
   const blocks = timed.map(e => {
     const [sh, sm] = e.start_time.split(':').map(Number);
     let dur = 60;
@@ -1659,14 +1657,15 @@ function briefDayCal(){
     const h = Math.max(14, dur * (PPH / 60));
     return `<div class="evblk" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px;cursor:pointer;font-size:10px" onclick="event.stopPropagation();openEv(${e._i})"><b>${esc(e.start_time)}</b> ${esc(e.title)}</div>`;
   }).join('');
-  const rail = [...Array(H1 - H0)].map((_, i) => `<div class="hrow" style="top:${i * PPH}px"><span>${String(H0 + i).padStart(2, '0')}</span></div>`).join('');
+  const rail = [...Array(H1 - H0)].map((_, i) => `<div class="hrow" style="top:${i * PPH}px"><span>${hourLabel(H0 + i).replace(' ', '')}</span></div>`).join('');
   const nowLine = (() => {
     const n = new Date(); const mins = (n.getHours() - H0) * 60 + n.getMinutes();
     return (mins > 0 && mins < (H1 - H0) * 60) ? `<div class="nowline" style="top:${(mins * PPH / 60).toFixed(0)}px"></div>` : '';
   })();
   return allday.map(e => `<div class="evrow" style="cursor:pointer" onclick="openEv(${e._i})"><span class="mono">all-day</span><span>${esc(e.title)}</span></div>`).join('') +
-    `<div class="daygrid" style="height:${(H1 - H0) * PPH}px;position:relative" onclick="dayGridTap(event, '${iso}', ${PPH})" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${rail}${blocks}${ghostBlocks}${nowLine}</div>
-    <div class="dim mono" style="font-size:10px;margin-top:4px">solid = calendar · dashed = plan auto-packed into free time (suggestion, recomputes live)</div>`;
+    `<div class="gridwrap" id="gridScroll" data-h6="${6 * PPH}" onscroll="S._gsPos=this.scrollTop">
+      <div class="daygrid" style="height:${(H1 - H0) * PPH}px;position:relative" onclick="dayGridTap(event, '${iso}', ${PPH})" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${rail}${blocks}${planBlockDivs(iso, H0, PPH, 'day')}${nowLine}</div></div>
+    <div class="dim mono" style="font-size:10px;margin-top:4px">solid = calendar · dashed 💡 = the AI's plan (hold & drag to move) · 📌 = locked by you</div>`;
 }
 
 /* --- REFLECT --- */
@@ -1878,7 +1877,11 @@ function gcalDisconnect(){
   localStorage.removeItem('gtok'); localStorage.removeItem('gconn');
   S.gcalLive = false; S.gcalRange = null; S.gcalEvents = []; S.gcalCals = null; render();
 }
-function allEvents(){ return S.gcalLive ? S.gcalEvents : (S.events || []); }
+function allEvents(){
+  // hide the Google mirrors of our own locked plan blocks (they render as blocks, not events)
+  const mirror = new Set((S.planBlocks || []).map(b => b.gcal_id).filter(Boolean));
+  return (S.gcalLive ? S.gcalEvents : (S.events || [])).filter(e => !mirror.has(e.gid));
+}
 
 /* --- two-way event editing (Google Calendar) --- */
 function openEv(i){
@@ -1951,7 +1954,7 @@ document.addEventListener('pointermove', e => {
   GD.endY = e.clientY;
   GD.ghost.style.height = ((gridDragEndH(GD) - GD.startH) * GD.pph) + 'px';
 }, {passive: true});
-document.addEventListener('touchmove', e => { if (GD && GD.active) e.preventDefault(); }, {passive: false});
+document.addEventListener('touchmove', e => { if ((GD && GD.active) || (BD && BD.active) || PDrag) e.preventDefault(); }, {passive: false});
 document.addEventListener('pointercancel', () => { if (GD) { clearTimeout(GD.timer); GD.ghost?.remove(); document.body.style.userSelect = ''; GD = null; } });
 document.addEventListener('pointerup', () => {
   if (!GD) return;
@@ -1969,11 +1972,152 @@ document.addEventListener('pointerup', () => {
   render();
 });
 
+/* ---- draggable plan blocks (Motion-style) ---- */
+const minToTime = m => String(Math.floor(m/60)).padStart(2,'0') + ':' + String(((m%60)+60)%60).padStart(2,'0');
+const fmt12 = m => { const h = Math.floor(m/60), mm = m%60; const ap = h < 12 ? 'AM' : 'PM'; const h12 = h%12 === 0 ? 12 : h%12; return h12 + (mm ? ':' + String(mm).padStart(2,'0') : '') + ' ' + ap; };
+let BD = null;   // block drag state
+function blockDragStart(ev, id, pph, mode){
+  if (ev.pointerType === 'mouse' && ev.button !== 0) return;
+  const b = (S.planBlocks || []).find(x => x.id === id); if (!b) return;
+  ev.stopPropagation();   // don't start the create-event press underneath
+  const el = ev.currentTarget;
+  BD = {id, pph, mode, b, el, x0: ev.clientX, y0: ev.clientY, active: false,
+        grabY: ev.clientY - el.getBoundingClientRect().top,
+        timer: setTimeout(blockDragActivate, 260)};
+}
+function blockDragActivate(){
+  if (!BD) return;
+  BD.active = true;
+  document.body.style.userSelect = 'none';
+  const r = BD.el.getBoundingClientRect();
+  const g = BD.el.cloneNode(true);
+  g.style.cssText += ';position:fixed;left:' + r.left + 'px;top:' + r.top + 'px;width:' + r.width + 'px;height:' + r.height + 'px;margin:0;z-index:99;pointer-events:none;opacity:.95;box-shadow:0 10px 28px rgba(0,0,0,.55);transform:scale(1.03)';
+  document.body.appendChild(g);
+  BD.ghost = g; BD.rect = r;
+  BD.el.style.opacity = '.25';
+  if (navigator.vibrate) navigator.vibrate(10);
+}
+document.addEventListener('pointermove', e => {
+  if (!BD) return;
+  if (!BD.active) {
+    if (Math.abs(e.clientY - BD.y0) > 10 || Math.abs(e.clientX - BD.x0) > 10) { clearTimeout(BD.timer); BD = null; }
+    return;
+  }
+  BD.lastX = e.clientX; BD.lastY = e.clientY;
+  BD.ghost.style.transform = `translate(${e.clientX - BD.x0}px, ${e.clientY - BD.y0}px) scale(1.03)`;
+}, {passive: true});
+document.addEventListener('pointercancel', () => {
+  if (BD) { clearTimeout(BD.timer); BD.ghost?.remove(); if (BD.el) BD.el.style.opacity = ''; document.body.style.userSelect = ''; BD = null; }
+});
+document.addEventListener('pointerup', e => {
+  if (!BD) return;
+  clearTimeout(BD.timer);
+  const d = BD; BD = null;
+  document.body.style.userSelect = '';
+  if (!d.active) return;
+  d.ghost.remove(); d.el.style.opacity = '';
+  const kill = ev => { ev.stopPropagation(); ev.preventDefault(); };
+  document.addEventListener('click', kill, {capture: true, once: true});
+  setTimeout(() => document.removeEventListener('click', kill, {capture: true}), 150);
+  const x = d.lastX ?? e.clientX, y = d.lastY ?? e.clientY;
+  // target day: week view = column under the pointer; day/brief = same day
+  let iso = d.b.date;
+  if (d.mode === 'week') {
+    const col = document.elementFromPoint(x, Math.min(Math.max(y, 1), innerHeight - 1))?.closest?.('[data-iso]');
+    if (col) iso = col.dataset.iso;
+  }
+  // target start: pointer minus where inside the block the finger grabbed it
+  const colEl = d.mode === 'week'
+    ? (document.querySelector(`[data-iso="${iso}"]`) || d.el.parentElement)
+    : d.el.parentElement;
+  const cr = colEl.getBoundingClientRect();
+  const dur = d.b.end_min - d.b.start_min;
+  let start = Math.round((((y - d.grabY) - cr.top) / d.pph * 60) / 15) * 15;
+  start = Math.max(0, Math.min(start, 1440 - dur));
+  if (iso === d.b.date && start === d.b.start_min) return;   // no-op
+  S.dropAsk = {id: d.b.id, date: iso, start};
+  render();
+});
+function dropAskHTML(){
+  const d = S.dropAsk; if (!d) return '';
+  const b = (S.planBlocks || []).find(x => x.id === d.id); if (!b) { S.dropAsk = null; return ''; }
+  const dur = b.end_min - b.start_min;
+  return `<div class="overlay" onclick="if(event.target===this){S.dropAsk=null;render()}">
+  <div class="sheet">
+    <h2>Move "${esc(b.title || '')}"</h2>
+    <div class="dim" style="font-size:13px;margin-bottom:12px">→ ${d.date === todayISO() ? 'today' : esc(d.date)} · ${fmt12(d.start)}–${fmt12(d.start + dur)}</div>
+    <button class="btn primary" style="width:100%;margin-bottom:8px" onclick="applyDrop('lock')">📌 Lock it — I'll do it exactly then (syncs to Google Calendar)</button>
+    <button class="btn" style="width:100%;margin-bottom:8px" onclick="applyDrop('soft')">💡 Just a suggestion — AI may shift it if things change</button>
+    <button class="btn" style="width:100%;color:var(--dim)" onclick="S.dropAsk=null;render()">Cancel move</button>
+  </div></div>`;
+}
+async function applyDrop(kind){
+  const d = S.dropAsk; S.dropAsk = null;
+  const b = (S.planBlocks || []).find(x => x.id === d.id); if (!b) return;
+  const dur = b.end_min - b.start_min;
+  const patch = {date: d.date, start_min: d.start, end_min: d.start + dur,
+    source: kind === 'lock' ? 'user' : 'soft', locked: kind === 'lock'};
+  S.lastWrite = Date.now();
+  const {error} = await db.from('plan_blocks').update(patch).eq('id', b.id);
+  if (error) { toast('Move failed: ' + error.message); render(); return; }
+  Object.assign(b, patch);
+  if (kind === 'lock') await gcalPushBlock(b);
+  else if (b.gcal_id) await gcalDeleteBlock(b);   // demoted to suggestion → pull it off Google
+  try { S.lastWrite = Date.now(); await db.rpc('lifeos_plan_day', {d: d.date}); } catch (_e) {}
+  toast(kind === 'lock' ? '📌 Locked & synced' : '💡 Suggestion placed');
+  loadAll();
+}
+/* write-back: locked blocks live on Google Calendar as real events */
+async function gcalPushBlock(b){
+  const tok = gcalToken();
+  if (!tok) { toast('Connect Google on CAL — block locked here, not synced yet'); return; }
+  const cal = (S.gcalCals || []).find(c => c.primary) || {id: 'primary'};
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const body = {summary: '🔒 ' + (b.title || 'LifeOS block'),
+    start: {dateTime: b.date + 'T' + minToTime(b.start_min) + ':00', timeZone: tz},
+    end:   {dateTime: b.date + 'T' + minToTime(Math.min(b.end_min, 1439)) + ':00', timeZone: tz},
+    extendedProperties: {private: {lifeos: '1'}}};
+  const url = 'https://www.googleapis.com/calendar/v3/calendars/' + encodeURIComponent(cal.id) + '/events' + (b.gcal_id ? '/' + encodeURIComponent(b.gcal_id) : '');
+  try {
+    const r = await fetch(url, {method: b.gcal_id ? 'PATCH' : 'POST',
+      headers: {Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    if (r.status === 401 || r.status === 403) { gcalAuthLost(); return; }
+    if (r.ok) {
+      const j = await r.json();
+      if (!b.gcal_id) { b.gcal_id = j.id; S.lastWrite = Date.now(); await db.from('plan_blocks').update({gcal_id: j.id}).eq('id', b.id); }
+      S.gcalRange = null;   // force refetch so the mirror stays hidden correctly
+    }
+  } catch (_e) { /* offline — stays local */ }
+}
+async function gcalDeleteBlock(b){
+  const tok = gcalToken(); if (!tok || !b.gcal_id) return;
+  const cal = (S.gcalCals || []).find(c => c.primary) || {id: 'primary'};
+  try {
+    await fetch('https://www.googleapis.com/calendar/v3/calendars/' + encodeURIComponent(cal.id) + '/events/' + encodeURIComponent(b.gcal_id),
+      {method: 'DELETE', headers: {Authorization: 'Bearer ' + tok}});
+  } catch (_e) {}
+  const gid = b.gcal_id; b.gcal_id = null;
+  S.lastWrite = Date.now();
+  await db.from('plan_blocks').update({gcal_id: null}).eq('id', b.id);
+  S.gcalRange = null;
+}
+/* shared renderer: plan blocks inside a day column (day view, week view, brief) */
+function planBlockDivs(iso, H0, PPH, mode){
+  return (S.planBlocks || []).filter(b => b.date === iso && b.kind !== 'call').map(b => {
+    const col = (ENERGY[b.energy] || {}).hex || '#888';
+    const top = (b.start_min - H0 * 60) * (PPH / 60);
+    const h = Math.max(mode === 'week' ? 16 : 20, (b.end_min - b.start_min) * (PPH / 60));
+    return `<div class="pblk ${b.locked ? 'locked' : ''}" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px;border-color:${col};color:${col}"
+      onpointerdown="blockDragStart(event, '${b.id}', ${PPH}, '${mode}')" onclick="event.stopPropagation()">
+      ${b.locked ? '📌' : '💡'} ${esc(b.title || '')}${mode === 'week' ? '' : ` · ${b.end_min - b.start_min}m`}</div>`;
+  }).join('');
+}
+
 /* GCal-style: tap an empty slot on the week grid = new event at that day+hour */
 function weekGridTap(ev, iso){
   if (!gcalToken()) { selDay(iso); return; }   // no Google: keep old behavior (go to day view)
   const r = ev.currentTarget.getBoundingClientRect();
-  const hr = Math.min(23, Math.max(0, 6 + Math.floor((ev.clientY - r.top) / 44)));
+  const hr = Math.min(23, Math.max(0, Math.floor((ev.clientY - r.top) / 44)));   // 24h grid starts at 12 AM
   const cal = (S.gcalCals || []).find(c => c.primary) || (S.gcalCals || [])[0] || {id: 'primary'};
   S.evSheet = {gid: null, calId: cal.id, writable: true, title: '', date: iso, start: String(hr).padStart(2, '0') + ':00', end: ''};
   render();
@@ -1982,7 +2126,7 @@ function weekGridTap(ev, iso){
 function dayGridTap(ev, iso, pph){
   if (!gcalToken()) { toast('Connect Google on the CAL tab first'); return; }
   const r = ev.currentTarget.getBoundingClientRect();
-  const hr = Math.min(23, Math.max(0, 6 + Math.floor((ev.clientY - r.top) / (pph || 48))));
+  const hr = Math.min(23, Math.max(0, Math.floor((ev.clientY - r.top) / (pph || 48))));   // 24h grid starts at 12 AM
   const cal = (S.gcalCals || []).find(c => c.primary) || (S.gcalCals || [])[0] || {id: 'primary'};
   S.evSheet = {gid: null, calId: cal.id, writable: true, title: '', date: iso, start: String(hr).padStart(2, '0') + ':00', end: ''};
   render();
@@ -2067,9 +2211,25 @@ async function loadGcal(anchorISO){
     });
     out.sort((a, b) => a.date.localeCompare(b.date) || (a.start_time || '').localeCompare(b.start_time || ''));
     S.gcalEvents = out; S.gcalRange = key; S.gcalLive = true;
+    syncEventsTable(out, start.toLocaleDateString('sv-SE'), end.toLocaleDateString('sv-SE'));  // fire-and-forget pull sync
   } catch (_e) { /* keep table fallback */ }
   S.gcalLoading = false;
   render();
+}
+/* PULL SYNC: mirror live Google events into the events table so the server
+   packer sees real busy blocks. Keyed by window replace; triggers a repack. */
+async function syncEventsTable(evts, lo, hi){
+  try {
+    S.lastWrite = Date.now();
+    await db.from('events').delete().eq('source', 'gcal').gte('date', lo).lte('date', hi);
+    const rows = evts.map(e => ({date: e.date, start_time: e.start_time, end_time: e.end_time,
+      title: e.title, source: 'gcal', gid: e.gid, cal: e.cal}));
+    for (let i = 0; i < rows.length; i += 200) {
+      S.lastWrite = Date.now();
+      await db.from('events').insert(rows.slice(i, i + 200));
+    }
+    S.events = rows;   // keep fallback cache warm too
+  } catch (_e) { /* offline — next load */ }
 }
 
 function calMaps(){
@@ -2132,7 +2292,7 @@ function calMonthHTML(byDay, evByDay){
 function calWeekHTML(byDay, evByDay){
   const anchor = fromISO(S.calSel);
   const mon = new Date(anchor); mon.setDate(anchor.getDate() - ((anchor.getDay() + 6) % 7));
-  const H0 = 6, H1 = 24, PPH = 44;
+  const H0 = 0, H1 = 24, PPH = 44;   // full 24h; wrapper opens scrolled to 6 AM
   const days = [...Array(7)].map((_, i) => { const d = new Date(mon); d.setDate(mon.getDate() + i); return d; });
   const isos = days.map(d => d.toLocaleDateString('sv-SE'));
   const head = `<div class="wk-head"><span class="wk-gutter"></span>${days.map((d, i) => {
@@ -2144,7 +2304,7 @@ function calWeekHTML(byDay, evByDay){
   const allday = isos.map(iso => (evByDay[iso] || []).filter(e => !e.start_time));
   const adRow = allday.some(a => a.length) ? `<div class="wk-allday"><span class="wk-gutter"></span>${allday.map(a =>
     `<div class="wk-ad-cell">${a.slice(0, 2).map(e => `<div class="wk-banner">${esc(e.title)}</div>`).join('')}${a.length > 2 ? `<div class="wk-banner more">+${a.length - 2}</div>` : ''}</div>`).join('')}</div>` : '';
-  const rail = [...Array(H1 - H0)].map((_, i) => `<div class="hrow" style="top:${i * PPH}px"><span>${String(H0 + i).padStart(2, '0')}</span></div>`).join('');
+  const rail = [...Array(H1 - H0)].map((_, i) => `<div class="hrow" style="top:${i * PPH}px"><span>${hourLabel(H0 + i).replace(' ', '')}</span></div>`).join('');
   const cols = isos.map(iso => {
     const timed = (evByDay[iso] || []).filter(e => e.start_time);
     const blocks = timed.map(e => {
@@ -2159,16 +2319,18 @@ function calWeekHTML(byDay, evByDay){
       const n = new Date(); const mins = (n.getHours() - H0) * 60 + n.getMinutes();
       return (mins > 0 && mins < (H1 - H0) * 60) ? `<div class="nowline" style="top:${(mins * PPH / 60).toFixed(0)}px"></div>` : '';
     })() : '';
-    return `<div class="wk-col ${iso === todayISO() ? 'now' : ''}" style="position:relative" onclick="weekGridTap(event, '${iso}')" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${blocks}${nowline}</div>`;
+    return `<div class="wk-col ${iso === todayISO() ? 'now' : ''}" data-iso="${iso}" style="position:relative" onclick="weekGridTap(event, '${iso}')" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${blocks}${planBlockDivs(iso, H0, PPH, 'week')}${nowline}</div>`;
   }).join('');
-  return head + adRow + `<div class="wk-grid" style="height:${(H1 - H0) * PPH}px"><div class="wk-rail">${rail}</div>${cols}</div>
-  <div class="dim mono" style="font-size:10px;margin-top:6px">tap a day header for day view · tap a slot to add an event · number = tasks due</div>`;
+  return head + adRow + `<div class="gridwrap" id="gridScroll" data-h6="${6 * PPH}" onscroll="S._gsPos=this.scrollTop">
+    <div class="wk-grid" style="height:${(H1 - H0) * PPH}px"><div class="wk-rail">${rail}</div>${cols}</div></div>
+  <div class="dim mono" style="font-size:10px;margin-top:6px">tap day header = day view · tap slot = new event · hold & drag 💡 blocks to replan (across days too) · 📌 = locked</div>`;
 }
+const hourLabel = h => h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 PM' : (h - 12) + ' PM';
 function calDayHTML(iso, byDay, evByDay){
   const evs = (evByDay[iso] || []).slice().sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
   const allday = evs.filter(e => !e.start_time);
   const timed = evs.filter(e => e.start_time);
-  const H0 = 6, H1 = 24, PPH = 48;
+  const H0 = 0, H1 = 24, PPH = 48;   // full 24h; wrapper opens scrolled to 6 AM
   const blocks = timed.map(e => {
     const [sh, sm] = e.start_time.split(':').map(Number);
     let dur = 60;
@@ -2177,7 +2339,7 @@ function calDayHTML(iso, byDay, evByDay){
     const h = Math.max(22, dur * (PPH / 60));
     return `<div class="evblk" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px;cursor:pointer" onclick="event.stopPropagation();openEv(${e._i})"><b>${esc(e.start_time)}${e.end_time ? '–' + esc(e.end_time) : ''}</b>${esc(e.title)}${e.cal && !e.writable ? ' 🔒' : ''}</div>`;
   }).join('');
-  const rail = [...Array(H1 - H0)].map((_, i) => `<div class="hrow" style="top:${i * PPH}px"><span>${String(H0 + i).padStart(2, '0')}:00</span></div>`).join('');
+  const rail = [...Array(H1 - H0)].map((_, i) => `<div class="hrow" style="top:${i * PPH}px"><span>${hourLabel(H0 + i)}</span></div>`).join('');
   const nowLine = iso === todayISO() ? (() => {
     const n = new Date(); const mins = (n.getHours() - H0) * 60 + n.getMinutes();
     return (mins > 0 && mins < (H1 - H0) * 60) ? `<div class="nowline" style="top:${(mins * PPH / 60).toFixed(0)}px"></div>` : '';
@@ -2187,7 +2349,10 @@ function calDayHTML(iso, byDay, evByDay){
   return `${allday.map(e => `<div class="evrow" style="cursor:pointer" onclick="openEv(${e._i})"><span class="mono">all-day</span><span>${esc(e.title)}</span></div>`).join('')}
   ${due.length || doneDay.length ? `<div class="pname">due — ${due.length} open${doneDay.length ? ' · ' + doneDay.length + ' done' : ''}</div>` : ''}
   ${due.map(taskRowHTML).join('')}
-  <div class="daygrid" style="height:${(H1 - H0) * PPH}px;position:relative" onclick="dayGridTap(event, '${iso}', ${PPH})" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${rail}${blocks}${nowLine}</div>
+  <div class="gridwrap" id="gridScroll" data-h6="${6 * PPH}" onscroll="S._gsPos=this.scrollTop">
+    <div class="daygrid" style="height:${(H1 - H0) * PPH}px;position:relative" onclick="dayGridTap(event, '${iso}', ${PPH})" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${rail}${blocks}${planBlockDivs(iso, H0, PPH, 'day')}${nowLine}</div>
+  </div>
+  <div class="dim mono" style="font-size:10px;margin-top:4px">solid = calendar · dashed 💡 = plan (hold & drag to move) · 📌 = locked</div>
   <button class="btn" style="width:100%;margin-top:8px" onclick="addForDay()">+ add task due ${iso}</button>
   <div style="height:10px"></div>`;
 }
