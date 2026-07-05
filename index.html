@@ -1013,7 +1013,7 @@ function rToday(){
     (a.status === 'done') - (b.status === 'done') ||
     (a.due || '9999').localeCompare(b.due || '9999') ||
     (PRIO[b.priority] || 2) - (PRIO[a.priority] || 2));
-  return shCard + meter + capacityWarnHTML() + planBlocksHTML() + creditsCardHTML() + evCard +
+  return wakeChallengeHTML() + shCard + meter + capacityWarnHTML() + planBlocksHTML() + creditsCardHTML() + evCard +
     (bar ? `<div class="card"><h2>Today's energy</h2>${bar}</div>` : '') +
     chipsHTML() +
     (sorted.length ? sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — add a task below or check TASKS.</div>`);
@@ -1090,6 +1090,8 @@ async function clockOut(){
   const mins = Math.floor((Date.now() - new Date(S.focusOpen.started_at).getTime()) / 60000);
   toast(`Clocked out — ${mins} min → ~${Math.floor(mins / CREDIT_RATE[S.focusOpen.energy])} credits`);
   S.focusOpen = null; loadAll();
+  // Cancel the focus alarm on clock-out (the "LifeOS Focus Stop" shortcut toggles the alarm off).
+  try { if (/iPhone|iPad/.test(navigator.userAgent)) location.href = `shortcuts://run-shortcut?name=LifeOS%20Focus%20Stop`; } catch(e){}
 }
 async function spendCredits(m){
   if (!confirm(`Spend ${m} credits for ${m} minutes of scroll time?`)) return;
@@ -1144,6 +1146,81 @@ async function saveWakeTarget(dow, field, value){
   if (error) { toast('Save failed: ' + error.message); return; }
   toast(`${DOW[dow]} ${field} → ${value}`); loadAll();
 }
+
+/* ---- Wake challenge: prove you're awake before free credits unlock ---- */
+function wakeChallengeNeeded(){ return !(S.todayLog && S.todayLog.wake_confirmed_at); }
+function _shuffle(a){ a = a.slice(); for (let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
+function buildWakeQuestions(){
+  const pool = (S.cards || []).filter(c => c.back && c.front);
+  const backs = [...new Set(pool.map(c => c.back))];
+  return _shuffle(pool).slice(0, 7).map(c => {
+    const distract = _shuffle(backs.filter(b => b !== c.back)).slice(0, 3);
+    const options = _shuffle([c.back, ...distract]);
+    return { front: c.front, options, answer: options.indexOf(c.back) };
+  }).filter(q => q.options.length >= 2);
+}
+function wakeLearnHTML(){
+  const md = S.brief?.content_md || '';
+  const m = md.match(/##\s*CALL LEARNING[\s\S]*?(?=\n##\s|$)/i);
+  return m ? esc(m[0]).replace(/\n/g, '<br>') : '';
+}
+function wakeChallengeHTML(){
+  if (!wakeChallengeNeeded()) return '';
+  const wc = S.wakeChallenge;
+  const skip = `<button class="btn" style="margin-left:6px" onclick="overrideWake()">I'm up, gotta run (no bonus)</button>`;
+  if (!wc){
+    return `<div class="card" style="border-color:var(--accent)"><h2>☀️ Wake challenge</h2>
+      <div class="dim" style="font-size:12px;margin-bottom:8px">Free credits are locked until you prove you're awake. Your credit clock starts when you finish.</div>
+      <button class="btn primary" onclick="startWakeChallenge()">Start</button>${skip}</div>`;
+  }
+  if (wc.step === 'learn'){
+    return `<div class="card" style="border-color:var(--accent)"><h2>☀️ Today's read</h2>
+      <div class="md" style="max-height:42vh;overflow:auto;font-size:13px;line-height:1.5">${wc.learnHTML || '<span class="dim">No learning today — straight to the quiz.</span>'}</div>
+      <button class="btn primary" style="margin-top:8px" onclick="wakeToQuiz()">Quiz me</button>${skip}</div>`;
+  }
+  const q = wc.questions[wc.idx];
+  if (!q) return '';
+  const opts = q.options.map((o,i) => {
+    let extra = '';
+    if (wc.picked != null){
+      if (i === q.answer) extra = ';border-color:var(--done);color:var(--done)';
+      else if (i === wc.picked) extra = ';border-color:#E1251B;color:#E1251B';
+    }
+    return `<button class="btn" style="display:block;width:100%;text-align:left;margin-bottom:6px${extra}" onclick="answerWake(${i})">${esc(o)}</button>`;
+  }).join('');
+  return `<div class="card" style="border-color:var(--accent)"><h2>☀️ Wake quiz ${wc.idx+1}/${wc.questions.length}</h2>
+    <div class="dim" style="font-size:11px;margin-bottom:8px">${wc.correct}/${Math.min(3, wc.questions.length)} correct — 3 unlocks your credits</div>
+    <div style="font-weight:600;margin-bottom:8px">${esc(q.front)}</div>${opts}
+    ${wc.picked != null ? `<button class="btn primary" style="margin-top:4px" onclick="nextWake()">${wc.idx+1 < wc.questions.length ? 'Next' : 'Finish'}</button>` : ''}${skip}</div>`;
+}
+function startWakeChallenge(){
+  const qs = buildWakeQuestions(); const learn = wakeLearnHTML();
+  if (!qs.length && !learn){ toast('No cards or reading today — marking you awake'); confirmWake('challenge'); return; }
+  S.wakeChallenge = { step: learn ? 'learn' : 'quiz', learnHTML: learn, questions: qs, idx: 0, picked: null, correct: 0 };
+  render();
+}
+function wakeToQuiz(){ if (!S.wakeChallenge.questions.length){ confirmWake('challenge'); return; } S.wakeChallenge.step = 'quiz'; render(); }
+function answerWake(i){ if (S.wakeChallenge.picked != null) return; S.wakeChallenge.picked = i; render(); }
+function wakeNeed(){ return Math.min(3, (S.wakeChallenge?.questions.length) || 3); }
+function nextWake(){
+  const wc = S.wakeChallenge, q = wc.questions[wc.idx];
+  if (wc.picked === q.answer) wc.correct++;
+  wc.idx++; wc.picked = null;
+  if (wc.correct >= wakeNeed()){ confirmWake('challenge'); return; }   // 3 correct -> unlocked, stop early
+  if (wc.idx >= wc.questions.length){
+    toast(`${wc.correct}/${wakeNeed()} correct — not there yet, again`);
+    S.wakeChallenge = { step:'quiz', learnHTML: wc.learnHTML, questions: buildWakeQuestions(), idx:0, picked:null, correct:0 };
+  }
+  render();
+}
+async function confirmWake(method){
+  const {error} = await db.from('daily_log').upsert({ date: todayISO(), wake_confirmed_at: new Date().toISOString(), wake_method: method });
+  if (error){ toast('Save failed: ' + error.message); return; }
+  S.wakeChallenge = null;
+  toast(method === 'challenge' ? 'Wake confirmed — credits unlocked' : 'Marked awake — no bonus today');
+  loadAll();
+}
+function overrideWake(){ if (confirm('Skip the challenge? No free wake credits today.')) confirmWake('override'); }
 
 /* live "what do I need tonight" meter */
 function rMeter(){
