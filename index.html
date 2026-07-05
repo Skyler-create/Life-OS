@@ -89,6 +89,18 @@ nav button.on::before{content:"";display:inline-block;width:6px;height:6px;borde
 .tname{word-wrap:break-word}
 .trow.isdone .tname{color:var(--dim);text-decoration:line-through}
 .tmeta{font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:2px;display:flex;gap:8px;flex-wrap:wrap}
+/* per-task start button — right edge, far from the complete-circle on the left */
+.tstart{flex:0 0 auto;width:38px;height:38px;border-radius:10px;border:1px solid var(--line);
+  background:transparent;color:var(--done);font-size:15px;margin-left:10px;cursor:pointer;align-self:center}
+.tstart.on{border-color:var(--accent);color:var(--accent)}
+/* 3-layer: goal rows + nested children */
+details.goal{margin-bottom:6px}
+details.goal>summary{list-style:none;cursor:pointer}
+details.goal>summary::-webkit-details-marker{display:none}
+.gprog{flex:0 0 auto;font-family:var(--mono);font-size:11px;border:1px solid var(--line);
+  border-radius:10px;padding:4px 7px;color:var(--dim);margin-top:1px}
+.gprog.alldone{border-color:var(--done);color:var(--done)}
+.gkids{margin:2px 0 4px 14px;border-left:2px solid var(--line);padding-left:8px}
 .tmeta .due-today{color:var(--focus)}
 .tmeta .overdue{color:var(--accent)}
 .tmeta .hard{color:var(--accent)}
@@ -467,7 +479,7 @@ function subscribeRealtime(){
       // ignore the echo of our own writes — they're already on screen
       if (Date.now() - (S.lastWrite || 0) < 2500) return;
       clearTimeout(rtTimer);
-      rtTimer = setTimeout(() => { if (!S.editing && !S.sending && !S.sheet) loadAll(); }, 600);
+      rtTimer = setTimeout(() => { if (!S.editing && !S.sending && !S.sheet && !S.wakeChallenge) loadAll(); }, 600);
     })
     .subscribe();
 }
@@ -494,9 +506,12 @@ async function cycleTask(id){
   else if (isPartialToday(t))         patch = {status:'not_started', completed_at:null, partial_date:null};
   else                                patch = {status:'done', completed_at:new Date().toISOString(), partial_date:null};
   Object.assign(t, patch);
-  // patch just this row in place — no full re-render, no flicker
+  // patch just this row in place — no full re-render, no flicker.
+  // Children re-render fully so the goal's n/m progress + confirm card update
+  // (render() preserves scroll, so no jump).
   const node = document.getElementById('t-' + id);
-  if (node) { const tmp = document.createElement('div'); tmp.innerHTML = taskRowHTML(t); node.replaceWith(tmp.firstElementChild); }
+  if (t.parent_id) render();
+  else if (node) { const tmp = document.createElement('div'); tmp.innerHTML = taskRowHTML(t); node.replaceWith(tmp.firstElementChild); }
   else render();
   S.lastWrite = Date.now();
   const {error} = await db.from('tasks').update(patch).eq('id', id);
@@ -594,7 +609,7 @@ function sheetHTML(){
   const sh = S.sheet; if (!sh) return '';
   const ests = [15, 30, 45, 60, 90, 120, 180, 240];
   window._projList = distinctProjects();
-  const chunkHint = sh.energy === 'DEEP' ? 'over 90m gets auto-chunked into 90s' : 'over 60m gets auto-chunked into 60s';
+  const chunkHint = sh.energy === 'DEEP' ? 'over 90m auto-splits into a goal + 90m subtasks' : 'over 60m auto-splits into a goal + 60m subtasks';
   return `<div class="overlay" onclick="if(event.target===this){S.sheet=null;render()}">
   <div class="sheet">
     <h2>New task ${sh.bucket === 'backlog' ? '(backlog)' : ''}</h2>
@@ -652,7 +667,8 @@ async function saveEdit(id){
   S.editing = null; loadAll();
 }
 async function deleteTask(id){
-  if (!confirm('Delete this task?')) return;
+  const nKids = ((S._kids || {})[id] || []).length;
+  if (!confirm(nKids ? `Delete this goal AND its ${nKids} subtasks?` : 'Delete this task?')) return;
   await db.from('tasks').delete().eq('id', id);
   S.editing = null; loadAll();
 }
@@ -666,8 +682,8 @@ function weight(item, _maxMin){
 }
 function planItems(){
   if (S.brief?.plan?.length) return S.brief.plan;
-  // fallback: tasks due today (any status) = the day's implicit plan
-  return S.tasks.filter(t => t.bucket === 'active' && t.due === todayISO());
+  // fallback: tasks due today (any status) = the day's implicit plan (goals excluded — they're containers)
+  return S.tasks.filter(t => t.bucket === 'active' && t.due === todayISO() && !((S._kids || {})[t.id] || []).length);
 }
 function computeScore(readBrief){
   const plan = planItems();
@@ -774,6 +790,9 @@ function setView(v){ S.view = v; S.editing = null; localStorage.setItem('view', 
 function setFilt(f){ S.filt = f; localStorage.setItem('filt', f); render(); }
 
 function render(){
+  // parent_id → children map, rebuilt once per render (3-layer tasks)
+  S._kids = {};
+  S.tasks.forEach(t => { if (t.parent_id) (S._kids[t.parent_id] = S._kids[t.parent_id] || []).push(t); });
   document.getElementById('nav').innerHTML = VIEWS.map(([v, l]) =>
     `<button class="${S.view === v ? 'on' : ''}" onclick="setView('${v}')">${l}</button>`).join('');
   const streak = S.prevLog || S.todayLog;
@@ -798,7 +817,15 @@ function render(){
   render._lastView = S.view;
   if (sameView) main.scrollTop = savedScroll;
   document.getElementById('addbar').classList.toggle('hidden', !(S.view === 'today' || S.view === 'tasks') || !!S.sheet);
+  // New-task sheet: every chip tap re-renders the sheet, which used to reset its
+  // scroll to the top AND wipe a half-typed title. Carry both across the rebuild.
+  const oldTitle = document.getElementById('sh-title');
+  if (oldTitle && S.sheet) S.sheet.title = oldTitle.value;
+  const oldSheetEl = document.querySelector('#sheetroot .sheet');
+  const sheetScroll = oldSheetEl ? oldSheetEl.scrollTop : 0;
   document.getElementById('sheetroot').innerHTML = S.evSheet ? evSheetHTML() : sheetHTML();
+  const newSheetEl = document.querySelector('#sheetroot .sheet');
+  if (newSheetEl && sheetScroll) newSheetEl.scrollTop = sheetScroll;
   document.querySelector('nav button.on')?.scrollIntoView({block: 'nearest', inline: 'center'});
 }
 
@@ -954,6 +981,13 @@ function taskRowHTML(t){
     t.status === 'in_progress' && !isPartialToday(t) ? `<span>in progress</span>` : '',
   ].filter(Boolean).join('');
   const editor = S.editing === t.id ? editorHTML(t) : '';
+  // ▶ start-task button: right edge (complete-circle is far left — no misclicks).
+  // Hidden on done rows and goal rows (goals aren't directly workable).
+  const isGoal = !!((S._kids || {})[t.id] || []).length;
+  const running = S.focusOpen && S.focusOpen.task_id === t.id;
+  const startBtn = (t.status === 'done' || isGoal) ? ''
+    : running ? `<button class="tstart on" onclick="event.stopPropagation();clockOut()" title="Clock out">⏹</button>`
+    : `<button class="tstart" onclick="event.stopPropagation();startTask('${t.id}')" title="Start task">▶</button>`;
   return `<div class="trow ${t.status === 'done' ? 'isdone' : ''}" id="t-${t.id}" style="--rail:${en.color || 'var(--line)'}">
     <button onclick="cycleTask('${t.id}')" style="display:contents">${circle}</button>
     <div class="tbody" onclick="S.editing = S.editing === '${t.id}' ? null : '${t.id}'; render()">
@@ -961,7 +995,63 @@ function taskRowHTML(t){
       <div class="tmeta">${meta}</div>
       ${editor}
     </div>
+    ${startBtn}
   </div>`;
+}
+/* --- 3-layer: goal row (L2) with nested children (L3) --- */
+function tgGoal(id, open){ if (open) S.openGroups.add('g:' + id); else S.openGroups.delete('g:' + id); }
+function goalRowHTML(g){
+  const kids = ((S._kids || {})[g.id] || []).slice()
+    .sort((a, b) => (a.chunk_index || 99) - (b.chunk_index || 99) || (a.title || '').localeCompare(b.title || ''));
+  const shown = S.filt === 'ALL' ? kids : kids.filter(k => k.energy === S.filt || k.status === 'done');
+  const done = kids.filter(k => k.status === 'done').length;
+  const en = ENERGY[g.energy] || {};
+  const open = S.expandAll || S.openGroups.has('g:' + g.id) || !!S.search;
+  const est = kids.filter(k => k.status !== 'done').reduce((s, k) => s + (k.est_minutes || 0), 0);
+  const meta = [
+    g.project ? `<span>${esc(g.project)}</span>` : '',
+    `<span>${done}/${kids.length} done</span>`,
+    est ? `<span>${est}m left</span>` : '',
+    dueTag(g),
+    g.deadline_type === 'hard' ? `<span class="hard">HARD</span>` : '',
+  ].filter(Boolean).join('');
+  const editor = S.editing === g.id ? editorHTML(g) : '';
+  return `<details class="goal" ${open ? 'open' : ''} ontoggle="tgGoal('${g.id}', this.open)">
+    <summary class="trow" style="--rail:${en.color || 'var(--line)'}">
+      <span class="gprog ${done === kids.length ? 'alldone' : ''}">${done}/${kids.length}</span>
+      <div class="tbody"><div class="tname">🎯 ${esc(g.title)}</div><div class="tmeta">${meta}</div>${editor}</div>
+      <button class="tstart" style="color:var(--dim)" title="Edit goal"
+        onclick="event.preventDefault();event.stopPropagation();S.editing = S.editing === '${g.id}' ? null : '${g.id}'; render()">✎</button>
+    </summary>
+    <div class="gkids">${shown.map(taskRowHTML).join('') || '<div class="empty" style="padding:8px">no subtasks match the filter</div>'}</div>
+  </details>`;
+}
+/* goal-confirm card: all children done → ask, don't assume */
+function goalConfirmsHTML(){
+  const dismissed = new Set(JSON.parse(localStorage.getItem('goalConfirmSkip') || '[]'));
+  const kids = S._kids || {};
+  const ready = S.tasks.filter(t => !t.parent_id && (kids[t.id] || []).length
+    && t.status !== 'done' && kids[t.id].every(c => c.status === 'done') && !dismissed.has(t.id));
+  return ready.map(g => `<div class="card" style="border-color:var(--done)"><h2>🎯 Goal complete?</h2>
+    <div style="font-weight:600;margin-bottom:4px">${esc(g.title)}</div>
+    <div class="dim" style="font-size:12px;margin-bottom:8px">All ${kids[g.id].length} subtasks are done. Actually finished, or were those just milestones?</div>
+    <div style="display:flex;gap:8px">
+      <button class="btn primary" onclick="confirmGoal('${g.id}')">Done — close it (+15cr)</button>
+      <button class="btn" onclick="skipGoalConfirm('${g.id}')">Keep open</button>
+    </div></div>`).join('');
+}
+async function confirmGoal(id){
+  S.lastWrite = Date.now();
+  const {error} = await db.from('tasks').update({status: 'done', completed_at: new Date().toISOString()}).eq('id', id);
+  if (error) { toast('Save failed: ' + error.message); return; }
+  toast('🎯 Goal closed — +15 credits');
+  loadAll();
+}
+function skipGoalConfirm(id){
+  const l = JSON.parse(localStorage.getItem('goalConfirmSkip') || '[]');
+  if (!l.includes(id)) l.push(id);
+  localStorage.setItem('goalConfirmSkip', JSON.stringify(l));
+  render();
 }
 function editorHTML(t){
   const opt = (list, cur) => list.map(([v, l]) => `<option value="${v}" ${v === (cur ?? '') ? 'selected' : ''}>${l}</option>`).join('');
@@ -988,7 +1078,8 @@ function editorHTML(t){
 /* --- TODAY --- */
 function rToday(){
   const today = todayISO();
-  const active = S.tasks.filter(t => t.bucket === 'active');
+  const kids = S._kids || {};
+  const active = S.tasks.filter(t => t.bucket === 'active' && !(kids[t.id] || []).length); // goals are containers, not deck items
   const todays = active.filter(t =>
     (t.due && t.due <= today && t.status !== 'done') ||
     t.status === 'in_progress' || isPartialToday(t) || isDoneToday(t));
@@ -1013,7 +1104,7 @@ function rToday(){
     (a.status === 'done') - (b.status === 'done') ||
     (a.due || '9999').localeCompare(b.due || '9999') ||
     (PRIO[b.priority] || 2) - (PRIO[a.priority] || 2));
-  return wakeChallengeHTML() + shCard + meter + capacityWarnHTML() + planBlocksHTML() + creditsCardHTML() + evCard +
+  return wakeChallengeHTML() + goalConfirmsHTML() + shCard + meter + capacityWarnHTML() + planBlocksHTML() + creditsCardHTML() + evCard +
     (bar ? `<div class="card"><h2>Today's energy</h2>${bar}</div>` : '') +
     chipsHTML() +
     (sorted.length ? sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — add a task below or check TASKS.</div>`);
@@ -1047,51 +1138,86 @@ function creditsCardHTML(){
   const c = S.credits;
   if (!c) return '';
   const fo = S.focusOpen;
+  const spent = c.spent ?? ((c.windows || 0) + (c.metered || 0));
+  const pct = Math.min(100, Math.round(spent / Math.max(c.gross, 1) * 100));
+  const stat = (v, label, color) => `<div style="flex:1;text-align:center">
+      <div class="mono" style="font-size:24px;font-weight:700;${color ? 'color:' + color : ''}">${v}</div>
+      <div class="dim" style="font-size:10px;letter-spacing:.08em;font-family:var(--mono)">${label}</div></div>`;
   let timer;
   if (fo) {
     const mins = Math.floor((Date.now() - new Date(fo.started_at).getTime()) / 60000);
+    const tTitle = fo.task_id ? (S.tasks.find(x => x.id === fo.task_id)?.title || 'task') : null;
     timer = `<div style="display:flex;align-items:center;gap:10px">
       <span class="mono" style="font-size:20px;font-weight:700;color:${(ENERGY[fo.energy] || {}).hex}">⏱ ${Math.floor(mins/60)}:${String(mins%60).padStart(2,'0')}</span>
-      <span class="dim" style="font-size:11px">${fo.energy} · +1cr/${CREDIT_RATE[fo.energy]}min · ~${Math.floor(mins / CREDIT_RATE[fo.energy])}cr this session</span>
-      <button class="btn primary" style="margin-left:auto" onclick="clockOut()">Clock out</button></div>`;
+      <span class="dim" style="font-size:11px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${tTitle ? '▶ ' + esc(tTitle) : fo.energy + ' (general)'} · ~${Math.floor(mins / CREDIT_RATE[fo.energy])}cr</span>
+      <button class="btn primary" style="margin-left:auto;flex:0 0 auto" onclick="clockOut()">Clock out</button></div>`;
   } else {
     timer = `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
       <span class="dim" style="font-size:11px">Clock in:</span>
-      ${['DEEP','FOCUS','LIGHT'].map(e => `<button class="schip" style="border-color:${ENERGY[e].hex};color:${ENERGY[e].hex}" onclick="clockIn('${e}')">${e} · ${CREDIT_RATE[e]}m/cr</button>`).join('')}</div>`;
+      ${['DEEP','FOCUS','LIGHT'].map(e => `<button class="schip" style="border-color:${ENERGY[e].hex};color:${ENERGY[e].hex}" onclick="clockIn('${e}')">${e} · ${CREDIT_RATE[e]}m/cr</button>`).join('')}
+      <span class="dim" style="font-size:11px">· or ▶ a task</span></div>`;
   }
   const scroll = c.scroll_open
-    ? `<div style="color:var(--accent);font-family:var(--mono);font-size:11px;margin-top:6px">📱 ${esc(c.scroll_open)} meter running — 1 credit/min</div>`
-    : `<div class="dim" style="font-family:var(--mono);font-size:11px;margin-top:6px">📱 scrolled ${c.metered || 0}m today · balance = minutes left, metered as you scroll</div>`;
+    ? `<div style="color:var(--accent);font-family:var(--mono);font-size:11px;margin-top:6px">📱 ${esc(c.scroll_open)} meter RUNNING — 1 credit/min, auto-cuts at 10m without a close</div>`
+    : `<div class="dim" style="font-family:var(--mono);font-size:11px;margin-top:6px">📱 scrolled ${c.metered || 0}m today${c.windows ? ` · ${c.windows}m prepaid` : ''}</div>`;
   const wt = c.wake_tier;
   const wakeLine = (wt && wt !== 'none')
-    ? `<div class="dim" style="font-size:11px;margin-top:6px">⏰ woke ${c.wake ? esc(String(c.wake).slice(0,5)) : '—'} · ${wt==='full' ? 'on time — full credits' : wt==='half' ? 'a bit late — free credits halved' : 'late — 0 free credits, cap 60'}</div>`
+    ? `<div class="dim" style="font-size:11px;margin-top:6px">⏰ woke ${c.wake ? esc(String(c.wake).slice(0,5)) : '—'} · ${wt==='full' ? 'on time — full free credits' : wt==='half' ? 'a bit late — free credits halved' : wt==='override' ? 'override — no free credits' : 'late — 0 free credits, cap 60'}</div>`
     : '';
   return `<div class="card"><h2>Screen-time credits</h2>
-    <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
-      <span class="mono" style="font-size:26px;font-weight:700">${c.balance}</span>
-      <span class="dim" style="font-size:11px">min left of ${c.gross} today · ${c.free} free + ${c.timer} clocked + ${c.bonus} task bonus</span>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      ${stat(c.balance, 'MIN LEFT', c.balance > 0 ? 'var(--done)' : 'var(--accent)')}
+      ${stat(spent, 'SPENT')}
+      ${stat(c.gross, 'EARNED')}
     </div>
+    <div class="ebar" style="margin-bottom:6px"><div style="width:${pct}%;background:${pct >= 85 ? '#E1251B' : pct >= 60 ? '#FBBF24' : '#4ADE80'}"></div></div>
+    <div class="dim" style="font-size:11px;margin-bottom:10px">earned = ${c.free} free + ${c.timer} clocked + ${c.bonus} completions · daily cap ${c.cap}${c.gross >= c.cap ? ' — HIT' : ''}</div>
     ${timer}${scroll}${wakeLine}${wakeTargetsHTML()}
   </div>`;
 }
+/* general clock-in: untethered, time credits only */
 async function clockIn(energy){
   S.lastWrite = Date.now();
   const {data, error} = await db.from('focus_sessions').insert({energy}).select().single();
   if (error) { toast('Clock-in failed: ' + error.message); return; }
   S.focusOpen = data; render(); toast('Clocked in — ' + energy + ', 1 credit per ' + CREDIT_RATE[energy] + ' min');
-  // Fire an iOS Shortcut so a native countdown timer shows on the lock screen / Dynamic Island.
-  try { if (/iPhone|iPad/.test(navigator.userAgent)) location.href = `shortcuts://run-shortcut?name=LifeOS%20Focus&input=text&text=${energy}`; } catch(e){}
+}
+/* task clock-in: ▶ on a task row — same timer, tethered to the task */
+async function startTask(id){
+  const t = S.tasks.find(x => x.id === id); if (!t) return;
+  if (S.focusOpen) {
+    if (S.focusOpen.task_id === id) { setView('today'); return; }
+    if (!confirm('Already clocked in — close that session and start this task?')) return;
+    await clockOut();
+  }
+  const energy = CREDIT_RATE[t.energy] ? t.energy : 'LIGHT';
+  S.lastWrite = Date.now();
+  const {data, error} = await db.from('focus_sessions').insert({energy, task_id: id}).select().single();
+  if (error) { toast('Start failed: ' + error.message); return; }
+  S.focusOpen = data;
+  if (!t.status || t.status === 'not_started') { t.status = 'in_progress'; db.from('tasks').update({status: 'in_progress'}).eq('id', id).then(() => {}); }
+  toast('▶ ' + t.title);
+  setView('today');   // land on TODAY with the running timer
 }
 async function clockOut(){
   if (!S.focusOpen) return;
   S.lastWrite = Date.now();
-  const {error} = await db.from('focus_sessions').update({ended_at: new Date().toISOString()}).eq('id', S.focusOpen.id);
-  if (error) { toast('Clock-out failed: ' + error.message); return; }
-  const mins = Math.floor((Date.now() - new Date(S.focusOpen.started_at).getTime()) / 60000);
-  toast(`Clocked out — ${mins} min → ~${Math.floor(mins / CREDIT_RATE[S.focusOpen.energy])} credits`);
+  const fo = S.focusOpen;
+  if (fo.task_id) {
+    // server does the 90%-of-est logic: done + reward, or shrink est and stay open
+    const {data, error} = await db.rpc('lifeos_task_clockout', {p_session: fo.id});
+    if (error) { toast('Clock-out failed: ' + error.message); return; }
+    const r = data || {};
+    if (r.completed) toast(`⏹ ${r.minutes}m — task done ✓ +5cr${r.parent_confirm ? ' · goal complete? see TODAY' : ''}`);
+    else if (r.error) toast(`⏹ ${r.minutes || 0}m — ${r.error}`);
+    else toast(`⏹ ${r.minutes}m — ${r.remaining}m left on the task`);
+  } else {
+    const {error} = await db.from('focus_sessions').update({ended_at: new Date().toISOString()}).eq('id', fo.id);
+    if (error) { toast('Clock-out failed: ' + error.message); return; }
+    const mins = Math.floor((Date.now() - new Date(fo.started_at).getTime()) / 60000);
+    toast(`Clocked out — ${mins} min → ~${Math.floor(mins / CREDIT_RATE[fo.energy])} credits`);
+  }
   S.focusOpen = null; loadAll();
-  // Cancel the focus alarm on clock-out (the "LifeOS Focus Stop" shortcut toggles the alarm off).
-  try { if (/iPhone|iPad/.test(navigator.userAgent)) location.href = `shortcuts://run-shortcut?name=LifeOS%20Focus%20Stop`; } catch(e){}
 }
 async function spendCredits(m){
   if (!confirm(`Spend ${m} credits for ${m} minutes of scroll time?`)) return;
@@ -1103,7 +1229,7 @@ async function spendCredits(m){
   loadAll();
 }
 /* tick the running timer display */
-setInterval(() => { if (S.focusOpen && S.view === 'today' && !S.editing && !S.sheet && !S.evSheet) render(); }, 30000);
+setInterval(() => { if (S.focusOpen && S.view === 'today' && !S.editing && !S.sheet && !S.evSheet && !S.wakeChallenge) render(); }, 30000);
 
 /* ---- Motion planner: server-packed plan blocks ---- */
 function planBlocksHTML(){
@@ -1254,9 +1380,15 @@ function rMeter(){
 
 /* --- TASKS --- */
 function rTasks(){
-  const list = applyFilt(S.tasks.filter(t =>
+  const kids = S._kids || {};
+  const q = S.search.toLowerCase();
+  const matchQ = t => !q || (t.title + ' ' + (t.project || '')).toLowerCase().includes(q);
+  // top level only: plain tasks + goals (children render nested inside their goal)
+  const top = S.tasks.filter(t => !t.parent_id &&
     t.bucket === (S.showBacklog ? 'backlog' : 'active') && t.status !== 'done' &&
-    (!S.search || (t.title + ' ' + (t.project || '')).toLowerCase().includes(S.search.toLowerCase()))));
+    ((kids[t.id] || []).length ? (matchQ(t) || kids[t.id].some(matchQ)) : matchQ(t)));
+  const list = top.filter(t => S.filt === 'ALL' || t.energy === S.filt ||
+    (kids[t.id] || []).some(k => k.energy === S.filt && k.status !== 'done'));
   const groups = {};
   list.forEach(t => { const p = t.project || '(no project)'; (groups[p] = groups[p] || []).push(t); });
   const bl = `<button class="btn" style="${S.showBacklog ? 'border-color:var(--accent);color:var(--accent)' : ''}"
@@ -1271,7 +1403,7 @@ function rTasks(){
       const open = S.expandAll || S.openGroups.has(p) || !!S.search;
       return `<details class="bsec" ${open ? 'open' : ''} ontoggle="tgGroup(${i}, this.open)">
         <summary>${esc(p)} (${ts.length})</summary>
-        <div class="ginner">${ts.map(taskRowHTML).join('')}</div></details>`;
+        <div class="ginner">${ts.map(t => ((S._kids || {})[t.id] || []).length ? goalRowHTML(t) : taskRowHTML(t)).join('')}</div></details>`;
     }).join('')
       : `<div class="empty">${S.showBacklog ? 'Backlog empty.' : 'No open tasks.'}</div>`);
 }
