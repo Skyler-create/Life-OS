@@ -776,6 +776,11 @@ function render(){
   const sh = S.todayLog?.shields ?? S.prevLog?.shields ?? 0;
   document.getElementById('streakChip').innerHTML = `streak <b>${sc}</b>d${sh ? ' ' + '🛡'.repeat(sh) : ''}`;
   const main = document.getElementById('main');
+  // Preserve scroll position on re-renders of the SAME view (adding a task,
+  // toggling, editing all call render() and would otherwise jump to top).
+  // Switching tabs is a different view → falls through to a natural top reset.
+  const sameView = (render._lastView === S.view);
+  const savedScroll = sameView ? main.scrollTop : 0;
   if (S.view === 'today')   main.innerHTML = rToday();
   if (S.view === 'tasks')   main.innerHTML = rTasks();
   if (S.view === 'brief')   { main.innerHTML = rBrief(); if (S.bionic) main.querySelectorAll('.md').forEach(bionicify); markBriefRead(); }
@@ -785,6 +790,8 @@ function render(){
   if (S.view === 'cal')     main.innerHTML = rCal();
   if (S.view === 'cards')   main.innerHTML = rCards();
   if (S.view === 'chat')    { main.innerHTML = rChat(); const cl = document.getElementById('chatlog'); if (cl) cl.scrollTop = cl.scrollHeight; }
+  render._lastView = S.view;
+  if (sameView) main.scrollTop = savedScroll;
   document.getElementById('addbar').classList.toggle('hidden', !(S.view === 'today' || S.view === 'tasks') || !!S.sheet);
   document.getElementById('sheetroot').innerHTML = S.evSheet ? evSheetHTML() : sheetHTML();
   document.querySelector('nav button.on')?.scrollIntoView({block: 'nearest', inline: 'center'});
