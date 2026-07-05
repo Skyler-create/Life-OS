@@ -9,6 +9,7 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='%23E1251B'/></svg>">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 :root{
   --bg:#17181A; --card:#212327; --card2:#2A2D33; --line:#33363C;
@@ -268,6 +269,7 @@ details.bsec>.ginner{padding:0 10px 10px}
 const SB_URL = 'https://xebiaoycxwstrzgkjult.supabase.co';   // your Supabase project URL
 const SB_KEY = 'sb_publishable_ecGABp0TAZcVX_TLIjBbOQ_rqUKNATw'; // your publishable key
 const OWNER  = 'skyler.scooty@gmail.com';                    // your email, lowercase
+const GCAL_CLIENT_ID = '118493693943-6l9gncbacaip7d4fct7cgdkr5l51nm1j.apps.googleusercontent.com'; // optional: live Google Calendar (blank = use routine sync only)
 const db = window.supabase.createClient(SB_URL, SB_KEY);
 
 const ENERGY = {
@@ -290,6 +292,7 @@ let S = {
   bionic: localStorage.getItem('bionic') === '1',
   cards: [], showBack: false, calY: null, calM: 0, calSel: null,
   calView: localStorage.getItem('calView') || 'month',
+  gcalEvents: [], gcalRange: null, gcalLive: false, gcalLoading: false,
 };
 
 const todayISO = () => new Date().toLocaleDateString('sv-SE');
@@ -340,6 +343,8 @@ async function loadAll(){
   render();
   subscribeRealtime();
   captureWake();
+  // previously-connected Google Calendar: refresh the token silently
+  if (localStorage.getItem('gconn') === '1' && !gcalToken()) setTimeout(() => gcalConnect(true), 800);
 }
 
 /* auto-capture wake time: first app open of the day, morning window only */
@@ -820,7 +825,7 @@ function rToday(){
   const sh = S.brief?.start_here_task;
   const shCard = sh ? `<div class="card starthere"><h2>Start here</h2><div class="task-name">${esc(sh)}</div></div>` : '';
   const meter = rMeter();
-  const todaysEv = (S.events || []).filter(e => e.date === today).sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
+  const todaysEv = allEvents().filter(e => e.date === today).sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
   const evCard = todaysEv.length ? `<div class="card"><h2>Calendar</h2>${todaysEv.map(e =>
     `<div class="evrow" style="margin-bottom:4px"><span class="mono">${e.start_time ? esc(e.start_time) + (e.end_time ? '–' + esc(e.end_time) : '') : 'all-day'}</span><span>${esc(e.title)}</span></div>`).join('')}</div>` : '';
   const list = applyFilt(todays);
@@ -1065,10 +1070,70 @@ function addForDay(){
     priority: 'med', deadline_type: 'self_imposed', bucket: 'active', calY: n.getFullYear(), calM: n.getMonth()};
   render();
 }
+/* --- live Google Calendar (OAuth, optional) --- */
+let gTokClient = null;
+function gcalToken(){ const t = JSON.parse(localStorage.getItem('gtok') || 'null'); return (t && t.exp > Date.now()) ? t.token : null; }
+function gcalConnect(silent){
+  if (!GCAL_CLIENT_ID || !window.google?.accounts?.oauth2) { if (!silent) toast('Google auth not loaded yet — try again'); return; }
+  gTokClient = gTokClient || google.accounts.oauth2.initTokenClient({
+    client_id: GCAL_CLIENT_ID,
+    scope: 'https://www.googleapis.com/auth/calendar.readonly',
+    callback: r => {
+      if (r.access_token) {
+        localStorage.setItem('gtok', JSON.stringify({token: r.access_token, exp: Date.now() + (r.expires_in - 60) * 1000}));
+        localStorage.setItem('gconn', '1');
+        S.gcalRange = null; render();
+      }
+    },
+    error_callback: () => { if (!silent) toast('Google connect cancelled'); },
+  });
+  gTokClient.requestAccessToken({prompt: silent ? '' : undefined});
+}
+function gcalDisconnect(){
+  if (!confirm('Disconnect Google Calendar? (Falls back to daily routine sync)')) return;
+  localStorage.removeItem('gtok'); localStorage.removeItem('gconn');
+  S.gcalLive = false; S.gcalRange = null; S.gcalEvents = []; render();
+}
+function allEvents(){ return S.gcalLive ? S.gcalEvents : (S.events || []); }
+async function loadGcal(anchorISO){
+  const tok = gcalToken();
+  if (!tok) { S.gcalLive = false; return; }
+  const a = fromISO(anchorISO);
+  const start = new Date(a); start.setDate(a.getDate() - 31);
+  const end = new Date(a); end.setDate(a.getDate() + 62);
+  const key = start.toISOString().slice(0, 10) + '_' + end.toISOString().slice(0, 10);
+  if (S.gcalRange === key || S.gcalLoading) return;
+  S.gcalLoading = true;
+  try {
+    const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&maxResults=250&timeMin=${start.toISOString()}&timeMax=${end.toISOString()}`,
+      {headers: {Authorization: 'Bearer ' + tok}});
+    if (r.status === 401) { localStorage.removeItem('gtok'); S.gcalLive = false; S.gcalLoading = false; render(); return; }
+    const d = await r.json();
+    const pad = n => String(n).padStart(2, '0');
+    const out = [];
+    (d.items || []).forEach(ev => {
+      if (ev.status === 'cancelled') return;
+      const title = ev.summary || '(untitled)';
+      if (ev.start?.dateTime) {
+        const sd = new Date(ev.start.dateTime), ed = ev.end?.dateTime ? new Date(ev.end.dateTime) : null;
+        out.push({date: sd.toLocaleDateString('sv-SE'), start_time: pad(sd.getHours()) + ':' + pad(sd.getMinutes()),
+          end_time: ed ? pad(ed.getHours()) + ':' + pad(ed.getMinutes()) : null, title});
+      } else if (ev.start?.date) {
+        const d0 = fromISO(ev.start.date), d1 = fromISO(ev.end?.date || ev.start.date);
+        if (d0 >= d1) out.push({date: ev.start.date, start_time: null, end_time: null, title});
+        else { const c = new Date(d0); while (c < d1) { out.push({date: c.toLocaleDateString('sv-SE'), start_time: null, end_time: null, title}); c.setDate(c.getDate() + 1); } }
+      }
+    });
+    S.gcalEvents = out; S.gcalRange = key; S.gcalLive = true;
+  } catch (_e) { /* keep table fallback */ }
+  S.gcalLoading = false;
+  render();
+}
+
 function calMaps(){
   const byDay = {}, evByDay = {};
   S.tasks.forEach(t => { if (t.due && t.bucket === 'active' && t.status !== 'done') (byDay[t.due] = byDay[t.due] || []).push(t); });
-  (S.events || []).forEach(e => { (evByDay[e.date] = evByDay[e.date] || []).push(e); });
+  allEvents().forEach(e => { (evByDay[e.date] = evByDay[e.date] || []).push(e); });
   return {byDay, evByDay};
 }
 function rCal(){
@@ -1088,7 +1153,11 @@ function rCal(){
     <button onclick="navCal(-1)">‹</button><span class="mono">${label}</span>
     <span><button class="btn" style="padding:2px 10px;font-size:10px;margin-right:6px" onclick="calToday()">today</button><button onclick="navCal(1)">›</button></span></div>
   <div class="chiprow" style="margin-bottom:10px">${['day','week','month'].map(v =>
-    `<button class="schip ${S.calView === v ? 'on' : ''}" style="flex:1" onclick="setCalView('${v}')">${v.toUpperCase()}</button>`).join('')}</div>`;
+    `<button class="schip ${S.calView === v ? 'on' : ''}" style="flex:1" onclick="setCalView('${v}')">${v.toUpperCase()}</button>`).join('')}
+    ${GCAL_CLIENT_ID ? (gcalToken()
+      ? `<button class="schip" style="color:${S.gcalLive ? 'var(--done)' : 'var(--dim)'}" onclick="gcalDisconnect()">● ${S.gcalLive ? 'live' : '…'}</button>`
+      : `<button class="schip" onclick="gcalConnect(false)">connect Google</button>`) : ''}</div>`;
+  loadGcal(`${S.calY}-${String(S.calM + 1).padStart(2, '0')}-15`);
   const body = S.calView === 'day' ? calDayHTML(S.calSel, byDay, evByDay)
              : S.calView === 'week' ? calWeekHTML(byDay, evByDay)
              : calMonthHTML(byDay, evByDay);
