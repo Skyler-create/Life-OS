@@ -20,8 +20,8 @@
   --mono:'Consolas','SF Mono',ui-monospace,Menlo,monospace;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-html{-webkit-text-size-adjust:100%;touch-action:pan-y;overscroll-behavior-x:none;min-height:100%;overflow-x:clip}
-body{overflow-x:clip}
+html{-webkit-text-size-adjust:100%;touch-action:pan-y;overscroll-behavior-x:none;overscroll-behavior-y:none;min-height:100%;overflow-x:clip}
+body{overflow-x:clip;overscroll-behavior-y:none}
 body{background:var(--bg);color:var(--text);font-family:-apple-system,'Segoe UI',Roboto,sans-serif;
   max-width:600px;margin:0 auto;padding:0 12px calc(132px + env(safe-area-inset-bottom));font-size:15px;line-height:1.45;
   touch-action:pan-y;overscroll-behavior-x:none}
@@ -1127,14 +1127,13 @@ function rBrief(){
   loadGcal(todayISO());   // populate live events for the day strip (guarded, no-ops if cached)
   const parts = md.split(/\n(?=## )/);
   const head = parts.length && !parts[0].startsWith('## ') ? parts.shift() : '';
-  const openByDefault = /^(START HERE|REALITY CHECK)/i;
   const hot = /^(START HERE|REALITY CHECK|TODAY'S DEADLINES)/i;
   const calSec = `<details class="bsec"><summary>TODAY'S CALENDAR</summary><div style="padding:6px 8px">${briefDayCal()}</div></details>`;
   const secs = parts.map(sec => {
     const m = sec.match(/^## (.+)/);
     const title = m ? m[1].trim() : 'SECTION';
     const body = sec.replace(/^## .+\n?/, '');
-    const html = `<details class="bsec ${hot.test(title) ? 'hot' : ''}" ${openByDefault.test(title) ? 'open' : ''}>
+    const html = `<details class="bsec ${hot.test(title) ? 'hot' : ''}">
       <summary>${esc(title)}</summary><div class="md">${marked.parse(body)}</div></details>`;
     return {title, html};
   });
@@ -1150,8 +1149,39 @@ function briefDayCal(){
   allEvents().forEach((e, i) => e._i = i);
   const evs = allEvents().filter(e => e.date === iso).sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
   const allday = evs.filter(e => !e.start_time), timed = evs.filter(e => e.start_time);
-  if (!evs.length) return `<div class="dim" style="font-size:12px;padding:4px 0">No events today${S.gcalLive ? '' : ' (connect Google on CAL for live view)'} — open day, guard the DEEP hours.</div>`;
   const H0 = 6, H1 = 24, PPH = 26;
+  // auto-layout: pack open plan tasks into free gaps from "now" forward — a suggestion, not a schedule
+  const doneT = new Set(S.tasks.filter(isDoneToday).map(t => (t.title || '').toLowerCase()));
+  const openPlan = planItems().filter(p => !doneT.has((p.title || '').toLowerCase()));
+  const busy = timed.map(e => {
+    const [sh, sm] = e.start_time.split(':').map(Number);
+    let end = sh * 60 + sm + 60;
+    if (e.end_time) { const [eh, em] = e.end_time.split(':').map(Number); end = eh * 60 + em; }
+    return [sh * 60 + sm, end];
+  }).sort((a, b) => a[0] - b[0]);
+  const nnow = new Date();
+  let cur = Math.max(H0 * 60, nnow.getHours() * 60 + nnow.getMinutes());
+  const ghosts = [];
+  for (const p of openPlan) {
+    const dur = Math.min(p.est_minutes || 15, 180);
+    let placed = false, guard = 0;
+    while (!placed && guard++ < 60 && cur + dur <= H1 * 60) {
+      const clash = busy.find(([s, e2]) => cur < e2 && cur + dur > s);
+      if (clash) { cur = clash[1]; continue; }
+      ghosts.push({start: cur, dur, title: p.title, energy: p.energy});
+      busy.push([cur, cur + dur]); busy.sort((a, b) => a[0] - b[0]);
+      cur += dur + 10;
+      placed = true;
+    }
+    if (!placed) break;
+  }
+  if (!evs.length && !ghosts.length) return `<div class="dim" style="font-size:12px;padding:4px 0">No events and nothing left on the plan${S.gcalLive ? '' : ' (connect Google on CAL for live events)'} — open day.</div>`;
+  const ghostBlocks = ghosts.map(g => {
+    const top = (g.start - H0 * 60) * (PPH / 60);
+    const h = Math.max(14, g.dur * (PPH / 60));
+    const col = (ENERGY[g.energy] || {}).hex || '#888';
+    return `<div style="position:absolute;left:56px;right:4px;top:${top.toFixed(0)}px;height:${h.toFixed(0)}px;border:1px dashed ${col};border-radius:6px;color:${col};font-size:10px;padding:1px 5px;overflow:hidden;opacity:.85;pointer-events:none;z-index:4">${esc(g.title)} · ${g.dur}m</div>`;
+  }).join('');
   const blocks = timed.map(e => {
     const [sh, sm] = e.start_time.split(':').map(Number);
     let dur = 60;
@@ -1166,7 +1196,8 @@ function briefDayCal(){
     return (mins > 0 && mins < (H1 - H0) * 60) ? `<div class="nowline" style="top:${(mins * PPH / 60).toFixed(0)}px"></div>` : '';
   })();
   return allday.map(e => `<div class="evrow" style="cursor:pointer" onclick="openEv(${e._i})"><span class="mono">all-day</span><span>${esc(e.title)}</span></div>`).join('') +
-    `<div class="daygrid" style="height:${(H1 - H0) * PPH}px;position:relative" onclick="dayGridTap(event, '${iso}', ${PPH})" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${rail}${blocks}${nowLine}</div>`;
+    `<div class="daygrid" style="height:${(H1 - H0) * PPH}px;position:relative" onclick="dayGridTap(event, '${iso}', ${PPH})" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${rail}${blocks}${ghostBlocks}${nowLine}</div>
+    <div class="dim mono" style="font-size:10px;margin-top:4px">solid = calendar · dashed = plan auto-packed into free time (suggestion, recomputes live)</div>`;
 }
 
 /* --- REFLECT --- */
