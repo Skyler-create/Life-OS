@@ -1519,14 +1519,54 @@ function wakeChallengeNeeded(){
   return !(S.todayLog && S.todayLog.wake_confirmed_at);
 }
 function _shuffle(a){ a = a.slice(); for (let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
+/* classify an answer so distractors can be the SAME kind (a year vs a year,
+   not a year vs a name) — makes MCQ options non-obvious */
+function _ansShape(s){
+  s = String(s || '').trim();
+  if (/^\W*\d{4}\W*$/.test(s)) return 'year';
+  if (/^[\d.,\s%$/x×+-]+$/i.test(s) && /\d/.test(s)) return 'num';
+  return s.split(/\s+/).length <= 2 ? 'short' : 'long';
+}
+/* distractors: prefer same answer-shape, then same category — harder choices */
+function _mcqOpts(card){
+  const shape = _ansShape(card.back), cat = card.category;
+  const norm = x => String(x || '').trim().toLowerCase();
+  const seen = new Set([norm(card.back)]);
+  const cands = [];
+  for (const c of (S.cards || [])) {
+    if (c.id === card.id || !c.back) continue;
+    const k = norm(c.back); if (seen.has(k)) continue; seen.add(k);
+    let score = 0;
+    if (_ansShape(c.back) === shape) score += 2;
+    if (cat && c.category === cat) score += 1;
+    cands.push({ back: c.back, score, r: Math.random() });
+  }
+  cands.sort((a, b) => b.score - a.score || a.r - b.r);
+  const distract = cands.slice(0, 3).map(c => c.back);
+  return _shuffle([card.back, ...distract]);
+}
 function buildWakeQuestions(){
   const pool = (S.cards || []).filter(c => c.back && c.front);
-  const backs = [...new Set(pool.map(c => c.back))];
   return _shuffle(pool).slice(0, 7).map(c => {
-    const distract = _shuffle(backs.filter(b => b !== c.back)).slice(0, 3);
-    const options = _shuffle([c.back, ...distract]);
+    const options = _mcqOpts(c);
     return { front: c.front, options, answer: options.indexOf(c.back) };
   }).filter(q => q.options.length >= 2);
+}
+/* daily "correct MCQ answers" counter -> once 5, claim +5 min off IG (once/day) */
+function cardsDayKey(){ const d = new Date(); if (d.getHours() < 6) d.setDate(d.getDate() - 1); return 'cardsCorrect:' + d.toLocaleDateString('sv-SE'); }
+function cardsCorrectToday(){ return +localStorage.getItem(cardsDayKey()) || 0; }
+async function bumpCardsCorrect(){
+  if (S.credits && S.credits.cards_earned) return;         // already earned today
+  const n = cardsCorrectToday() + 1;
+  localStorage.setItem(cardsDayKey(), n);
+  if (n >= 5) {
+    const { data, error } = await db.rpc('lifeos_claim_card_bonus');
+    if (error) { toast('Earn failed: ' + error.message); return; }
+    if (data && data.already) return;
+    toast('🎁 5 correct — +5 min off IG unlocked (cap 95)'); loadAll();
+  } else {
+    toast(`✓ ${n}/5 toward +5 min off IG`);
+  }
 }
 function wakeLearnHTML(){
   const md = S.brief?.content_md || '';
@@ -2569,9 +2609,7 @@ function cardFlipHTML(card){
 
 /* MCQ (deterministic, no LLM) */
 function buildOneMcq(card){
-  const backs = [...new Set((S.cards || []).map(c => c.back).filter(Boolean))];
-  const distract = _shuffle(backs.filter(b => b !== card.back)).slice(0, 3);
-  const options = _shuffle([card.back, ...distract]);
+  const options = _mcqOpts(card);
   return { cardId: card.id, options, answer: options.indexOf(card.back), picked: null };
 }
 function cardMcqHTML(card){
@@ -2590,7 +2628,7 @@ function cardMcqHTML(card){
   <div style="height:10px"></div>`;
 }
 function answerMcq(i){ if (S.mcq.picked != null) return; S.mcq.picked = i; render(); }
-function nextMcq(){ const correct = S.mcq.picked === S.mcq.answer; S.mcq = null; gradeCard(correct ? 1 : 0); }
+function nextMcq(){ const correct = S.mcq.picked === S.mcq.answer; S.mcq = null; if (correct) bumpCardsCorrect(); gradeCard(correct ? 1 : 0); }
 
 /* TYPE (free-text, graded by the swappable `grade` edge function → Claude Haiku) */
 function cardTypeHTML(card){
@@ -2624,6 +2662,7 @@ async function submitTyped(){
     });
     const d = await r.json();
     S.typed = {cardId: card.id, ans, verdict: d.verdict || 'partial', feedback: d.feedback || ''};
+    if (d.verdict === 'correct') bumpCardsCorrect();
   } catch(e) {
     S.typed = {cardId: card.id, ans, verdict: 'partial', feedback: 'Network error — grade yourself'};
   }
@@ -2634,43 +2673,33 @@ function gradeTyped(g){ S.typed = null; gradeCard(g); }
 /* EARN quiz: 5 correct MCQ → +5 min off IG (cap 95), once/day */
 function startEarnQuiz(){
   const qs = buildWakeQuestions();
-  if (qs.length < 5) { toast('Need at least 5 cards to earn'); return; }
-  S.earn = {questions: qs, idx: 0, correct: 0, picked: null, need: 5};
+  if (qs.length < 2) { toast('Need more cards to quiz'); return; }
+  S.earn = {questions: qs, idx: 0, picked: null};
   render();
 }
 function answerEarn(i){ if (S.earn.picked != null) return; S.earn.picked = i; render(); }
 async function nextEarn(){
   const e = S.earn, q = e.questions[e.idx];
-  if (e.picked === q.answer) e.correct++;
+  if (e.picked === q.answer) await bumpCardsCorrect();   // shared daily counter claims at 5
   e.idx++; e.picked = null;
-  if (e.correct >= e.need) {
-    const {data, error} = await db.rpc('lifeos_claim_card_bonus');
-    S.earn = null;
-    if (error) toast('Claim failed: ' + error.message);
-    else if (data && data.already) toast('Already earned today');
-    else toast('🎁 +5 min off IG unlocked — cap 95');
-    loadAll(); return;
-  }
-  if (e.idx >= e.questions.length) {
-    toast(`${e.correct}/5 correct — not enough, going again`);
-    S.earn = {questions: buildWakeQuestions(), idx: 0, correct: 0, picked: null, need: 5};
-  }
+  if ((S.credits && S.credits.cards_earned) || cardsCorrectToday() >= 5) { S.earn = null; render(); return; }
+  if (e.idx >= e.questions.length) { e.questions = buildWakeQuestions(); e.idx = 0; }
   render();
 }
 function cancelEarn(){ S.earn = null; render(); }
 function earnQuizHTML(){
   const e = S.earn, q = e.questions[e.idx];
   if (!q) { S.earn = null; return rCards(); }
+  const done = cardsCorrectToday();
   const opts = q.options.map((o,i) => {
     let extra = '';
     if (e.picked != null) { if (i === q.answer) extra = ';border-color:var(--done);color:var(--done)'; else if (i === e.picked) extra = ';border-color:#E1251B;color:#E1251B'; }
     return `<button class="btn" style="display:block;width:100%;text-align:left;margin-bottom:6px${extra}" onclick="answerEarn(${i})">${esc(o)}</button>`;
   }).join('');
-  const willHit = e.correct + (e.picked === q.answer ? 1 : 0) >= e.need;
   return `<div class="card" style="border-color:var(--accent)"><h2>🎁 Earn 5 min off IG</h2>
-    <div class="dim" style="font-size:11px;margin-bottom:8px">${e.correct}/${e.need} correct — ${e.need} unlocks +5 min (cap 95), once/day</div>
+    <div class="dim" style="font-size:11px;margin-bottom:8px">${done}/5 correct today — 5 unlocks +5 min (cap 95), once/day</div>
     <div style="font-weight:600;margin-bottom:8px">${esc(q.front)}</div>${opts}
-    ${e.picked != null ? `<button class="btn primary" style="width:100%;margin-top:4px" onclick="nextEarn()">${willHit ? 'Claim +5' : 'Next'}</button>` : ''}
+    ${e.picked != null ? `<button class="btn primary" style="width:100%;margin-top:4px" onclick="nextEarn()">Next</button>` : ''}
     <button class="btn" style="width:100%;margin-top:6px;color:var(--dim)" onclick="cancelEarn()">cancel</button></div>`;
 }
 async function gradeCard(g){
