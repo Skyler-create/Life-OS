@@ -891,7 +891,7 @@ function render(){
   // 24h grids open scrolled to 6 AM; keep the user's grid scroll across re-renders
   const gw = document.getElementById('gridScroll');
   if (gw) {
-    const key = S.view + ':' + S.calView + ':' + (S.calSel || '');
+    const key = S.view + ':' + S.calView + ':' + (S.calSel || '') + ':' + (S.ycView || '') + ':' + (S.ycSel || '');
     if (S._gsKey !== key) { gw.scrollTop = +gw.dataset.h6 || 0; S._gsKey = key; S._gsPos = gw.scrollTop; }
     else gw.scrollTop = S._gsPos ?? (+gw.dataset.h6 || 0);
   } else { S._gsKey = null; }
@@ -1770,31 +1770,121 @@ function rReflect(){
 }
 document.addEventListener('change', e => { if (['r-rest','r-brief'].includes(e.target.id)) updateScorePreview(); });
 
-/* --- YC (TimeTree, read-only) --- */
+/* --- YC (TimeTree, read-only) — same calendar format as CAL, but her events only --- */
+/* map timetree_events -> {iso: [{date,start_time,end_time,title}]} (all-day expanded across its range) */
+function ttEvByDay(){
+  const map = {};
+  const push = (iso, ev) => { if (iso) (map[iso] = map[iso] || []).push(ev); };
+  (S.ttEvents || []).forEach(e => {
+    const title = e.title || '(untitled)';
+    if (e.all_day || (!e.start_ts && e.start_date)) {
+      const s = e.start_date; if (!s) return;
+      const startD = fromISO(s), endD = e.end_date ? fromISO(e.end_date) : null;
+      if (!endD || endD <= startD) { push(s, {date:s, start_time:null, end_time:null, title}); }
+      else { for (let d = new Date(startD); d < endD; d.setDate(d.getDate()+1)) {   // DTEND is exclusive for all-day
+        const iso = d.toLocaleDateString('sv-SE'); push(iso, {date:iso, start_time:null, end_time:null, title}); } }
+    } else if (e.start_ts) {
+      const d = new Date(e.start_ts), iso = d.toLocaleDateString('sv-SE');
+      const hm = x => String(x.getHours()).padStart(2,'0') + ':' + String(x.getMinutes()).padStart(2,'0');
+      let et = null;
+      if (e.end_ts) { const d2 = new Date(e.end_ts); if (d2.toLocaleDateString('sv-SE') === iso) et = hm(d2); }
+      push(iso, {date:iso, start_time:hm(d), end_time:et, title});
+    }
+  });
+  return map;
+}
+function setYCView(v){ S.ycView = v; localStorage.setItem('ycView', v); render(); }
+function ycToday(){ S.ycSel = todayISO(); const n = new Date(); S.ycY = n.getFullYear(); S.ycM = n.getMonth(); render(); }
+function selYCDay(iso){ S.ycSel = iso; S.ycView = 'day'; localStorage.setItem('ycView','day'); const d = fromISO(iso); S.ycY = d.getFullYear(); S.ycM = d.getMonth(); render(); }
+function navYC(dir){
+  if (S.ycView === 'month') { let m = S.ycM + dir, y = S.ycY; if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; } S.ycM = m; S.ycY = y; }
+  else { const d = fromISO(S.ycSel); d.setDate(d.getDate() + (S.ycView === 'week' ? 7 : 1) * dir); S.ycSel = d.toLocaleDateString('sv-SE'); S.ycY = d.getFullYear(); S.ycM = d.getMonth(); }
+  render();
+}
 function rYC(){
-  const today = todayISO();
-  const norm = (S.ttEvents || []).map(e => {
-    if (e.all_day) return {allDay:true, day:e.start_date, sort:(e.start_date||'')+'T00:00', title:e.title, loc:e.location};
-    const d = e.start_ts ? new Date(e.start_ts) : null;
-    return {allDay:false, day: d ? d.toLocaleDateString('sv-SE') : (e.start_date||''),
-            start:d, end: e.end_ts ? new Date(e.end_ts) : null, sort: e.start_ts || '', title:e.title, loc:e.location};
-  }).filter(x => x.day && x.day >= today).sort((a,b) => a.sort.localeCompare(b.sort));
-  const byDay = {}; norm.forEach(x => { (byDay[x.day] = byDay[x.day] || []).push(x); });
-  const dayLabel = ds => { const [y,m,d] = ds.split('-').map(Number); return new Date(y,m-1,d).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'}); };
-  const tfmt = dt => dt ? dt.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : '';
+  if (!S.ycSel) S.ycSel = todayISO();
+  if (!S.ycView) S.ycView = localStorage.getItem('ycView') || 'day';
+  if (S.ycY == null) { const n = new Date(); S.ycY = n.getFullYear(); S.ycM = n.getMonth(); }
+  const evByDay = ttEvByDay();
+  const sel = fromISO(S.ycSel);
+  let label;
+  if (S.ycView === 'month') label = new Date(S.ycY, S.ycM, 1).toLocaleString('en-US', {month:'long', year:'numeric'});
+  else if (S.ycView === 'day') label = sel.toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric'});
+  else { const mon = new Date(sel); mon.setDate(sel.getDate() - ((sel.getDay()+6)%7)); const sun = new Date(mon); sun.setDate(mon.getDate()+6);
+    label = mon.toLocaleDateString('en-US', {month:'short', day:'numeric'}) + ' – ' + sun.toLocaleDateString('en-US', {month:'short', day:'numeric'}); }
   const lastSync = (S.ttEvents || []).reduce((mx,e) => (e.updated_at || '') > mx ? e.updated_at : mx, '');
-  return `
-  <div class="card"><h2>YC · TimeTree</h2>
-    <div class="dim" style="font-size:12px;margin-bottom:8px">Her schedule (read-only) — separate from your calendar and plan.</div>
-    ${Object.keys(byDay).length ? Object.entries(byDay).map(([d, xs]) =>
-      `<div class="pname">${dayLabel(d)}</div>` + xs.map(x =>
-        `<div style="padding:4px 0;font-size:14px;display:flex;gap:8px">
-          <span class="mono dim" style="font-size:12px;min-width:78px;flex:0 0 auto">${x.allDay ? 'all day' : tfmt(x.start) + (x.end ? '–' + tfmt(x.end) : '')}</span>
-          <span>${esc(x.title || '(untitled)')}${x.loc ? ` <span class="dim" style="font-size:12px">@ ${esc(x.loc)}</span>` : ''}</span>
-        </div>`).join('')).join('')
-      : '<span class="dim">No upcoming events synced yet.</span>'}
-    ${lastSync ? `<div class="dim mono" style="margin-top:8px;font-size:11px">last synced ${new Date(lastSync).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}</div>` : ''}
-  </div>`;
+  const header = `<div class="cal-h" style="margin-bottom:8px">
+    <button onclick="navYC(-1)">‹</button><span class="mono">${label}</span>
+    <span><button class="btn" style="padding:2px 10px;font-size:10px;margin-right:6px" onclick="ycToday()">today</button><button onclick="navYC(1)">›</button></span></div>
+  <div class="dim" style="font-size:11px;margin-bottom:8px">YC · TimeTree — read-only (her schedule)${lastSync ? ` · synced ${new Date(lastSync).toLocaleDateString([], {month:'short', day:'numeric'})}` : ''}</div>
+  <div class="chiprow" style="margin-bottom:10px">${['day','week','month'].map(v =>
+    `<button class="schip ${S.ycView === v ? 'on' : ''}" style="flex:1" onclick="setYCView('${v}')">${v.toUpperCase()}</button>`).join('')}</div>`;
+  const body = S.ycView === 'day' ? ycDayHTML(S.ycSel, evByDay)
+             : S.ycView === 'week' ? ycWeekHTML(evByDay)
+             : ycMonthHTML(evByDay);
+  return header + body;
+}
+function ycDayHTML(iso, evByDay){
+  const evs = (evByDay[iso] || []).slice().sort((a,b) => (a.start_time || '').localeCompare(b.start_time || ''));
+  const allday = evs.filter(e => !e.start_time), timed = evs.filter(e => e.start_time);
+  const H0 = 0, H1 = 24, PPH = 48;
+  const blocks = timed.map(e => {
+    const [sh,sm] = e.start_time.split(':').map(Number);
+    let dur = 60; if (e.end_time) { const [eh,em] = e.end_time.split(':').map(Number); dur = Math.max(20, (eh*60+em) - (sh*60+sm)); }
+    const top = Math.max(0, ((sh-H0)*60+sm) * (PPH/60)), h = Math.max(22, dur * (PPH/60));
+    return `<div class="evblk" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px" title="${esc(e.title)}"><b>${esc(e.start_time)}${e.end_time ? '–' + esc(e.end_time) : ''}</b>${esc(e.title)}</div>`;
+  }).join('');
+  const rail = [...Array(H1-H0)].map((_,i) => `<div class="hrow" style="top:${i*PPH}px"><span>${hourLabel(H0+i)}</span></div>`).join('');
+  const nowLine = iso === todayISO() ? (() => { const n = new Date(); const mins = (n.getHours()-H0)*60 + n.getMinutes(); return (mins > 0 && mins < (H1-H0)*60) ? `<div class="nowline" style="top:${(mins*PPH/60).toFixed(0)}px"></div>` : ''; })() : '';
+  return `${allday.map(e => `<div class="evrow"><span class="mono">all-day</span><span>${esc(e.title)}</span></div>`).join('')}
+  <div class="gridwrap" id="gridScroll" data-h6="${6*PPH}" onscroll="S._gsPos=this.scrollTop;S._gsAt=Date.now()">
+    <div class="daygrid" style="height:${(H1-H0)*PPH}px;position:relative">${rail}${blocks}${nowLine}</div></div>
+  ${!evs.length ? '<div class="dim" style="font-size:12px;padding:6px 0">Nothing on her calendar this day.</div>' : ''}
+  <div style="height:10px"></div>`;
+}
+function ycWeekHTML(evByDay){
+  const anchor = fromISO(S.ycSel); const mon = new Date(anchor); mon.setDate(anchor.getDate() - ((anchor.getDay()+6)%7));
+  const H0 = 0, H1 = 24, PPH = 44;
+  const days = [...Array(7)].map((_,i) => { const d = new Date(mon); d.setDate(mon.getDate()+i); return d; });
+  const isos = days.map(d => d.toLocaleDateString('sv-SE'));
+  const head = `<div class="wk-head"><span class="wk-gutter"></span>${days.map((d,i) => {
+    const iso = isos[i], n = (evByDay[iso] || []).length;
+    return `<button class="wk-col-h ${iso === todayISO() ? 'now' : ''}" onclick="selYCDay('${iso}')">
+      <span class="wd">${d.toLocaleDateString('en-US', {weekday:'narrow'})}</span>
+      <span class="dn">${d.getDate()}</span>${n ? `<i class="td">${n}</i>` : ''}</button>`; }).join('')}</div>`;
+  const allday = isos.map(iso => (evByDay[iso] || []).filter(e => !e.start_time));
+  const adRow = allday.some(a => a.length) ? `<div class="wk-allday"><span class="wk-gutter"></span>${allday.map(a =>
+    `<div class="wk-ad-cell">${a.slice(0,2).map(e => `<div class="wk-banner">${esc(e.title)}</div>`).join('')}${a.length > 2 ? `<div class="wk-banner more">+${a.length-2}</div>` : ''}</div>`).join('')}</div>` : '';
+  const rail = [...Array(H1-H0)].map((_,i) => `<div class="hrow" style="top:${i*PPH}px"><span>${hourLabel(H0+i).replace(' ','')}</span></div>`).join('');
+  const cols = isos.map(iso => {
+    const timed = (evByDay[iso] || []).filter(e => e.start_time);
+    const blocks = timed.map(e => {
+      const [sh,sm] = e.start_time.split(':').map(Number);
+      let dur = 60; if (e.end_time) { const [eh,em] = e.end_time.split(':').map(Number); dur = Math.max(25, (eh*60+em) - (sh*60+sm)); }
+      const top = Math.max(0, ((sh-H0)*60+sm) * (PPH/60)), h = Math.max(18, dur * (PPH/60));
+      return `<div class="wk-ev" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px" title="${esc(e.title)}">${esc(e.title)}</div>`;
+    }).join('');
+    const nowline = iso === todayISO() ? (() => { const n = new Date(); const mins = (n.getHours()-H0)*60 + n.getMinutes(); return (mins > 0 && mins < (H1-H0)*60) ? `<div class="nowline" style="top:${(mins*PPH/60).toFixed(0)}px"></div>` : ''; })() : '';
+    return `<div class="wk-col ${iso === todayISO() ? 'now' : ''}" style="position:relative">${blocks}${nowline}</div>`;
+  }).join('');
+  return head + adRow + `<div class="gridwrap" id="gridScroll" data-h6="${6*PPH}" onscroll="S._gsPos=this.scrollTop;S._gsAt=Date.now()">
+    <div class="wk-grid" style="height:${(H1-H0)*PPH}px"><div class="wk-rail">${rail}</div>${cols}</div></div>
+  <div class="dim mono" style="font-size:10px;margin-top:6px">tap a day header for the day view</div>`;
+}
+function ycMonthHTML(evByDay){
+  const y = S.ycY, m = S.ycM;
+  const startDow = (new Date(y, m, 1).getDay()+6)%7, days = new Date(y, m+1, 0).getDate();
+  let cells = '';
+  for (let i = 0; i < startDow; i++) cells += '<span></span>';
+  for (let d = 1; d <= days; d++) {
+    const iso = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const evs = (evByDay[iso] || []).slice().sort((a,b) => (a.start_time || '').localeCompare(b.start_time || ''));
+    const shown = evs.slice(0,3).map(e => `<div class="mo-chip" style="border-color:#818CF8">${esc(e.title)}</div>`).join('');
+    const more = evs.length > 3 ? `<div class="mo-more">+${evs.length-3}</div>` : '';
+    cells += `<button class="mo-cell ${S.ycSel === iso ? 'selq' : ''} ${iso === todayISO() ? 'today' : ''}" onclick="selYCDay('${iso}')"><span class="mo-d">${d}</span>${shown}${more}</button>`;
+  }
+  return `<div class="card"><div class="cal-g">${['M','T','W','T','F','S','S'].map(d => `<span class="dow">${d}</span>`).join('')}${cells}</div>
+    <div class="elegend" style="margin-top:8px"><span><i style="background:#818CF8"></i>her events</span><span style="margin-left:auto" class="dim">tap a day</span></div></div>`;
 }
 
 /* --- LOG --- */
