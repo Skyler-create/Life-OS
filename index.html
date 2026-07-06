@@ -1514,7 +1514,10 @@ async function saveWakeTarget(dow, field, value){
 }
 
 /* ---- Wake challenge: prove you're awake before free credits unlock ---- */
-function wakeChallengeNeeded(){ return !(S.todayLog && S.todayLog.wake_confirmed_at); }
+function wakeChallengeNeeded(){
+  if (new Date().getHours() < 6) return false;   // credit day starts at 6am — never prompt before then
+  return !(S.todayLog && S.todayLog.wake_confirmed_at);
+}
 function _shuffle(a){ a = a.slice(); for (let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
 function buildWakeQuestions(){
   const pool = (S.cards || []).filter(c => c.back && c.front);
