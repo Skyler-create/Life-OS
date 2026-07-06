@@ -1923,7 +1923,12 @@ function gcalDisconnect(){
 function allEvents(){
   // hide the Google mirrors of our own locked plan blocks (they render as blocks, not events)
   const mirror = new Set((S.planBlocks || []).map(b => b.gcal_id).filter(Boolean));
-  return (S.gcalLive ? S.gcalEvents : (S.events || [])).filter(e => !mirror.has(e.gid));
+  // When Google is live, still MERGE non-gcal table rows (Lenovo work blocks,
+  // TimeTree, etc.) so they don't disappear behind the live feed.
+  const list = S.gcalLive
+    ? [...S.gcalEvents, ...(S.events || []).filter(e => e.source && e.source !== 'gcal')]
+    : (S.events || []);
+  return list.filter(e => !mirror.has(e.gid));
 }
 
 /* --- two-way event editing (Google Calendar) --- */
@@ -2271,7 +2276,7 @@ async function syncEventsTable(evts, lo, hi){
       S.lastWrite = Date.now();
       await db.from('events').insert(rows.slice(i, i + 200));
     }
-    S.events = rows;   // keep fallback cache warm too
+    S.events = [...(S.events || []).filter(e => e.source !== 'gcal'), ...rows];   // keep non-gcal (work/TimeTree) rows
   } catch (_e) { /* offline — next load */ }
 }
 
