@@ -113,7 +113,11 @@ details.goal>summary::-webkit-details-marker{display:none}
 .wk-col .pblk{left:1px;right:1px;font-size:9px;padding:1px 3px}
 /* scrollable 24h grid wrapper — opens at 6 AM, scroll up for 12 AM–6 AM */
 .gridwrap{max-height:62vh;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+  touch-action:pan-y;transform:translateZ(0);will-change:scroll-position;
   border:1px solid var(--line);border-radius:8px}
+/* touches on the grid body commit to vertical scroll immediately; horizontal
+   goes to JS (day paging) and blocks handle their own hold-drag */
+.gridwrap .daygrid,.gridwrap .wk-grid,.gridwrap .wk-col{touch-action:pan-y}
 .tmeta .due-today{color:var(--focus)}
 .tmeta .overdue{color:var(--accent)}
 .tmeta .hard{color:var(--accent)}
@@ -492,7 +496,11 @@ function subscribeRealtime(){
       // ignore the echo of our own writes — they're already on screen
       if (Date.now() - (S.lastWrite || 0) < 2500) return;
       clearTimeout(rtTimer);
-      rtTimer = setTimeout(() => { if (!S.editing && !S.sending && !S.sheet && !S.wakeChallenge && !S.planEditMode) loadAll(); }, 600);
+      rtTimer = setTimeout(() => {
+        if (S.editing || S.sending || S.sheet || S.wakeChallenge || S.planEditMode) return;
+        if (Date.now() - (S._gsAt || 0) < 1200) { clearTimeout(rtTimer); rtTimer = setTimeout(() => { if (!S.editing && !S.sheet && !S.planEditMode) loadAll(); }, 1200); return; } // don't rebuild the calendar mid-scroll
+        loadAll();
+      }, 600);
     })
     .subscribe();
 }
@@ -1698,7 +1706,7 @@ function briefDayCal(){
     return (mins > 0 && mins < (H1 - H0) * 60) ? `<div class="nowline" style="top:${(mins * PPH / 60).toFixed(0)}px"></div>` : '';
   })();
   return allday.map(e => `<div class="evrow" style="cursor:pointer" onclick="openEv(${e._i})"><span class="mono">all-day</span><span>${esc(e.title)}</span></div>`).join('') +
-    `<div class="gridwrap" id="gridScroll" data-h6="${6 * PPH}" onscroll="S._gsPos=this.scrollTop">
+    `<div class="gridwrap" id="gridScroll" data-h6="${6 * PPH}" onscroll="S._gsPos=this.scrollTop;S._gsAt=Date.now()">
       <div class="daygrid" style="height:${(H1 - H0) * PPH}px;position:relative" onclick="dayGridTap(event, '${iso}', ${PPH})" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${rail}${blocks}${planBlockDivs(iso, H0, PPH, 'day')}${nowLine}</div></div>
     <div class="dim mono" style="font-size:10px;margin-top:4px">solid = calendar · dashed 💡 = the AI's plan (hold & drag to move) · 📌 = locked by you</div>`;
 }
@@ -2356,7 +2364,7 @@ function calWeekHTML(byDay, evByDay){
     })() : '';
     return `<div class="wk-col ${iso === todayISO() ? 'now' : ''}" data-iso="${iso}" style="position:relative" onclick="weekGridTap(event, '${iso}')" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${blocks}${planBlockDivs(iso, H0, PPH, 'week')}${nowline}</div>`;
   }).join('');
-  return head + adRow + `<div class="gridwrap" id="gridScroll" data-h6="${6 * PPH}" onscroll="S._gsPos=this.scrollTop">
+  return head + adRow + `<div class="gridwrap" id="gridScroll" data-h6="${6 * PPH}" onscroll="S._gsPos=this.scrollTop;S._gsAt=Date.now()">
     <div class="wk-grid" style="height:${(H1 - H0) * PPH}px"><div class="wk-rail">${rail}</div>${cols}</div></div>
   <div class="dim mono" style="font-size:10px;margin-top:6px">tap day header = day view · tap slot = new event · hold & drag 💡 blocks to replan (across days too) · 📌 = locked</div>`;
 }
@@ -2384,7 +2392,7 @@ function calDayHTML(iso, byDay, evByDay){
   return `${allday.map(e => `<div class="evrow" style="cursor:pointer" onclick="openEv(${e._i})"><span class="mono">all-day</span><span>${esc(e.title)}</span></div>`).join('')}
   ${due.length || doneDay.length ? `<div class="pname">due — ${due.length} open${doneDay.length ? ' · ' + doneDay.length + ' done' : ''}</div>` : ''}
   ${due.map(taskRowHTML).join('')}
-  <div class="gridwrap" id="gridScroll" data-h6="${6 * PPH}" onscroll="S._gsPos=this.scrollTop">
+  <div class="gridwrap" id="gridScroll" data-h6="${6 * PPH}" onscroll="S._gsPos=this.scrollTop;S._gsAt=Date.now()">
     <div class="daygrid" style="height:${(H1 - H0) * PPH}px;position:relative" onclick="dayGridTap(event, '${iso}', ${PPH})" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${rail}${blocks}${planBlockDivs(iso, H0, PPH, 'day')}${nowLine}</div>
   </div>
   <div class="dim mono" style="font-size:10px;margin-top:4px">solid = calendar · dashed 💡 = plan (hold & drag to move) · 📌 = locked</div>
