@@ -751,9 +751,15 @@ function computeScore(readBrief){
   let num = done.reduce((s, i) => s + weight(i, maxMin), 0)
           + partial.reduce((s, i) => s + 0.5 * weight(i, maxMin), 0)
           + offPlanActuals.reduce((s, i) => s + weight(i, maxMin), 0);
-  if (den === 0) return {score: null, planCount: 0, doneCount: done.length, partialCount: partial.length};
-  let score = (num / den) * 100 + (readBrief ? 2 : 0);
-  return {score: Math.min(Math.round(score * 10) / 10, 100), planCount: plan.length, doneCount: done.length, partialCount: partial.length};
+  // Lenovo/work day → 40-point head start toward the 70 streak threshold
+  const workday = (S.events || []).some(e => e.date === todayISO() && (e.source === 'work' || (e.title || '').toLowerCase().includes('work at lenovo')));
+  const base = (readBrief ? 2 : 0) + (workday ? 40 : 0);
+  if (den === 0) {
+    if (workday) return {score: Math.min(base, 100), planCount: 0, doneCount: done.length, partialCount: partial.length, workday: true};
+    return {score: null, planCount: 0, doneCount: done.length, partialCount: partial.length};
+  }
+  let score = (num / den) * 100 + base;
+  return {score: Math.min(Math.round(score * 10) / 10, 100), planCount: plan.length, doneCount: done.length, partialCount: partial.length, workday};
 }
 
 /* ================= reflect save ================= */
