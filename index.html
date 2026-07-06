@@ -390,7 +390,7 @@ document.getElementById('a-email').value = OWNER;
 /* ================= data ================= */
 async function loadAll(){
   const today = todayISO();
-  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st] = await Promise.all([
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
@@ -403,6 +403,7 @@ async function loadAll(){
     db.rpc('lifeos_credits'),
     db.from('plan_blocks').select('*').gte('date', today).order('date').order('start_min'),
     db.from('lifeos_settings').select('key,value'),
+    db.from('timetree_events').select('*').limit(500),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   S.cards = cd.data || []; S.events = ev.data || []; S.freezes = fz.data || [];
@@ -410,6 +411,7 @@ async function loadAll(){
   S.focusOpen = (fs.data || [])[0] || null;
   S.credits = cr.data || null;
   S.planBlocks = pb.data || [];
+  S.ttEvents = tt.data || [];
   S.settings = Object.fromEntries((st.data || []).map(r => [r.key, r.value]));
   try { S.wakeTargets = JSON.parse(S.settings.wake_targets || '{}'); } catch(e){ S.wakeTargets = {}; }
   const logs = dl.data || [];
@@ -844,7 +846,7 @@ async function saveReflection(){
 }
 
 /* ================= rendering ================= */
-const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['chat','CHAT'],['cal','CAL'],['reflect','REFLECT'],['log','LOG'],['trends','TRENDS'],['cards','CARDS']];
+const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['chat','CHAT'],['cal','CAL'],['reflect','REFLECT'],['yc','YC'],['log','LOG'],['trends','TRENDS'],['cards','CARDS']];
 function setView(v){ S.view = v; S.editing = null; localStorage.setItem('view', v); render(); }
 function setFilt(f){ S.filt = f; localStorage.setItem('filt', f); render(); }
 
@@ -868,6 +870,7 @@ function render(){
   if (S.view === 'tasks')   main.innerHTML = rTasks();
   if (S.view === 'brief')   { main.innerHTML = rBrief(); if (S.bionic) main.querySelectorAll('.md').forEach(bionicify); markBriefRead(); }
   if (S.view === 'reflect') { main.innerHTML = rReflect(); updateScorePreview(); }
+  if (S.view === 'yc')      main.innerHTML = rYC();
   if (S.view === 'log')     main.innerHTML = rLog();
   if (S.view === 'trends')  main.innerHTML = rTrends();
   if (S.view === 'cal')     main.innerHTML = rCal();
@@ -1246,10 +1249,8 @@ function creditsCardHTML(){
       <span class="dim" style="font-size:11px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${tTitle ? '▶ ' + esc(tTitle) : fo.energy + ' (general)'} · ~${Math.floor(mins / CREDIT_RATE[fo.energy])}cr</span>
       <button class="btn primary" style="margin-left:auto;flex:0 0 auto" onclick="clockOut()">Clock out</button></div>`;
   } else {
-    timer = `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-      <span class="dim" style="font-size:11px">Clock in:</span>
-      ${['DEEP','FOCUS','LIGHT'].map(e => `<button class="schip" style="border-color:${ENERGY[e].hex};color:${ENERGY[e].hex}" onclick="clockIn('${e}')">${e} · ${CREDIT_RATE[e]}m/cr</button>`).join('')}
-      <span class="dim" style="font-size:11px">· or ▶ a task</span></div>`;
+    timer = `<div style="display:flex;align-items:center;gap:6px">
+      ${['DEEP','FOCUS','LIGHT'].map(e => `<button class="schip" style="flex:1;white-space:nowrap;border-color:${ENERGY[e].hex};color:${ENERGY[e].hex}" onclick="clockIn('${e}')">${e} · ${CREDIT_RATE[e]}m/cr</button>`).join('')}</div>`;
   }
   const scroll = c.scroll_open
     ? `<div style="color:var(--accent);font-family:var(--mono);font-size:11px;margin-top:6px">📱 ${esc(c.scroll_open)} meter RUNNING — 1 credit/min, auto-cuts at 10m without a close</div>`
@@ -1765,6 +1766,33 @@ function rReflect(){
   <div style="height:10px"></div>`;
 }
 document.addEventListener('change', e => { if (['r-rest','r-brief'].includes(e.target.id)) updateScorePreview(); });
+
+/* --- YC (TimeTree, read-only) --- */
+function rYC(){
+  const today = todayISO();
+  const norm = (S.ttEvents || []).map(e => {
+    if (e.all_day) return {allDay:true, day:e.start_date, sort:(e.start_date||'')+'T00:00', title:e.title, loc:e.location};
+    const d = e.start_ts ? new Date(e.start_ts) : null;
+    return {allDay:false, day: d ? d.toLocaleDateString('sv-SE') : (e.start_date||''),
+            start:d, end: e.end_ts ? new Date(e.end_ts) : null, sort: e.start_ts || '', title:e.title, loc:e.location};
+  }).filter(x => x.day && x.day >= today).sort((a,b) => a.sort.localeCompare(b.sort));
+  const byDay = {}; norm.forEach(x => { (byDay[x.day] = byDay[x.day] || []).push(x); });
+  const dayLabel = ds => { const [y,m,d] = ds.split('-').map(Number); return new Date(y,m-1,d).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'}); };
+  const tfmt = dt => dt ? dt.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : '';
+  const lastSync = (S.ttEvents || []).reduce((mx,e) => (e.updated_at || '') > mx ? e.updated_at : mx, '');
+  return `
+  <div class="card"><h2>YC · TimeTree</h2>
+    <div class="dim" style="font-size:12px;margin-bottom:8px">Her schedule (read-only) — separate from your calendar and plan.</div>
+    ${Object.keys(byDay).length ? Object.entries(byDay).map(([d, xs]) =>
+      `<div class="pname">${dayLabel(d)}</div>` + xs.map(x =>
+        `<div style="padding:4px 0;font-size:14px;display:flex;gap:8px">
+          <span class="mono dim" style="font-size:12px;min-width:78px;flex:0 0 auto">${x.allDay ? 'all day' : tfmt(x.start) + (x.end ? '–' + tfmt(x.end) : '')}</span>
+          <span>${esc(x.title || '(untitled)')}${x.loc ? ` <span class="dim" style="font-size:12px">@ ${esc(x.loc)}</span>` : ''}</span>
+        </div>`).join('')).join('')
+      : '<span class="dim">No upcoming events synced yet.</span>'}
+    ${lastSync ? `<div class="dim mono" style="margin-top:8px;font-size:11px">last synced ${new Date(lastSync).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}</div>` : ''}
+  </div>`;
+}
 
 /* --- LOG --- */
 function rLog(){
