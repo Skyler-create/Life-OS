@@ -1250,7 +1250,7 @@ function creditsCardHTML(){
       <button class="btn primary" style="margin-left:auto;flex:0 0 auto" onclick="clockOut()">Clock out</button></div>`;
   } else {
     timer = `<div style="display:flex;align-items:center;gap:6px">
-      ${['DEEP','FOCUS','LIGHT'].map(e => `<button class="schip" style="flex:1;white-space:nowrap;border-color:${ENERGY[e].hex};color:${ENERGY[e].hex}" onclick="clockIn('${e}')">${e} · ${CREDIT_RATE[e]}m/cr</button>`).join('')}</div>`;
+      ${['DEEP','FOCUS','LIGHT'].map(e => `<button class="schip" style="flex:1;white-space:nowrap;font-size:11px;padding:7px 6px;text-align:center;touch-action:pan-y;border-color:${ENERGY[e].hex};color:${ENERGY[e].hex}" onclick="clockIn('${e}')">${e} · ${CREDIT_RATE[e]}m/cr</button>`).join('')}</div>`;
   }
   const scroll = c.scroll_open
     ? `<div style="color:var(--accent);font-family:var(--mono);font-size:11px;margin-top:6px">📱 ${esc(c.scroll_open)} meter RUNNING — 1 credit/min, auto-cuts at 10m without a close</div>`
@@ -2534,24 +2534,144 @@ function calDayHTML(iso, byDay, evByDay){
 
 /* --- CARDS (spaced-repetition flashcards, replaces Anki) --- */
 function rCards(){
+  if (!S.cardMode) S.cardMode = localStorage.getItem('cardMode') || 'mcq';
+  if (S.earn) return earnQuizHTML();
+  const earnedToday = S.credits && S.credits.cards_earned;
+  const earnBtn = earnedToday
+    ? `<div class="dim" style="font-size:12px;padding:6px 0;margin-bottom:4px">🎁 IG-time bonus already earned today (+5 min, cap 95).</div>`
+    : `<button class="btn" style="width:100%;margin-bottom:10px;border-color:var(--accent);color:var(--accent)" onclick="startEarnQuiz()">🎁 Earn 5 min off IG — get 5 cards right (once/day)</button>`;
   const q = S.cards || [];
-  if (!q.length) return `<div class="empty">No cards due.<br><br>New cards arrive with each morning brief that has a call-learning topic.<br>Reviews reschedule themselves — come back tomorrow.</div>`;
-  const c = q[0];
-  return `<div class="pname">${q.length} due</div>
-  <div class="card">
-    <h2>${esc(c.category || 'card')}${c.topic ? ' · ' + esc(c.topic) : ''}</h2>
-    <div class="fc-front">${esc(c.front)}</div>
-    ${S.showBack ? `<div class="fc-back">${esc(c.back)}</div>` : ''}
-  </div>
+  if (!q.length) return earnBtn + `<div class="empty">No cards due.<br><br>New cards arrive with each morning brief. Reviews reschedule themselves.</div>`;
+  const card = q[0];
+  const modeChips = `<div class="chiprow" style="margin-bottom:10px">${[['mcq','MCQ'],['type','TYPE'],['flip','FLIP']].map(([m,l]) =>
+    `<button class="schip ${S.cardMode===m?'on':''}" style="flex:1" onclick="setCardMode('${m}')">${l}</button>`).join('')}</div>`;
+  const head = `<div class="pname">${q.length} due</div>${earnBtn}${modeChips}`;
+  if (S.cardMode === 'mcq')  return head + cardMcqHTML(card);
+  if (S.cardMode === 'type') return head + cardTypeHTML(card);
+  return head + cardFlipHTML(card);
+}
+function setCardMode(m){ S.cardMode = m; localStorage.setItem('cardMode', m); S.mcq = null; S.typed = null; S.showBack = false; render(); }
+
+/* FLIP (classic) */
+function cardFlipHTML(card){
+  return `<div class="card"><h2>${esc(card.category || 'card')}${card.topic ? ' · ' + esc(card.topic) : ''}</h2>
+    <div class="fc-front">${esc(card.front)}</div>
+    ${S.showBack ? `<div class="fc-back">${esc(card.back)}</div>` : ''}</div>
   ${S.showBack
     ? `<div style="display:flex;gap:8px">
         <button class="btn" style="flex:1;color:var(--accent)" onclick="gradeCard(0)">Again</button>
         <button class="btn" style="flex:1" onclick="gradeCard(1)">Good</button>
-        <button class="btn" style="flex:1;color:var(--done)" onclick="gradeCard(2)">Easy</button>
-      </div>
+        <button class="btn" style="flex:1;color:var(--done)" onclick="gradeCard(2)">Easy</button></div>
       <button class="btn" style="width:100%;margin-top:8px;color:var(--dim)" onclick="suspendCard()">suspend card</button>`
     : `<button class="btn primary" style="width:100%;padding:12px" onclick="S.showBack=true;render()">Show answer</button>`}
   <div style="height:10px"></div>`;
+}
+
+/* MCQ (deterministic, no LLM) */
+function buildOneMcq(card){
+  const backs = [...new Set((S.cards || []).map(c => c.back).filter(Boolean))];
+  const distract = _shuffle(backs.filter(b => b !== card.back)).slice(0, 3);
+  const options = _shuffle([card.back, ...distract]);
+  return { cardId: card.id, options, answer: options.indexOf(card.back), picked: null };
+}
+function cardMcqHTML(card){
+  if (!S.mcq || S.mcq.cardId !== card.id) S.mcq = buildOneMcq(card);
+  const m = S.mcq;
+  if (m.options.length < 2) return cardFlipHTML(card);   // not enough cards for choices
+  const opts = m.options.map((o,i) => {
+    let extra = '';
+    if (m.picked != null) { if (i === m.answer) extra = ';border-color:var(--done);color:var(--done)'; else if (i === m.picked) extra = ';border-color:#E1251B;color:#E1251B'; }
+    return `<button class="btn" style="display:block;width:100%;text-align:left;margin-bottom:6px${extra}" onclick="answerMcq(${i})">${esc(o)}</button>`;
+  }).join('');
+  return `<div class="card"><h2>${esc(card.category || 'card')}${card.topic ? ' · ' + esc(card.topic) : ''}</h2>
+    <div class="fc-front">${esc(card.front)}</div></div>
+    ${opts}
+    ${m.picked != null ? `<button class="btn primary" style="width:100%;margin-top:4px" onclick="nextMcq()">${m.picked === m.answer ? '✓ correct — Next' : '✗ Next'}</button>` : ''}
+  <div style="height:10px"></div>`;
+}
+function answerMcq(i){ if (S.mcq.picked != null) return; S.mcq.picked = i; render(); }
+function nextMcq(){ const correct = S.mcq.picked === S.mcq.answer; S.mcq = null; gradeCard(correct ? 1 : 0); }
+
+/* TYPE (free-text, graded by the swappable `grade` edge function → Claude Haiku) */
+function cardTypeHTML(card){
+  const t = (S.typed && S.typed.cardId === card.id) ? S.typed : null;
+  const vColor = {correct:'var(--done)', partial:'var(--focus)', wrong:'var(--accent)'};
+  return `<div class="card"><h2>${esc(card.category || 'card')}${card.topic ? ' · ' + esc(card.topic) : ''}</h2>
+    <div class="fc-front">${esc(card.front)}</div>
+    ${t && !t.grading ? `<div class="fc-back" style="margin-top:8px"><b style="color:${vColor[t.verdict] || 'var(--dim)'}">${(t.verdict || '').toUpperCase()}</b> — ${esc(t.feedback || '')}</div>
+      <div class="fc-back" style="margin-top:6px"><span class="dim">answer:</span> ${esc(card.back)}</div>` : ''}
+  </div>
+  ${!t ? `<textarea id="typeans" rows="2" placeholder="type your answer" style="width:100%"></textarea>
+    <button class="btn primary" style="width:100%;margin-top:8px" onclick="submitTyped()">Check</button>`
+   : t.grading ? `<div class="typing">grading…</div>`
+   : `<div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn" style="flex:1;color:var(--accent)" onclick="gradeTyped(0)">Again</button>
+        <button class="btn" style="flex:1" onclick="gradeTyped(1)">Good</button>
+        <button class="btn" style="flex:1;color:var(--done)" onclick="gradeTyped(2)">Easy</button></div>`}
+  <div style="height:10px"></div>`;
+}
+async function submitTyped(){
+  const card = (S.cards || [])[0]; if (!card) return;
+  const inp = document.getElementById('typeans'); const ans = (inp?.value || '').trim();
+  if (!ans) { toast('Type an answer first'); return; }
+  S.typed = {cardId: card.id, ans, grading: true}; render();
+  try {
+    const {data:{session}} = await db.auth.getSession();
+    const r = await fetch(SB_URL + '/functions/v1/grade', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json', 'Authorization':'Bearer ' + session.access_token},
+      body: JSON.stringify({front: card.front, back: card.back, answer: ans}),
+    });
+    const d = await r.json();
+    S.typed = {cardId: card.id, ans, verdict: d.verdict || 'partial', feedback: d.feedback || ''};
+  } catch(e) {
+    S.typed = {cardId: card.id, ans, verdict: 'partial', feedback: 'Network error — grade yourself'};
+  }
+  render();
+}
+function gradeTyped(g){ S.typed = null; gradeCard(g); }
+
+/* EARN quiz: 5 correct MCQ → +5 min off IG (cap 95), once/day */
+function startEarnQuiz(){
+  const qs = buildWakeQuestions();
+  if (qs.length < 5) { toast('Need at least 5 cards to earn'); return; }
+  S.earn = {questions: qs, idx: 0, correct: 0, picked: null, need: 5};
+  render();
+}
+function answerEarn(i){ if (S.earn.picked != null) return; S.earn.picked = i; render(); }
+async function nextEarn(){
+  const e = S.earn, q = e.questions[e.idx];
+  if (e.picked === q.answer) e.correct++;
+  e.idx++; e.picked = null;
+  if (e.correct >= e.need) {
+    const {data, error} = await db.rpc('lifeos_claim_card_bonus');
+    S.earn = null;
+    if (error) toast('Claim failed: ' + error.message);
+    else if (data && data.already) toast('Already earned today');
+    else toast('🎁 +5 min off IG unlocked — cap 95');
+    loadAll(); return;
+  }
+  if (e.idx >= e.questions.length) {
+    toast(`${e.correct}/5 correct — not enough, going again`);
+    S.earn = {questions: buildWakeQuestions(), idx: 0, correct: 0, picked: null, need: 5};
+  }
+  render();
+}
+function cancelEarn(){ S.earn = null; render(); }
+function earnQuizHTML(){
+  const e = S.earn, q = e.questions[e.idx];
+  if (!q) { S.earn = null; return rCards(); }
+  const opts = q.options.map((o,i) => {
+    let extra = '';
+    if (e.picked != null) { if (i === q.answer) extra = ';border-color:var(--done);color:var(--done)'; else if (i === e.picked) extra = ';border-color:#E1251B;color:#E1251B'; }
+    return `<button class="btn" style="display:block;width:100%;text-align:left;margin-bottom:6px${extra}" onclick="answerEarn(${i})">${esc(o)}</button>`;
+  }).join('');
+  const willHit = e.correct + (e.picked === q.answer ? 1 : 0) >= e.need;
+  return `<div class="card" style="border-color:var(--accent)"><h2>🎁 Earn 5 min off IG</h2>
+    <div class="dim" style="font-size:11px;margin-bottom:8px">${e.correct}/${e.need} correct — ${e.need} unlocks +5 min (cap 95), once/day</div>
+    <div style="font-weight:600;margin-bottom:8px">${esc(q.front)}</div>${opts}
+    ${e.picked != null ? `<button class="btn primary" style="width:100%;margin-top:4px" onclick="nextEarn()">${willHit ? 'Claim +5' : 'Next'}</button>` : ''}
+    <button class="btn" style="width:100%;margin-top:6px;color:var(--dim)" onclick="cancelEarn()">cancel</button></div>`;
 }
 async function gradeCard(g){
   const c = (S.cards || [])[0]; if (!c) return;
