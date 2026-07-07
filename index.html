@@ -712,8 +712,8 @@ async function saveEdit(id){
   const t = S.tasks.find(x => x.id === id);
   const newParent = g('parent') || null;
   if (newParent && kids.length) { toast('Move its subtasks out first — a goal cannot become a subtask'); return; }
-  let proj = g('project');
-  if (proj == null) proj = t ? (t.project || null) : null;   // subtask editor has no project field — keep existing
+  const projEl = document.getElementById('e-project');
+  let proj = projEl ? (projEl.value || null) : (t ? (t.project || null) : null);   // absent for subtasks -> keep existing
   if (newParent) { const p = S.tasks.find(x => x.id === newParent); if (p) proj = p.project; }   // subtask inherits its goal's project
   const patch = {
     title: g('title'), project: proj, parent_id: newParent, energy: g('energy'),
@@ -1146,6 +1146,14 @@ function skipGoalConfirm(id){
   localStorage.setItem('goalConfirmSkip', JSON.stringify(l));
   render();
 }
+/* project dropdown: choose "+ new project…" -> prompt for a name, add + select it
+   (so you pick existing projects from the list instead of retyping and duplicating) */
+function onProjPick(sel){
+  if (sel.value !== '__new__') return;
+  const n = (prompt('New project name:') || '').trim();
+  if (n) { const o = document.createElement('option'); o.value = n; o.text = n; o.selected = true; sel.add(o, sel.options.length - 1); }
+  else { sel.selectedIndex = 0; }
+}
 function editorHTML(t){
   const opt = (list, cur) => list.map(([v, l]) => `<option value="${v}" ${v === (cur ?? '') ? 'selected' : ''}>${l}</option>`).join('');
   // move control depends on layer: a top-level task picks a PROJECT; a subtask picks its parent TASK
@@ -1158,10 +1166,13 @@ function editorHTML(t){
       ${goals.map(g0 => `<option value="${g0.id}" ${t.parent_id === g0.id ? 'selected' : ''}>${esc((g0.project ? g0.project + ' · ' : '') + g0.title)}</option>`).join('')}
     </select></div>`;
   } else {
-    const projects = [...new Set((S.tasks || []).map(x => x.project).filter(Boolean))].sort();
+    const projects = [...new Set((S.tasks || []).map(x => x.project).filter(Boolean))].sort((a, b) => a.localeCompare(b));
     moveField = `<div class="full"><label>Project</label>
-      <input id="e-project" list="projlist" value="${esc(t.project || '')}" placeholder="project file">
-      <datalist id="projlist">${projects.map(p => `<option value="${esc(p)}">`).join('')}</datalist></div>`;
+      <select id="e-project" onchange="onProjPick(this)">
+        <option value="" ${!t.project ? 'selected' : ''}>— none (Inbox) —</option>
+        ${projects.map(p => `<option value="${esc(p)}" ${t.project === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}
+        <option value="__new__">+ new project…</option>
+      </select></div>`;
   }
   return `<div class="editor" onclick="event.stopPropagation()">
     <div class="full"><label>Title</label><input id="e-title" value="${esc(t.title)}"></div>
