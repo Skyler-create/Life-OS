@@ -1079,6 +1079,7 @@ function taskRowHTML(t){
       ${editor}
     </div>
     ${startBtn}
+    ${S.editMode ? `<button class="tstart" style="color:var(--accent)" onclick="event.stopPropagation();deleteTask('${t.id}')" title="Delete task">✕</button>` : ''}
   </div>`;
 }
 /* --- 3-layer: goal row (L2) with nested children (L3) --- */
