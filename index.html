@@ -708,8 +708,13 @@ document.addEventListener('keydown', e => {
 
 async function saveEdit(id){
   const g = f => document.getElementById('e-' + f)?.value || null;
+  const kids = (S._kids || {})[id] || [];
+  const newParent = g('parent') || null;
+  if (newParent && kids.length) { toast('Move its subtasks out first — a goal cannot become a subtask'); return; }
+  let proj = g('project');
+  if (newParent) { const p = S.tasks.find(x => x.id === newParent); if (p) proj = p.project; }   // subtask inherits its goal's project
   const patch = {
-    title: g('title'), project: g('project'), energy: g('energy'),
+    title: g('title'), project: proj, parent_id: newParent, energy: g('energy'),
     due: g('due') || null, est_minutes: g('est') ? parseInt(g('est')) : null,
     actual_minutes: g('actual') ? parseInt(g('actual')) : null,
     priority: g('prio'), deadline_type: g('dtype') || null, status: g('status'),
@@ -719,6 +724,7 @@ async function saveEdit(id){
   else patch.completed_at = null;
   const {error} = await db.from('tasks').update(patch).eq('id', id);
   if (error) { toast('Save failed: ' + error.message); return; }
+  if (kids.length) await db.from('tasks').update({project: proj}).eq('parent_id', id);   // subtasks follow their parent's project
   S.editing = null; loadAll();
 }
 async function deleteTask(id){
@@ -1139,9 +1145,13 @@ function skipGoalConfirm(id){
 }
 function editorHTML(t){
   const opt = (list, cur) => list.map(([v, l]) => `<option value="${v}" ${v === (cur ?? '') ? 'selected' : ''}>${l}</option>`).join('');
+  const goals = (S.tasks || []).filter(x => !x.parent_id && x.id !== t.id && x.status !== 'done');
+  const parentOpts = `<option value="">— none (top level) —</option>` +
+    goals.map(g0 => `<option value="${g0.id}" ${t.parent_id === g0.id ? 'selected' : ''}>${esc((g0.project ? g0.project + ' · ' : '') + g0.title)}</option>`).join('');
   return `<div class="editor" onclick="event.stopPropagation()">
     <div class="full"><label>Title</label><input id="e-title" value="${esc(t.title)}"></div>
     <div><label>Project</label><input id="e-project" value="${esc(t.project || '')}"></div>
+    <div><label>Under goal</label><select id="e-parent">${parentOpts}</select></div>
     <div><label>Energy</label><select id="e-energy">${opt(Object.keys(ENERGY).map(e => [e, e]), t.energy || 'FOCUS')}</select></div>
     <div><label>Due</label><input id="e-due" type="date" value="${t.due || ''}"></div>
     <div><label>Est. min</label><input id="e-est" type="number" value="${t.est_minutes ?? ''}"></div>
