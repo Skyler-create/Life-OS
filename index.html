@@ -1835,11 +1835,20 @@ function ttEvByDay(){
       else { for (let d = new Date(startD); d < endD; d.setDate(d.getDate()+1)) {   // DTEND is exclusive for all-day
         const iso = d.toLocaleDateString('sv-SE'); push(iso, {date:iso, start_time:null, end_time:null, title}); } }
     } else if (e.start_ts) {
-      const d = new Date(e.start_ts), iso = d.toLocaleDateString('sv-SE');
       const hm = x => String(x.getHours()).padStart(2,'0') + ':' + String(x.getMinutes()).padStart(2,'0');
-      let et = null;
-      if (e.end_ts) { const d2 = new Date(e.end_ts); if (d2.toLocaleDateString('sv-SE') === iso) et = hm(d2); }
-      push(iso, {date:iso, start_time:hm(d), end_time:et, title});
+      const s = new Date(e.start_ts);
+      const en = e.end_ts ? new Date(e.end_ts) : new Date(s.getTime() + 3600000);
+      const sIso = s.toLocaleDateString('sv-SE'), eIso = en.toLocaleDateString('sv-SE');
+      if (sIso === eIso) {
+        push(sIso, {date:sIso, start_time:hm(s), end_time:hm(en), title});
+      } else {
+        // spans midnight / multiple days -> split into per-day segments
+        push(sIso, {date:sIso, start_time:hm(s), end_time:'24:00', title});
+        let cur = new Date(s); cur.setHours(0,0,0,0); cur.setDate(cur.getDate() + 1);
+        const endDay = new Date(en); endDay.setHours(0,0,0,0);
+        while (cur < endDay) { push(cur.toLocaleDateString('sv-SE'), {date:cur.toLocaleDateString('sv-SE'), start_time:'00:00', end_time:'24:00', title}); cur.setDate(cur.getDate() + 1); }
+        if (en.getHours() * 60 + en.getMinutes() > 0) push(eIso, {date:eIso, start_time:'00:00', end_time:hm(en), title});
+      }
     }
   });
   return map;
