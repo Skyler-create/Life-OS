@@ -709,9 +709,11 @@ document.addEventListener('keydown', e => {
 async function saveEdit(id){
   const g = f => document.getElementById('e-' + f)?.value || null;
   const kids = (S._kids || {})[id] || [];
+  const t = S.tasks.find(x => x.id === id);
   const newParent = g('parent') || null;
   if (newParent && kids.length) { toast('Move its subtasks out first — a goal cannot become a subtask'); return; }
   let proj = g('project');
+  if (proj == null) proj = t ? (t.project || null) : null;   // subtask editor has no project field — keep existing
   if (newParent) { const p = S.tasks.find(x => x.id === newParent); if (p) proj = p.project; }   // subtask inherits its goal's project
   const patch = {
     title: g('title'), project: proj, parent_id: newParent, energy: g('energy'),
@@ -1085,6 +1087,7 @@ function taskRowHTML(t){
       ${editor}
     </div>
     ${startBtn}
+    ${S.editMode && t.parent_id ? `<button class="tstart" style="color:var(--dim)" onclick="event.stopPropagation();S.editing = S.editing === '${t.id}' ? null : '${t.id}'; render()" title="Edit subtask">✎</button>` : ''}
     ${S.editMode ? `<button class="tstart" style="color:var(--accent)" onclick="event.stopPropagation();deleteTask('${t.id}')" title="Delete task">✕</button>` : ''}
   </div>`;
 }
@@ -1145,13 +1148,24 @@ function skipGoalConfirm(id){
 }
 function editorHTML(t){
   const opt = (list, cur) => list.map(([v, l]) => `<option value="${v}" ${v === (cur ?? '') ? 'selected' : ''}>${l}</option>`).join('');
-  const goals = (S.tasks || []).filter(x => !x.parent_id && x.id !== t.id && x.status !== 'done');
-  const parentOpts = `<option value="">— none (top level) —</option>` +
-    goals.map(g0 => `<option value="${g0.id}" ${t.parent_id === g0.id ? 'selected' : ''}>${esc((g0.project ? g0.project + ' · ' : '') + g0.title)}</option>`).join('');
+  // move control depends on layer: a top-level task picks a PROJECT; a subtask picks its parent TASK
+  const isSub = !!t.parent_id;
+  let moveField;
+  if (isSub) {
+    const goals = (S.tasks || []).filter(x => !x.parent_id && x.id !== t.id && x.status !== 'done');
+    moveField = `<div class="full"><label>Under task</label><select id="e-parent">
+      <option value="">— none (make it a top-level task) —</option>
+      ${goals.map(g0 => `<option value="${g0.id}" ${t.parent_id === g0.id ? 'selected' : ''}>${esc((g0.project ? g0.project + ' · ' : '') + g0.title)}</option>`).join('')}
+    </select></div>`;
+  } else {
+    const projects = [...new Set((S.tasks || []).map(x => x.project).filter(Boolean))].sort();
+    moveField = `<div class="full"><label>Project</label>
+      <input id="e-project" list="projlist" value="${esc(t.project || '')}" placeholder="project file">
+      <datalist id="projlist">${projects.map(p => `<option value="${esc(p)}">`).join('')}</datalist></div>`;
+  }
   return `<div class="editor" onclick="event.stopPropagation()">
     <div class="full"><label>Title</label><input id="e-title" value="${esc(t.title)}"></div>
-    <div><label>Project</label><input id="e-project" value="${esc(t.project || '')}"></div>
-    <div><label>Under goal</label><select id="e-parent">${parentOpts}</select></div>
+    ${moveField}
     <div><label>Energy</label><select id="e-energy">${opt(Object.keys(ENERGY).map(e => [e, e]), t.energy || 'FOCUS')}</select></div>
     <div><label>Due</label><input id="e-due" type="date" value="${t.due || ''}"></div>
     <div><label>Est. min</label><input id="e-est" type="number" value="${t.est_minutes ?? ''}"></div>
