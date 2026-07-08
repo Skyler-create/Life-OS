@@ -1307,7 +1307,7 @@ function creditsCardHTML(){
     </div>
     <div class="ebar" style="margin-bottom:6px"><div style="width:${pct}%;background:${pct >= 85 ? '#E1251B' : pct >= 60 ? '#FBBF24' : '#4ADE80'}"></div></div>
     <div class="dim" style="font-size:11px;margin-bottom:10px">earned = ${c.free} free + ${c.timer} clocked + ${c.bonus} completions${c.wake_bonus ? ` + ${c.wake_bonus} wake` : ''} · daily cap ${c.cap}${c.gross >= c.cap ? ' — HIT' : ''}</div>
-    ${timer}${scroll}${wakeLine}${wakeTargetsHTML()}
+    ${timer}${scroll}${wakeLine}${sleepHTML()}${wakeTargetsHTML()}${tzPickerHTML()}
   </div>`;
 }
 /* general clock-in: untethered, time credits only */
@@ -1547,6 +1547,39 @@ async function saveWakeTarget(dow, field, value){
   const {error} = await db.from('lifeos_settings').upsert({key:'wake_targets', value: JSON.stringify(S.wakeTargets)});
   if (error) { toast('Save failed: ' + error.message); return; }
   toast(`${DOW[dow]} ${field} → ${value}`); loadAll();
+}
+/* ---- Time-zone picker (drives 6 AM reset, scoring, planner, notifications) ---- */
+function tzPickerHTML(){
+  const cur = (S.settings && S.settings.tz) || 'America/New_York';
+  const zones = [['America/New_York','Eastern'],['America/Chicago','Central'],['America/Denver','Mountain'],
+    ['America/Los_Angeles','Pacific'],['America/Phoenix','Arizona'],['Asia/Taipei','Taipei (YC)'],['UTC','UTC']];
+  const open = S.openGroups.has('g:tz') ? 'open' : '';
+  return `<details class="bsec" style="margin-top:8px" ${open} ontoggle="tgGoal('tz', this.open)">
+    <summary style="padding:8px 10px;cursor:pointer;font-size:12px">🌐 Time zone — ${esc(cur.split('/').pop().replace('_',' '))}</summary>
+    <div style="padding:8px 10px">
+      <div class="dim" style="font-size:11px;margin-bottom:6px">Drives the 6 AM credit-day reset, scoring, the planner, and notification timing.</div>
+      <select onchange="saveTz(this.value)" style="width:100%;font-size:13px">
+        ${zones.map(([v,l]) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l} — ${v}</option>`).join('')}
+      </select>
+    </div></details>`;
+}
+async function saveTz(v){
+  const {error} = await db.from('lifeos_settings').upsert({key:'tz', value: v});
+  if (error) { toast('Save failed: ' + error.message); return; }
+  toast('Time zone → ' + v); loadAll();
+}
+/* ---- Last-night sleep summary (bedtime from iOS Sleep-Focus automation + wake) ---- */
+function sleepHTML(){
+  const bed = (S.prevLog && S.prevLog.sleep_at) || (S.todayLog && S.todayLog.sleep_at);
+  const wake = S.todayLog && (S.todayLog.wake_confirmed_at || (S.todayLog.wake_time && S.todayLog.date + 'T' + S.todayLog.wake_time));
+  if (!bed && !wake) return '';
+  const fmt = ts => ts ? new Date(ts).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : '—';
+  let dur = '';
+  if (bed && wake) {
+    const mins = Math.round((new Date(wake) - new Date(bed)) / 60000);
+    if (mins > 0 && mins < 24 * 60) dur = ` · ${Math.floor(mins/60)}h ${mins % 60}m`;
+  }
+  return `<div class="dim mono" style="font-size:11px;margin-top:6px">😴 slept ${fmt(bed)} → woke ${fmt(wake)}${dur}</div>`;
 }
 
 /* ---- Wake challenge: prove you're awake before free credits unlock ---- */
