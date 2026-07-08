@@ -854,7 +854,7 @@ async function saveReflection(){
 }
 
 /* ================= rendering ================= */
-const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['chat','CHAT'],['cal','CAL'],['reflect','REFLECT'],['yc','YC'],['log','LOG'],['trends','TRENDS'],['cards','CARDS']];
+const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['cal','CAL'],['chat','CHAT'],['reflect','REFLECT'],['yc','YC'],['log','LOG'],['trends','TRENDS'],['cards','CARDS'],['settings','SETTINGS']];
 function setView(v){ S.view = v; S.editing = null; localStorage.setItem('view', v); render(); }
 function setFilt(f){ S.filt = f; localStorage.setItem('filt', f); render(); }
 
@@ -884,6 +884,7 @@ function render(){
   if (S.view === 'cal')     main.innerHTML = rCal();
   if (S.view === 'cards')   main.innerHTML = rCards();
   if (S.view === 'chat')    { main.innerHTML = rChat(); const cl = document.getElementById('chatlog'); if (cl) cl.scrollTop = cl.scrollHeight; }
+  if (S.view === 'settings') main.innerHTML = rSettings();
   render._lastView = S.view;
   if (sameView) main.scrollTop = savedScroll;
   document.getElementById('addbar').classList.toggle('hidden', !(S.view === 'today' || S.view === 'tasks') || !!S.sheet);
@@ -989,7 +990,7 @@ function render(){
     const drag  = Math.abs(dx) > 55;                          // deliberate drag
     if ((!flick && !drag) || Math.abs(dx) < Math.abs(dy)) { snapBack(); return; }  // within ~45° counts
     // inside the calendar: swipes starting near the screen edges switch tabs
-    // (CHAT ⟷ CAL ⟷ REFLECT); swipes starting in the middle page through time.
+    // (BRIEF ⟷ CAL ⟷ CHAT); swipes starting in the middle page through time.
     // Note: the outermost ~20px belong to iOS (browser back/forward) — the usable
     // tab-switch band is roughly 20-70px from either edge.
     const EDGE = 70;
@@ -1307,7 +1308,7 @@ function creditsCardHTML(){
     </div>
     <div class="ebar" style="margin-bottom:6px"><div style="width:${pct}%;background:${pct >= 85 ? '#E1251B' : pct >= 60 ? '#FBBF24' : '#4ADE80'}"></div></div>
     <div class="dim" style="font-size:11px;margin-bottom:10px">earned = ${c.free} free + ${c.timer} clocked + ${c.bonus} completions${c.wake_bonus ? ` + ${c.wake_bonus} wake` : ''} · daily cap ${c.cap}${c.gross >= c.cap ? ' — HIT' : ''}</div>
-    ${timer}${scroll}${wakeLine}${sleepHTML()}${wakeTargetsHTML()}${tzPickerHTML()}
+    ${timer}${scroll}${wakeLine}${sleepHTML()}
   </div>`;
 }
 /* general clock-in: untethered, time credits only */
@@ -2853,6 +2854,40 @@ async function sendChat(){
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && document.activeElement?.id === 'chatinput') sendChat();
 });
+
+/* ================= SETTINGS ================= */
+function rSettings(){
+  const gate = (S.settings && S.settings.wake_gate) === 'on';
+  const pushOn = pushSupported() && Notification.permission === 'granted';
+  const toggleRow = (icon, title, desc, on, onclick) => `
+    <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px">${icon} ${title}</div>
+        <div class="dim" style="font-size:11px">${desc}</div>
+      </div>
+      <button class="btn ${on ? 'primary' : ''}" style="flex:0 0 auto" onclick="${onclick}">${on ? 'ON' : 'OFF'}</button>
+    </div>`;
+  return `
+  <div class="card"><h2>Time &amp; wake</h2>
+    ${tzPickerHTML()}
+    ${wakeTargetsHTML()}
+    ${toggleRow('🌅', 'Wake gate', 'Block the first IG/YT scroll of the day until the brief has been opened.', gate, `saveWakeGate('${gate ? 'off' : 'on'}')`)}
+  </div>
+  <div class="card"><h2>Notifications</h2>
+    <div class="dim" style="font-size:11px;margin-bottom:8px">Brief-ready, reality-check, streak-risk + reflection nudges. iOS: install to Home Screen first, then enable from the installed app.</div>
+    <button class="btn ${pushOn ? 'primary' : ''}" onclick="enablePush()">${pushOn ? '🔔 Push enabled on this device' : '🔔 Enable push'}</button>
+  </div>
+  <div class="card"><h2>Reading</h2>
+    ${toggleRow('Aa', 'Bionic reading', 'Bold word-starts in the brief for faster scanning (this device).', S.bionic, `toggleBionic()`)}
+  </div>`;
+}
+function toggleBionic(){ S.bionic = !S.bionic; localStorage.setItem('bionic', S.bionic ? '1' : '0'); render(); }
+async function saveWakeGate(v){
+  const {error} = await db.from('lifeos_settings').upsert({key: 'wake_gate', value: v});
+  if (error) { toast('Save failed: ' + error.message); return; }
+  (S.settings = S.settings || {}).wake_gate = v;
+  toast('Wake gate → ' + v.toUpperCase()); render();
+}
 
 /* ================= PWA ================= */
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
