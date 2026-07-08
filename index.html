@@ -2166,6 +2166,13 @@ function gcalDisconnect(){
   localStorage.removeItem('gtok'); localStorage.removeItem('gconn');
   S.gcalLive = false; S.gcalRange = null; S.gcalEvents = []; S.gcalCals = null; render();
 }
+/* keep Google silently connected: refresh the token ~2 min before it lapses,
+   so it never drops mid-session and never needs a manual re-click */
+setInterval(() => {
+  if (!GCAL_CLIENT_ID || localStorage.getItem('gconn') !== '1' || !window.google?.accounts?.oauth2) return;
+  const t = JSON.parse(localStorage.getItem('gtok') || 'null');
+  if (!t || t.exp < Date.now() + 120000) gcalConnect(true);
+}, 60000);
 function allEvents(){
   // hide the Google mirrors of our own locked plan blocks (they render as blocks, not events)
   const mirror = new Set((S.planBlocks || []).map(b => b.gcal_id).filter(Boolean));
@@ -2475,7 +2482,9 @@ async function loadGcal(anchorISO){
     // all calendars, not just primary (cached until disconnect/401)
     if (!S.gcalCals) {
       const cl = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=50', {headers: {Authorization: 'Bearer ' + tok}});
-      if (cl.status === 401) { localStorage.removeItem('gtok'); S.gcalLive = false; S.gcalLoading = false; render(); return; }
+      if (cl.status === 401) { localStorage.removeItem('gtok'); S.gcalCals = null; S.gcalLive = false; S.gcalLoading = false;
+        if (localStorage.getItem('gconn') === '1') gcalConnect(true); else render();   // silent re-auth instead of dropping
+        return; }
       const cld = cl.ok ? await cl.json() : {};
       S.gcalCals = (cld.items || []).filter(c => c.selected !== false)
         .map(c => ({id: c.id, name: c.summaryOverride || c.summary || c.id, primary: !!c.primary, writable: ['owner','writer'].includes(c.accessRole)}));
