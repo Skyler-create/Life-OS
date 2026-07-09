@@ -600,7 +600,7 @@ async function saveSheet(){
   S.sheet = null; toast(parentId ? 'Added under goal' : 'Added'); loadAll();  // refetch so any auto-chunk split shows immediately
 }
 function projectRegistry(){ try { return JSON.parse((S.settings && S.settings.projects) || '[]'); } catch(e){ return []; } }
-function distinctProjects(){ return [...new Set([...S.tasks.map(t => t.project).filter(Boolean), ...projectRegistry()])].sort(); }
+function distinctProjects(){ return [...new Set([...S.tasks.filter(t => t.status !== 'done').map(t => t.project).filter(Boolean), ...projectRegistry()])].sort(); }
 window._projList = [];
 function pickProject(i){ S.sheet.project = i < 0 ? null : window._projList[i]; S.sheet.parentId = null; S.sheet.newGoal = null; render(); }
 /* goal picker: nest the new task under an existing top-level task of the project, or a brand-new goal */
@@ -2909,7 +2909,7 @@ function rSettings(){
 }
 function projectsCardHTML(){
   const projs = distinctProjects();
-  const count = p => S.tasks.filter(t => t.project === p).length;
+  const count = p => S.tasks.filter(t => t.project === p && t.status !== 'done').length;   // OPEN tasks only
   const rows = projs.length ? projs.map((p, i) => {
     const n = count(p);
     return `<div style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:13px">
@@ -2941,7 +2941,7 @@ async function addProject(){
 }
 async function deleteProject(idx){
   const name = distinctProjects()[idx]; if (!name) return;
-  if (S.tasks.some(t => t.project === name)) { toast('Not empty — move its tasks first'); return; }
+  if (S.tasks.some(t => t.project === name && t.status !== 'done')) { toast('Not empty — move its open tasks first'); return; }
   const reg = projectRegistry().filter(p => p !== name);
   const {error} = await db.from('lifeos_settings').upsert({key: 'projects', value: JSON.stringify(reg)});
   if (error) { toast('Delete failed: ' + error.message); return; }
