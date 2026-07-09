@@ -735,6 +735,18 @@ async function deleteTask(id){
   await db.from('tasks').delete().eq('id', id);
   S.editing = null; loadAll();
 }
+/* flip a task between active and backlog (subtasks follow). Backlog = never
+   scored, never planned, never counts toward the streak — a someday/for-fun list */
+async function toggleBucket(id){
+  const t = S.tasks.find(x => x.id === id); if (!t) return;
+  const nb = t.bucket === 'backlog' ? 'active' : 'backlog';
+  S.lastWrite = Date.now();
+  const {error} = await db.from('tasks').update({bucket: nb}).eq('id', id);
+  if (error) { toast('Move failed: ' + error.message); return; }
+  await db.from('tasks').update({bucket: nb}).eq('parent_id', id);   // subtasks follow
+  toast(nb === 'backlog' ? '📥 Moved to backlog' : '📤 Moved to active');
+  loadAll();
+}
 
 /* ================= scoring (Option A) ================= */
 function weight(item, _maxMin){
@@ -1089,6 +1101,7 @@ function taskRowHTML(t){
     </div>
     ${startBtn}
     ${S.editMode && t.parent_id ? `<button class="tstart" style="color:var(--dim)" onclick="event.stopPropagation();S.editing = S.editing === '${t.id}' ? null : '${t.id}'; render()" title="Edit subtask">✎</button>` : ''}
+    ${S.editMode && !t.parent_id ? `<button class="tstart" onclick="event.stopPropagation();toggleBucket('${t.id}')" title="${t.bucket === 'backlog' ? 'Move to active' : 'Move to backlog'}">${t.bucket === 'backlog' ? '📤' : '📥'}</button>` : ''}
     ${S.editMode ? `<button class="tstart" style="color:var(--accent)" onclick="event.stopPropagation();deleteTask('${t.id}')" title="Delete task">✕</button>` : ''}
   </div>`;
 }
@@ -1115,7 +1128,9 @@ function goalRowHTML(g){
       <span class="gprog ${done === kids.length ? 'alldone' : ''}">${done}/${kids.length}</span>
       <div class="tbody"><div class="tname">🎯 ${esc(g.title)}</div><div class="tmeta">${meta}</div>${editor}</div>
       ${S.editMode ? `<button class="tstart" style="color:var(--dim)" title="Edit goal"
-        onclick="event.preventDefault();event.stopPropagation();S.editing = S.editing === '${g.id}' ? null : '${g.id}'; render()">✎</button>` : ''}
+        onclick="event.preventDefault();event.stopPropagation();S.editing = S.editing === '${g.id}' ? null : '${g.id}'; render()">✎</button>
+        <button class="tstart" title="${g.bucket === 'backlog' ? 'Move to active' : 'Move to backlog'}"
+        onclick="event.preventDefault();event.stopPropagation();toggleBucket('${g.id}')">${g.bucket === 'backlog' ? '📤' : '📥'}</button>` : ''}
     </summary>
     <div class="gkids">${shown.map(taskRowHTML).join('') || '<div class="empty" style="padding:8px">no subtasks match the filter</div>'}</div>
   </details>`;
