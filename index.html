@@ -599,7 +599,8 @@ async function saveSheet(){
   if (error) { toast('Add failed: ' + error.message); return; }
   S.sheet = null; toast(parentId ? 'Added under goal' : 'Added'); loadAll();  // refetch so any auto-chunk split shows immediately
 }
-function distinctProjects(){ return [...new Set(S.tasks.map(t => t.project).filter(Boolean))].sort(); }
+function projectRegistry(){ try { return JSON.parse((S.settings && S.settings.projects) || '[]'); } catch(e){ return []; } }
+function distinctProjects(){ return [...new Set([...S.tasks.map(t => t.project).filter(Boolean), ...projectRegistry()])].sort(); }
 window._projList = [];
 function pickProject(i){ S.sheet.project = i < 0 ? null : window._projList[i]; S.sheet.parentId = null; S.sheet.newGoal = null; render(); }
 /* goal picker: nest the new task under an existing top-level task of the project, or a brand-new goal */
@@ -1182,7 +1183,7 @@ function editorHTML(t){
       ${goals.map(g0 => `<option value="${g0.id}" ${t.parent_id === g0.id ? 'selected' : ''}>${esc((g0.project ? g0.project + ' · ' : '') + g0.title)}</option>`).join('')}
     </select></div>`;
   } else {
-    const projects = [...new Set((S.tasks || []).map(x => x.project).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const projects = distinctProjects();
     moveField = `<div class="full"><label>Project</label>
       <select id="e-project" onchange="onProjPick(this)">
         <option value="" ${!t.project ? 'selected' : ''}>— none (Inbox) —</option>
@@ -2903,7 +2904,48 @@ function rSettings(){
   </div>
   <div class="card"><h2>Reading</h2>
     ${toggleRow('Aa', 'Bionic reading', 'Bold word-starts in the brief for faster scanning (this device).', S.bionic, `toggleBionic()`)}
+  </div>
+  ${projectsCardHTML()}`;
+}
+function projectsCardHTML(){
+  const projs = distinctProjects();
+  const count = p => S.tasks.filter(t => t.project === p).length;
+  const rows = projs.length ? projs.map((p, i) => {
+    const n = count(p);
+    return `<div style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:13px">
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p)}</span>
+      <span class="dim mono" style="font-size:11px">${n} task${n === 1 ? '' : 's'}</span>
+      ${n === 0
+        ? `<button class="btn" style="padding:2px 8px;color:var(--accent)" onclick="deleteProject(${i})" title="Delete empty project">✕</button>`
+        : `<span class="dim" style="font-size:10px">in use</span>`}
+    </div>`;
+  }).join('') : '<div class="dim" style="font-size:12px">No projects yet.</div>';
+  return `<div class="card"><h2>Projects</h2>
+    <div class="dim" style="font-size:11px;margin-bottom:6px">Add or remove project files. Only empty projects (0 tasks) can be deleted — move a project's tasks elsewhere first.</div>
+    ${rows}
+    <div style="display:flex;gap:6px;margin-top:12px">
+      <input id="newproj" placeholder="new project name" style="flex:1">
+      <button class="btn primary" onclick="addProject()">Add</button>
+    </div>
   </div>`;
+}
+async function addProject(){
+  const inp = document.getElementById('newproj');
+  const name = (inp?.value || '').trim();
+  if (!name) return;
+  if (distinctProjects().some(p => p.toLowerCase() === name.toLowerCase())) { toast('Project already exists'); return; }
+  const reg = projectRegistry(); reg.push(name);
+  const {error} = await db.from('lifeos_settings').upsert({key: 'projects', value: JSON.stringify(reg)});
+  if (error) { toast('Save failed: ' + error.message); return; }
+  toast('Project added: ' + name); loadAll();
+}
+async function deleteProject(idx){
+  const name = distinctProjects()[idx]; if (!name) return;
+  if (S.tasks.some(t => t.project === name)) { toast('Not empty — move its tasks first'); return; }
+  const reg = projectRegistry().filter(p => p !== name);
+  const {error} = await db.from('lifeos_settings').upsert({key: 'projects', value: JSON.stringify(reg)});
+  if (error) { toast('Delete failed: ' + error.message); return; }
+  toast('Project deleted: ' + name); loadAll();
 }
 function toggleBionic(){ S.bionic = !S.bionic; localStorage.setItem('bionic', S.bionic ? '1' : '0'); render(); }
 async function saveWakeGate(v){
