@@ -361,7 +361,8 @@ let S = {
   gcalEvents: [], gcalRange: null, gcalLive: false, gcalLoading: false,
 };
 
-const todayISO = () => new Date().toLocaleDateString('sv-SE');
+// "today" = the CREDIT DAY (resets 6 AM, not midnight) so score/streak/done don't roll over overnight
+const todayISO = () => { const d = new Date(); d.setHours(d.getHours() - 6); return d.toLocaleDateString('sv-SE'); };
 const esc = s => (s ?? '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const toast = m => { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2200); };
 
@@ -510,7 +511,7 @@ function subscribeRealtime(){
 /* ================= task helpers ================= */
 /* local calendar day of a timestamptz — NOT the UTC slice. Tasks finished after
    7 PM CT used to land on "tomorrow" because toISOString() is UTC. */
-const localDay = ts => ts ? new Date(ts).toLocaleDateString('sv-SE') : '';
+const localDay = ts => { if (!ts) return ''; const d = new Date(ts); d.setHours(d.getHours() - 6); return d.toLocaleDateString('sv-SE'); };  // credit-day (6 AM) bucket
 const isDoneToday = t => t.status === 'done' && localDay(t.completed_at) === todayISO();
 const isPartialToday = t => t.partial_date === todayISO();
 const dueTag = t => {
