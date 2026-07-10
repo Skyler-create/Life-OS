@@ -428,7 +428,7 @@ document.getElementById('a-email').value = OWNER;
 /* ================= data ================= */
 async function loadAll(){
   const today = todayISO();
-  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn] = await Promise.all([
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
@@ -444,6 +444,7 @@ async function loadAll(){
     db.from('timetree_events').select('*').limit(500),
     db.from('day_load').select('*').gte('date', today).order('date').limit(3),
     db.rpc('lifeos_score', {d: today}),
+    db.rpc('lifeos_week_health'),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   S.cards = cd.data || []; S.events = ev.data || []; S.freezes = fz.data || [];
@@ -454,6 +455,7 @@ async function loadAll(){
   S.ttEvents = tt.data || [];
   S.dayLoad = (dload.data || []).find(r => r.date === today) || (dload.data || [])[0] || null;
   S.scoreNow = scn.data || null;   // C7: server is the ONLY score implementation
+  S.weekHealth = wh.data || null;  // C4: "am I okay this week" (server-computed)
   S.settings = Object.fromEntries((st.data || []).map(r => [r.key, r.value]));
   try { S.wakeTargets = JSON.parse(S.settings.wake_targets || '{}'); } catch(e){ S.wakeTargets = {}; }
   const logs = dl.data || [];
@@ -1090,6 +1092,7 @@ function taskRowHTML(t){
     t.place_context === 'at_work' ? `<span>🏢 at work</span>`
       : t.place_context === 'weekday' ? `<span>Mon–Fri</span>`
       : t.place_context === 'weekend' ? `<span>weekend</span>` : '',
+    t.prepared_at ? `<span style="color:var(--focus)">✨ prepped — tap ✎ to review</span>` : '',
     t.energy ? `<span style="color:${en.color}">${t.energy}</span>` : '',
     t.est_minutes ? `<span>${t.est_minutes}m</span>` : '',
     dueTag(t),
@@ -1185,6 +1188,10 @@ function onProjPick(sel){
 }
 function editorHTML(t){
   const opt = (list, cur) => list.map(([v, l]) => `<option value="${v}" ${v === (cur ?? '') ? 'selected' : ''}>${l}</option>`).join('');
+  // worker prep (read-only): overnight routine's draft note / research findings
+  const prepBlock = t.prepared_at ? `<div class="full" style="background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.25);border-radius:10px;padding:8px 10px">
+    <div class="mono" style="font-size:10px;color:var(--focus);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">✨ prepped ${new Date(t.prepared_at).toLocaleDateString([], {month:'short', day:'numeric'})}${t.prep_note ? ' · ' + esc(t.prep_note) : ''}</div>
+    ${t.prep_output ? `<div style="font-size:13px;line-height:1.5;white-space:pre-wrap;max-height:40vh;overflow-y:auto">${esc(t.prep_output)}</div>` : ''}</div>` : '';
   // move control depends on layer: a top-level task picks a PROJECT; a subtask picks its parent TASK
   const isSub = !!t.parent_id;
   let moveField;
@@ -1204,6 +1211,7 @@ function editorHTML(t){
       </select></div>`;
   }
   return `<div class="editor" onclick="event.stopPropagation()">
+    ${prepBlock}
     <div class="full"><label>Title</label><input id="e-title" value="${esc(t.title)}"></div>
     ${moveField}
     <div><label>Energy</label><select id="e-energy">${opt(Object.keys(ENERGY).map(e => [e, e]), t.energy || 'FOCUS')}</select></div>
@@ -2148,6 +2156,33 @@ function rLog(){
 }
 
 /* --- TRENDS (read-only analytics from daily_log + tasks) --- */
+/* C4 — "am I okay this week": server-computed read over day_load + projects */
+function weekHealthHTML(){
+  const wh = S.weekHealth;
+  if (!wh || !(wh.days || []).length) return '';
+  const h = m => Math.round((m || 0) / 60 * 10) / 10;
+  const col = s => s === 'over' ? 'var(--accent-hi)' : s === 'tight' ? 'var(--focus)' : 'var(--done)';
+  const chips = (wh.days || []).map(d => {
+    const pct = Math.min(Math.round((d.planned || 0) / Math.max(d.available || 1, 1) * 100), 100);
+    return `<div style="flex:1;min-width:0;text-align:center">
+      <div class="mono" style="font-size:9px;color:var(--dim)">${d.dow}</div>
+      <div style="height:34px;display:flex;align-items:flex-end;justify-content:center;margin:3px 0">
+        <div style="width:60%;height:${Math.max(pct * 0.34, 2)}px;border-radius:3px;background:${col(d.status)};opacity:.85"></div></div>
+      <div class="mono" style="font-size:9px;color:${col(d.status)}">${h(d.planned)}h</div>
+      ${d.overload ? '<div style="font-size:9px">⚠</div>' : ''}</div>`;
+  }).join('');
+  const projRows = (wh.projects || []).slice(0, 8).map(p => `
+    <div style="display:flex;gap:8px;align-items:baseline;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:12px">
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.at_risk ? '⚠ ' : ''}${esc(p.project)}</span>
+      <span class="mono dim" style="font-size:11px">${p.open} open · ${h(p.est_min)}h</span>
+      <span class="mono" style="font-size:11px;color:${p.at_risk ? 'var(--accent-hi)' : p.next_due ? 'var(--focus)' : 'var(--dim)'}">${p.next_due ? 'due ' + p.next_due.slice(5).replace('-', '/') : '—'}</span>
+      ${p.unplaced_min > 0 ? `<span class="mono" style="font-size:10px;color:var(--dim)">${h(p.unplaced_min)}h loose</span>` : ''}
+    </div>`).join('');
+  return `<div class="card"><h2>This week</h2>
+    <div style="font-size:13px;margin-bottom:10px">${esc(wh.headline)}</div>
+    <div style="display:flex;gap:4px;margin-bottom:10px">${chips}</div>
+    ${projRows}</div>`;
+}
 function rTrends(){
   const logs = [...(S.logs || [])].reverse(); // chronological
   const W = 560, H = 150, P = 10;
@@ -2192,7 +2227,7 @@ function rTrends(){
   const fl = logs.filter(l => l.focus);
   const focusAvg = fl.length ? (fl.reduce((s, l) => s + l.focus, 0) / fl.length).toFixed(1) : '—';
   const deep7 = per.slice(-7).reduce((s, p) => s + p.o.DEEP, 0);
-  return `
+  return weekHealthHTML() + `
   <div class="card"><h2>Score — last ${line.length} scored days</h2>${scoreSvg}</div>
   <div class="card"><h2>Done work by energy — 14 days</h2>${barsSvg}
     <div class="elegend" style="margin-top:6px">${Object.keys(ENERGY).map(e => `<span><i style="background:${ENERGY[e].hex}"></i>${e}</span>`).join('')}</div></div>
