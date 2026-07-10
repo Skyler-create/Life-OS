@@ -236,7 +236,7 @@ details.bsec>.ginner{padding:0 10px 10px}
   background:rgba(255,255,255,.02)}
 .cal-h button:active{color:var(--text);border-color:var(--dim)}
 .cal-g{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
-.cal-g .dow{text-align:center;font-family:var(--mono);font-size:9px;color:var(--dim)}
+.cal-g .dow{text-align:center;font-family:var(--mono);font-size:9px;color:var(--dim);letter-spacing:1px;padding:4px 0 6px}
 .cal-d{position:relative;aspect-ratio:1;border-radius:10px;font-size:12px;color:var(--text);border:1px solid transparent;background:none}
 .cal-d.today{border-color:var(--dim)}
 .cal-d.sel{background:var(--grad);color:#fff;font-weight:700;box-shadow:0 2px 10px rgba(225,37,27,.35)}
@@ -254,6 +254,7 @@ details.bsec>.ginner{padding:0 10px 10px}
   display:flex;flex-direction:column;gap:1px;background:none;cursor:pointer;min-width:0;text-align:left}
 .mo-cell.selq{border-color:rgba(255,255,255,.12);background:var(--card2);box-shadow:0 4px 12px rgba(0,0,0,.3)}
 .mo-d{font-size:11px;align-self:center;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;margin-bottom:1px;color:var(--text)}
+.mo-cell.today{border-color:rgba(225,37,27,.3)}
 .mo-cell.today .mo-d{background:var(--grad);color:#fff;font-weight:700;box-shadow:0 2px 8px rgba(225,37,27,.35)}
 .mo-chip{font-size:8px;line-height:1.3;padding:1px 3px;border-left:2px solid;border-radius:3px;
   background:rgba(255,255,255,.05);
@@ -295,7 +296,8 @@ details.bsec>.ginner{padding:0 10px 10px}
 /* week grid (google-style) */
 .wk-head{display:flex;margin-bottom:2px}
 .wk-gutter{flex:0 0 30px}
-.wk-col-h{flex:1;text-align:center;background:none;padding:4px 0;border-radius:10px;position:relative;min-width:0}
+.wk-col-h{flex:1;text-align:center;background:none;padding:6px 0;border-radius:10px;position:relative;min-width:0}
+.wk-col-h:active{background:rgba(255,255,255,.05)}
 .wk-col-h .wd{display:block;font-family:var(--mono);font-size:9px;color:var(--dim);letter-spacing:1px}
 .wk-col-h .dn{display:block;font-size:15px;margin-top:2px;font-weight:600}
 .wk-col-h.now .dn{background:var(--grad);color:#fff;border-radius:50%;width:26px;height:26px;line-height:26px;margin:2px auto 0;box-shadow:0 2px 8px rgba(225,37,27,.4)}
@@ -316,6 +318,20 @@ details.bsec>.ginner{padding:0 10px 10px}
   background:linear-gradient(180deg,rgba(225,37,27,.24),rgba(225,37,27,.12));
   border-left:2px solid var(--accent);
   border-radius:4px;font-size:8px;line-height:1.15;padding:1px 2px;overflow:hidden;z-index:1}
+/* work (Lenovo) commitments: slate-blue — structurally different from red personal events */
+.evblk.work{background:linear-gradient(180deg,rgba(125,145,180,.22),rgba(125,145,180,.10));
+  border-color:rgba(148,163,184,.45);border-left-color:#94A3B8}
+.evblk.work b{color:#B9C5D6}
+.wk-ev.work{background:linear-gradient(180deg,rgba(125,145,180,.26),rgba(125,145,180,.12));border-left-color:#94A3B8}
+/* weekends breathe differently */
+.wk-col.wknd:not(.now){background:rgba(255,255,255,.025)}
+.wk-col-h.wknd .wd{color:var(--light)}
+.mo-cell.wknd{background:rgba(255,255,255,.02)}
+/* segmented view switcher */
+.seg{display:flex;background:#12141C;border:1px solid var(--line);border-radius:999px;padding:3px;gap:2px}
+.seg button{flex:1;font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:1px;padding:7px 0;
+  border-radius:999px;color:var(--dim);touch-action:pan-y;transition:color .15s,box-shadow .15s}
+.seg button.on{background:var(--grad);color:#fff;box-shadow:0 2px 10px rgba(225,37,27,.35)}
 
 /* auth */
 #auth{max-width:340px;margin:80px auto;display:none}
@@ -1921,7 +1937,7 @@ function briefDayCal(){
     if (e.end_time) { const [eh, em] = e.end_time.split(':').map(Number); dur = Math.max(30, (eh * 60 + em) - (sh * 60 + sm)); }
     const top = Math.max(0, ((sh - H0) * 60 + sm) * (PPH / 60));
     const h = Math.max(14, dur * (PPH / 60));
-    return `<div class="evblk" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px;cursor:pointer;font-size:10px" onclick="event.stopPropagation();openEv(${e._i})"><b>${esc(e.start_time)}</b> ${esc(e.title)}</div>`;
+    return `<div class="evblk${e.source === 'work' ? ' work' : ''}" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px;cursor:pointer;font-size:10px" onclick="event.stopPropagation();openEv(${e._i})"><b>${esc(e.start_time)}</b> ${esc(e.title)}</div>`;
   }).join('');
   const rail = [...Array(H1 - H0)].map((_, i) => `<div class="hrow" style="top:${i * PPH}px"><span>${hourLabel(H0 + i).replace(' ', '')}</span></div>`).join('');
   const nowLine = (() => {
@@ -2691,11 +2707,18 @@ function rCal(){
     const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
     label = mon.toLocaleDateString('en-US', {month: 'short', day: 'numeric'}) + ' – ' + sun.toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
   }
-  const header = `<div class="cal-h" style="margin-bottom:8px">
-    <button onclick="navCal(-1)">‹</button><span class="mono">${label}</span>
-    <span><button class="btn" style="padding:2px 10px;font-size:10px;margin-right:6px" onclick="calToday()">today</button><button onclick="navCal(1)">›</button></span></div>
-  <div class="chiprow" style="margin-bottom:10px">${['day','week','month'].map(v =>
-    `<button class="schip ${S.calView === v ? 'on' : ''}" style="flex:1" onclick="setCalView('${v}')">${v.toUpperCase()}</button>`).join('')}
+  const onToday = S.calView === 'month'
+    ? (S.calY === new Date().getFullYear() && S.calM === new Date().getMonth())
+    : S.calSel === todayISO();
+  const header = `<div class="cal-h" style="margin-bottom:10px">
+    <button onclick="navCal(-1)">‹</button>
+    <span class="mono" style="font-size:15px;font-weight:800;letter-spacing:.5px">${label}</span>
+    <span style="display:flex;gap:6px;align-items:center">
+      ${onToday ? '' : `<button class="btn primary" style="padding:4px 12px;font-size:10px" onclick="calToday()">today</button>`}
+      <button onclick="navCal(1)">›</button></span></div>
+  <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+    <div class="seg" style="flex:1">${['day','week','month'].map(v =>
+      `<button class="${S.calView === v ? 'on' : ''}" onclick="setCalView('${v}')">${v.toUpperCase()}</button>`).join('')}</div>
     ${GCAL_CLIENT_ID ? (gcalToken()
       ? `<button class="schip" style="color:${S.gcalLive ? 'var(--done)' : 'var(--dim)'}" onclick="gcalDisconnect()">● ${S.gcalLive ? 'live' : '…'}</button><button class="schip" onclick="openEv(null)">+ event</button>`
       : `<button class="schip" onclick="gcalConnect(false)">connect Google</button>`) : ''}</div>`;
@@ -2721,7 +2744,7 @@ function calMonthHTML(byDay, evByDay){
     ];
     const shown = items.slice(0, 3).map(it => `<div class="mo-chip" style="border-color:${it.c}">${esc(it.t)}</div>`).join('');
     const more = items.length > 3 ? `<div class="mo-more">+${items.length - 3}</div>` : '';
-    cells += `<button class="mo-cell ${S.calSel === iso ? 'selq' : ''} ${iso === todayISO() ? 'today' : ''}" onclick="selDay('${iso}')">
+    cells += `<button class="mo-cell ${S.calSel === iso ? 'selq' : ''} ${iso === todayISO() ? 'today' : ''} ${(startDow + d - 1) % 7 >= 5 ? 'wknd' : ''}" onclick="selDay('${iso}')">
       <span class="mo-d">${d}</span>${shown}${more}</button>`;
   }
   return `<div class="card">
@@ -2737,7 +2760,7 @@ function calWeekHTML(byDay, evByDay){
   const isos = days.map(d => d.toLocaleDateString('sv-SE'));
   const head = `<div class="wk-head"><span class="wk-gutter"></span>${days.map((d, i) => {
     const iso = isos[i]; const nT = (byDay[iso] || []).length;
-    return `<button class="wk-col-h ${iso === todayISO() ? 'now' : ''}" onclick="selDay('${iso}')">
+    return `<button class="wk-col-h ${iso === todayISO() ? 'now' : ''} ${d.getDay() % 6 === 0 ? 'wknd' : ''}" onclick="selDay('${iso}')">
       <span class="wd">${d.toLocaleDateString('en-US', {weekday: 'narrow'})}</span>
       <span class="dn">${d.getDate()}</span>${nT ? `<i class="td">${nT}</i>` : ''}</button>`;
   }).join('')}</div>`;
@@ -2753,13 +2776,13 @@ function calWeekHTML(byDay, evByDay){
       if (e.end_time) { const [eh, em] = e.end_time.split(':').map(Number); dur = Math.max(25, (eh * 60 + em) - (sh * 60 + sm)); }
       const top = Math.max(0, ((sh - H0) * 60 + sm) * (PPH / 60));
       const h = Math.max(18, dur * (PPH / 60));
-      return `<div class="wk-ev" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px;cursor:pointer" onclick="event.stopPropagation();openEv(${e._i})">${esc(e.title)}</div>`;
+      return `<div class="wk-ev${e.source === 'work' ? ' work' : ''}" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px;cursor:pointer" onclick="event.stopPropagation();openEv(${e._i})">${esc(e.title)}</div>`;
     }).join('');
     const nowline = iso === todayISO() ? (() => {
       const n = new Date(); const mins = (n.getHours() - H0) * 60 + n.getMinutes();
       return (mins > 0 && mins < (H1 - H0) * 60) ? `<div class="nowline" style="top:${(mins * PPH / 60).toFixed(0)}px"></div>` : '';
     })() : '';
-    return `<div class="wk-col ${iso === todayISO() ? 'now' : ''}" data-iso="${iso}" style="position:relative" onclick="weekGridTap(event, '${iso}')" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${blocks}${planBlockDivs(iso, H0, PPH, 'week')}${nowline}</div>`;
+    return `<div class="wk-col ${iso === todayISO() ? 'now' : ''} ${fromISO(iso).getDay() % 6 === 0 ? 'wknd' : ''}" data-iso="${iso}" style="position:relative" onclick="weekGridTap(event, '${iso}')" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${blocks}${planBlockDivs(iso, H0, PPH, 'week')}${nowline}</div>`;
   }).join('');
   return head + adRow + `<div class="gridwrap" id="gridScroll" data-h6="${6 * PPH}" onscroll="S._gsPos=this.scrollTop;S._gsAt=Date.now()">
     <div class="wk-grid" style="height:${(H1 - H0) * PPH}px"><div class="wk-rail">${rail}</div>${cols}</div></div>
@@ -2777,7 +2800,7 @@ function calDayHTML(iso, byDay, evByDay){
     if (e.end_time) { const [eh, em] = e.end_time.split(':').map(Number); dur = Math.max(20, (eh * 60 + em) - (sh * 60 + sm)); }
     const top = Math.max(0, ((sh - H0) * 60 + sm) * (PPH / 60));
     const h = Math.max(22, dur * (PPH / 60));
-    return `<div class="evblk" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px;cursor:pointer" onclick="event.stopPropagation();openEv(${e._i})"><b>${esc(e.start_time)}${e.end_time ? '–' + esc(e.end_time) : ''}</b>${esc(e.title)}${e.cal && !e.writable ? ' 🔒' : ''}</div>`;
+    return `<div class="evblk${e.source === 'work' ? ' work' : ''}" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px;cursor:pointer" onclick="event.stopPropagation();openEv(${e._i})"><b>${esc(e.start_time)}${e.end_time ? '–' + esc(e.end_time) : ''}</b>${esc(e.title)}${e.cal && !e.writable ? ' 🔒' : ''}</div>`;
   }).join('');
   const rail = [...Array(H1 - H0)].map((_, i) => `<div class="hrow" style="top:${i * PPH}px"><span>${hourLabel(H0 + i)}</span></div>`).join('');
   const nowLine = iso === todayISO() ? (() => {
@@ -3036,19 +3059,30 @@ function projectsCardHTML(){
     return `<div style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:13px">
       <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p)}</span>
       <span class="dim mono" style="font-size:11px">${n} task${n === 1 ? '' : 's'}</span>
-      ${n === 0
-        ? `<button class="btn" style="padding:2px 8px;color:var(--accent)" onclick="deleteProject(${i})" title="Delete empty project">✕</button>`
-        : `<span class="dim" style="font-size:10px">in use</span>`}
+      <button class="btn" style="padding:2px 9px" onclick="renameProject(${i})" title="Rename — updates every task in it">✎</button>
+      <button class="btn" style="padding:2px 9px;color:var(--accent)" onclick="deleteProject(${i})" title="Delete — open tasks move to Inbox">✕</button>
     </div>`;
   }).join('') : '<div class="dim" style="font-size:12px">No projects yet.</div>';
   return `<div class="card"><h2>Projects</h2>
-    <div class="dim" style="font-size:11px;margin-bottom:6px">Add or remove project files. Only empty projects (0 tasks) can be deleted — move a project's tasks elsewhere first.</div>
+    <div class="dim" style="font-size:11px;margin-bottom:6px">Add, rename, or delete. Rename updates every task in the project; delete moves its open tasks to Inbox (done tasks keep the old name for history). Empty projects stick around until you delete them.</div>
     ${rows}
     <div style="display:flex;gap:6px;margin-top:12px">
       <input id="newproj" placeholder="new project name" style="flex:1">
       <button class="btn primary" onclick="addProject()">Add</button>
     </div>
   </div>`;
+}
+async function renameProject(idx){
+  const oldName = distinctProjects()[idx]; if (!oldName) return;
+  const name = (prompt(`Rename "${oldName}" to:`, oldName) || '').trim();
+  if (!name || name === oldName) return;
+  if (distinctProjects().some(p => p.toLowerCase() === name.toLowerCase())) { toast('That name already exists'); return; }
+  S.lastWrite = Date.now();
+  const {error} = await db.from('tasks').update({project: name}).eq('project', oldName);  // cascades to ALL its tasks incl. done
+  if (error) { toast('Rename failed: ' + error.message); return; }
+  const reg = projectRegistry().filter(p => p !== oldName); reg.push(name);
+  await db.from('lifeos_settings').upsert({key: 'projects', value: JSON.stringify(reg)});
+  toast(`Renamed → ${name}`); loadAll();
 }
 async function addProject(){
   const inp = document.getElementById('newproj');
@@ -3062,10 +3096,17 @@ async function addProject(){
 }
 async function deleteProject(idx){
   const name = distinctProjects()[idx]; if (!name) return;
-  if (S.tasks.some(t => t.project === name && t.status !== 'done')) { toast('Not empty — move its open tasks first'); return; }
+  const open = S.tasks.filter(t => t.project === name && t.status !== 'done').length;
+  if (!confirm(open
+    ? `Delete "${name}"? Its ${open} open task${open === 1 ? '' : 's'} move to Inbox.`
+    : `Delete "${name}"?`)) return;
+  S.lastWrite = Date.now();
+  if (open) {
+    const {error} = await db.from('tasks').update({project: null}).eq('project', name).neq('status', 'done');
+    if (error) { toast('Delete failed: ' + error.message); return; }
+  }
   const reg = projectRegistry().filter(p => p !== name);
-  const {error} = await db.from('lifeos_settings').upsert({key: 'projects', value: JSON.stringify(reg)});
-  if (error) { toast('Delete failed: ' + error.message); return; }
+  await db.from('lifeos_settings').upsert({key: 'projects', value: JSON.stringify(reg)});
   toast('Project deleted: ' + name); loadAll();
 }
 function toggleBionic(){ S.bionic = !S.bionic; localStorage.setItem('bionic', S.bionic ? '1' : '0'); render(); }
