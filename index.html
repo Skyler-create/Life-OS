@@ -1102,6 +1102,9 @@ function taskRowHTML(t){
     : '<span class="tcircle"></span>';
   const meta = [
     t.project ? `<span>${esc(t.project)}</span>` : '',
+    t.place_context === 'at_work' ? `<span>🏢 at work</span>`
+      : t.place_context === 'weekday' ? `<span>Mon–Fri</span>`
+      : t.place_context === 'weekend' ? `<span>weekend</span>` : '',
     t.energy ? `<span style="color:${en.color}">${t.energy}</span>` : '',
     t.est_minutes ? `<span>${t.est_minutes}m</span>` : '',
     dueTag(t),
@@ -1236,6 +1239,64 @@ function editorHTML(t){
 }
 
 /* --- TODAY --- */
+/* live START HERE — always points at the best thing to do RIGHT NOW.
+   1) the brief's marked task while it's open → 2) current/next plan block whose
+   task is open → 3) highest-priority open task due today. Recomputes on every
+   render, so completing the task advances the card. */
+function startHereNow(todays){
+  const kids = S._kids || {};
+  const byTitle = title => S.tasks.find(x => (x.title || '').toLowerCase() === (title || '').toLowerCase()
+    && x.status !== 'done' && !(kids[x.id] || []).length);
+  const sh = S.brief?.start_here_task ? byTitle(S.brief.start_here_task) : null;
+  if (sh) return {t: sh, why: 'morning pick'};
+  const n = new Date(); const nowM = n.getHours() * 60 + n.getMinutes();
+  const fmt = m => { const h = Math.floor(m / 60) % 24, mm = String(m % 60).padStart(2, '0'),
+    h12 = h % 12 || 12; return `${h12}:${mm} ${h < 12 ? 'AM' : 'PM'}`; };
+  const blocks = (S.planBlocks || []).filter(b => b.date === todayISO() && b.kind === 'task')
+    .sort((a, b) => a.start_min - b.start_min);
+  for (const b of blocks){
+    if (b.end_min <= nowM) continue;
+    const t = (b.task_id && S.tasks.find(x => x.id === b.task_id && x.status !== 'done')) || byTitle(b.title);
+    if (t) return {t, why: b.start_min <= nowM ? 'on the plan now' : 'next on the plan · ' + fmt(b.start_min)};
+  }
+  const open = (todays || []).filter(t => t.status !== 'done');
+  if (open.length){
+    const t = [...open].sort((a, b) => (PRIO[b.priority] || 2) - (PRIO[a.priority] || 2)
+      || (a.est_minutes || 99) - (b.est_minutes || 99))[0];
+    return {t, why: 'top of today'};
+  }
+  return null;
+}
+/* NL replan — "skipping the gym, push everything back" → edge fn `replan` →
+   bounded intent → lifeos_apply_replan (SQL does all scheduling) */
+function replanCardHTML(){
+  return `<div class="card"><h2>Replan in words</h2>
+    <div style="display:flex;gap:6px">
+      <input id="replanText" placeholder="e.g. skipping the gym, only have 2 hours" ${S.replanBusy ? 'disabled' : ''}
+        onkeydown="if(event.key==='Enter')doReplan()">
+      <button class="btn primary" style="flex:0 0 auto" ${S.replanBusy ? 'disabled' : ''} onclick="doReplan()">${S.replanBusy ? '…' : 'GO'}</button>
+    </div>
+    ${S.replanMsg ? `<div class="dim" style="font-size:12px;margin-top:8px">${esc(S.replanMsg)}</div>` : ''}</div>`;
+}
+async function doReplan(){
+  const el = document.getElementById('replanText');
+  const text = (el?.value || '').trim(); if (!text) return;
+  S.lastWrite = Date.now();
+  S.replanBusy = true; S.replanMsg = ''; render();
+  try {
+    const {data: {session}} = await db.auth.getSession();
+    const r = await fetch(SB_URL + '/functions/v1/replan', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + session.access_token},
+      body: JSON.stringify({text}),
+    });
+    const d = await r.json();
+    S.replanMsg = d.summary || d.error || ('HTTP ' + r.status);
+    if (d.applied) toast('🪄 replanned');
+  } catch (e) { S.replanMsg = '⚠ ' + e.message; }
+  S.replanBusy = false;
+  loadAll();
+}
 function rToday(){
   const today = todayISO();
   const kids = S._kids || {};
@@ -1252,8 +1313,8 @@ function rToday(){
     <div class="elegend">` + Object.entries(dist).map(([e, m]) =>
       `<span><i style="background:${(ENERGY[e] || {}).hex}"></i>${e} ${Math.round(m/60*10)/10}h</span>`).join('') +
       `<span style="margin-left:auto">${Math.round(total/60*10)/10}h open</span></div>` : '';
-  const sh = S.brief?.start_here_task;
-  const shCard = sh ? `<div class="card starthere"><h2>Start here</h2><div class="task-name">${esc(sh)}</div></div>` : '';
+  const shn = startHereNow(todays);
+  const shCard = shn ? `<div class="card starthere"><h2>Start here <span class="dim" style="font-weight:400;text-transform:none;letter-spacing:0">· ${shn.why}</span></h2>${taskRowHTML(shn.t)}</div>` : '';
   const meter = rMeter();
   allEvents().forEach((e, i) => e._i = i);
   const todaysEv = allEvents().filter(e => e.date === today).sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
@@ -1277,7 +1338,7 @@ function rToday(){
     });
     return rows.length ? `<div class="pname">FROM TODAY'S PLAN</div>` + rows.map(taskRowHTML).join('') : '';
   })();
-  return wakeChallengeHTML() + goalConfirmsHTML() + shCard + meter + capacityWarnHTML() + planBlocksHTML() + creditsCardHTML() + evCard +
+  return wakeChallengeHTML() + goalConfirmsHTML() + shCard + meter + capacityWarnHTML() + planBlocksHTML() + replanCardHTML() + creditsCardHTML() + evCard +
     (bar ? `<div class="card"><h2>Today's energy</h2>${bar}</div>` : '') +
     chipsHTML() +
     (sorted.length ? sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — add a task below or check TASKS.</div>`) +
@@ -1383,8 +1444,9 @@ async function clockOut(){
     // server does the 90%-of-est logic: done + reward, or shrink est and stay open
     const {data, error} = await db.rpc('lifeos_task_clockout', {p_session: fo.id});
     if (error) {
-      // never trap the user — end the session anyway
-      await db.from('focus_sessions').update({ended_at: new Date().toISOString()}).eq('id', fo.id);
+      // never trap the user — end the session anyway (is-null guard: don't
+      // re-extend a session the server auto-clockout already closed)
+      await db.from('focus_sessions').update({ended_at: new Date().toISOString()}).eq('id', fo.id).is('ended_at', null);
       toast('⏹ clocked out (task update skipped)');
     } else {
       const r = data || {};
@@ -1393,7 +1455,7 @@ async function clockOut(){
       else toast(`⏹ ${r.minutes}m — ${r.remaining}m left on the task`);
     }
   } else {
-    await db.from('focus_sessions').update({ended_at: new Date().toISOString()}).eq('id', fo.id);
+    await db.from('focus_sessions').update({ended_at: new Date().toISOString()}).eq('id', fo.id).is('ended_at', null);
     const mins = Math.floor((Date.now() - new Date(fo.started_at).getTime()) / 60000);
     toast(`Clocked out — ${mins} min → ~${Math.floor(mins / CREDIT_RATE[fo.energy])} credits`);
   }
@@ -1409,7 +1471,7 @@ async function spendCredits(m){
   loadAll();
 }
 /* tick the running timer display */
-setInterval(() => { if (S.focusOpen && S.view === 'today' && !S.editing && !S.sheet && !S.evSheet && !S.wakeChallenge && !S.planEditMode) render(); }, 30000);
+setInterval(() => { if (S.focusOpen && S.view === 'today' && !S.editing && !S.sheet && !S.evSheet && !S.wakeChallenge && !S.planEditMode && document.activeElement?.id !== 'replanText') render(); }, 30000);
 
 /* auto-complete a task-clocked session once it reaches the task's estimate,
    then DETACH so the clock keeps running as general time (still earning). */
