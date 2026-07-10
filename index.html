@@ -123,8 +123,10 @@ details.goal>summary::-webkit-details-marker{display:none}
 .prow .schip{flex:0 0 auto}
 /* plan blocks on calendar grids (dashed = AI/suggestion, solid+📌 = locked) */
 .pblk{position:absolute;left:52px;right:4px;border:1.5px dashed;border-radius:8px;font-size:10px;
-  padding:2px 6px;overflow:hidden;background:rgba(11,12,16,.6);z-index:5;cursor:grab}
-.pblk.locked{border-style:solid;background:rgba(255,255,255,.07)}
+  padding:2px 6px;overflow:hidden;background:rgba(11,12,16,.72);z-index:5;cursor:grab;
+  backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)}
+.pblk.locked{border-style:solid;background:rgba(255,255,255,.08);
+  box-shadow:0 2px 10px -3px currentColor}
 .wk-col .pblk{left:1px;right:1px;font-size:9px;padding:1px 3px}
 /* scrollable 24h grid wrapper — opens at 6 AM, scroll up for 12 AM–6 AM */
 .gridwrap{max-height:62vh;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
@@ -230,7 +232,9 @@ details.bsec>.ginner{padding:0 10px 10px}
 .schip.on{background:var(--text);border-color:var(--text);color:#0B0C10;font-weight:700}
 .cal{margin-top:10px;background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:10px}
 .cal-h{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:12px;margin-bottom:8px}
-.cal-h button{padding:2px 12px;color:var(--dim);font-size:16px}
+.cal-h button{padding:4px 14px;color:var(--dim);font-size:16px;border:1px solid var(--line);border-radius:999px;
+  background:rgba(255,255,255,.02)}
+.cal-h button:active{color:var(--text);border-color:var(--dim)}
 .cal-g{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
 .cal-g .dow{text-align:center;font-family:var(--mono);font-size:9px;color:var(--dim)}
 .cal-d{position:relative;aspect-ratio:1;border-radius:10px;font-size:12px;color:var(--text);border:1px solid transparent;background:none}
@@ -246,12 +250,13 @@ details.bsec>.ginner{padding:0 10px 10px}
 .cal-d.big .marks em{font-size:9px;color:var(--dim);font-style:normal;line-height:1}
 
 /* month view — google-style titled chips */
-.mo-cell{position:relative;min-height:68px;border:1px solid transparent;border-radius:6px;padding:2px 1px;
+.mo-cell{position:relative;min-height:68px;border:1px solid transparent;border-radius:10px;padding:2px 1px;
   display:flex;flex-direction:column;gap:1px;background:none;cursor:pointer;min-width:0;text-align:left}
-.mo-cell.selq{border-color:var(--line);background:var(--card2)}
+.mo-cell.selq{border-color:rgba(255,255,255,.12);background:var(--card2);box-shadow:0 4px 12px rgba(0,0,0,.3)}
 .mo-d{font-size:11px;align-self:center;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;margin-bottom:1px;color:var(--text)}
 .mo-cell.today .mo-d{background:var(--grad);color:#fff;font-weight:700;box-shadow:0 2px 8px rgba(225,37,27,.35)}
-.mo-chip{font-size:8px;line-height:1.25;padding:1px 2px;border-left:2px solid;border-radius:2px;background:var(--card2);
+.mo-chip{font-size:8px;line-height:1.3;padding:1px 3px;border-left:2px solid;border-radius:3px;
+  background:rgba(255,255,255,.05);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);max-width:100%}
 .mo-more{font-size:8px;color:var(--dim);font-family:var(--mono);padding-left:2px}
 
@@ -267,11 +272,16 @@ details.bsec>.ginner{padding:0 10px 10px}
 
 /* day view timeline */
 .daygrid{position:relative;background:#101219;border:1px solid rgba(255,255,255,.05);border-radius:14px;overflow:hidden;margin-top:8px}
-.hrow{position:absolute;left:0;right:0;border-top:1px solid var(--line);opacity:.55}
-.hrow span{position:absolute;top:0;left:6px;font-family:var(--mono);font-size:9px;color:var(--dim)}
-.evblk{position:absolute;left:52px;right:8px;background:rgba(225,37,27,.13);border:1px solid rgba(225,37,27,.55);
-  border-left:3px solid var(--accent);border-radius:8px;padding:2px 8px;font-size:12px;overflow:hidden;z-index:1}
-.evblk b{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--dim);display:block}
+.hrow{position:absolute;left:0;right:0;border-top:1px solid var(--line);opacity:.35}
+.hrow span{position:absolute;top:1px;left:4px;font-family:var(--mono);font-size:9px;color:var(--dim);
+  background:#101219;padding:0 3px;border-radius:4px;opacity:1}
+.evblk{position:absolute;left:52px;right:8px;
+  background:linear-gradient(180deg,rgba(225,37,27,.20),rgba(225,37,27,.10));
+  border:1px solid rgba(225,37,27,.45);border-left:3px solid var(--accent);border-radius:8px;
+  padding:2px 8px;font-size:12px;overflow:hidden;z-index:1;
+  box-shadow:0 2px 8px rgba(0,0,0,.25)}
+.evblk:active{filter:brightness(1.25)}
+.evblk b{font-family:var(--mono);font-size:10px;font-weight:600;color:#FF9B94;display:block}
 .nowline{position:absolute;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--accent-hi),var(--accent) 60%,transparent);z-index:2}
 .nowline::before{content:'';position:absolute;left:46px;top:-3px;width:8px;height:8px;border-radius:50%;
   background:var(--accent-hi);box-shadow:0 0 8px rgba(255,77,66,.8)}
@@ -285,23 +295,27 @@ details.bsec>.ginner{padding:0 10px 10px}
 /* week grid (google-style) */
 .wk-head{display:flex;margin-bottom:2px}
 .wk-gutter{flex:0 0 30px}
-.wk-col-h{flex:1;text-align:center;background:none;padding:4px 0;border-radius:8px;position:relative;min-width:0}
-.wk-col-h .wd{display:block;font-family:var(--mono);font-size:9px;color:var(--dim)}
-.wk-col-h .dn{display:block;font-size:15px;margin-top:2px}
+.wk-col-h{flex:1;text-align:center;background:none;padding:4px 0;border-radius:10px;position:relative;min-width:0}
+.wk-col-h .wd{display:block;font-family:var(--mono);font-size:9px;color:var(--dim);letter-spacing:1px}
+.wk-col-h .dn{display:block;font-size:15px;margin-top:2px;font-weight:600}
 .wk-col-h.now .dn{background:var(--grad);color:#fff;border-radius:50%;width:26px;height:26px;line-height:26px;margin:2px auto 0;box-shadow:0 2px 8px rgba(225,37,27,.4)}
 .wk-col-h .td{position:absolute;top:2px;right:3px;font-style:normal;font-size:8px;color:var(--focus);font-family:var(--mono)}
 .wk-allday{display:flex;margin-bottom:2px}
 .wk-ad-cell{flex:1;min-width:0;padding:0 1px}
-.wk-banner{background:rgba(129,140,248,.25);border-left:2px solid var(--deep);border-radius:4px;font-size:8px;
+.wk-banner{background:linear-gradient(180deg,rgba(129,140,248,.30),rgba(129,140,248,.16));
+  border-left:2px solid var(--deep);border-radius:4px;font-size:8px;
   padding:1px 3px;margin-bottom:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .wk-banner.more{background:none;color:var(--dim)}
 .wk-grid{position:relative;display:flex;background:#101219;border:1px solid rgba(255,255,255,.05);border-radius:14px;overflow:hidden;padding-left:30px}
 .wk-rail{position:absolute;inset:0;pointer-events:none}
 .wk-rail .hrow span{left:4px;font-size:8px}
-.wk-col{flex:1;position:relative;border-left:1px solid var(--line);min-width:0;cursor:pointer}
-.wk-col.now{background:rgba(225,37,27,.05)}
-.wk-ev{position:absolute;left:1px;right:1px;background:rgba(225,37,27,.2);border-left:2px solid var(--accent);
-  border-radius:3px;font-size:8px;line-height:1.15;padding:1px 2px;overflow:hidden;z-index:1}
+.wk-col{flex:1;position:relative;border-left:1px solid rgba(255,255,255,.04);min-width:0;cursor:pointer}
+.wk-col.now{background:linear-gradient(180deg,rgba(225,37,27,.10),rgba(225,37,27,.02));
+  box-shadow:1px 0 0 rgba(225,37,27,.25) inset,-1px 0 0 rgba(225,37,27,.25) inset}
+.wk-ev{position:absolute;left:1px;right:1px;
+  background:linear-gradient(180deg,rgba(225,37,27,.24),rgba(225,37,27,.12));
+  border-left:2px solid var(--accent);
+  border-radius:4px;font-size:8px;line-height:1.15;padding:1px 2px;overflow:hidden;z-index:1}
 
 /* auth */
 #auth{max-width:340px;margin:80px auto;display:none}
@@ -414,7 +428,7 @@ document.getElementById('a-email').value = OWNER;
 /* ================= data ================= */
 async function loadAll(){
   const today = todayISO();
-  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload] = await Promise.all([
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
@@ -429,6 +443,7 @@ async function loadAll(){
     db.from('lifeos_settings').select('key,value'),
     db.from('timetree_events').select('*').limit(500),
     db.from('day_load').select('*').gte('date', today).order('date').limit(3),
+    db.rpc('lifeos_score', {d: today}),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   S.cards = cd.data || []; S.events = ev.data || []; S.freezes = fz.data || [];
@@ -438,6 +453,7 @@ async function loadAll(){
   S.planBlocks = pb.data || [];
   S.ttEvents = tt.data || [];
   S.dayLoad = (dload.data || []).find(r => r.date === today) || (dload.data || [])[0] || null;
+  S.scoreNow = scn.data || null;   // C7: server is the ONLY score implementation
   S.settings = Object.fromEntries((st.data || []).map(r => [r.key, r.value]));
   try { S.wakeTargets = JSON.parse(S.settings.wake_targets || '{}'); } catch(e){ S.wakeTargets = {}; }
   const logs = dl.data || [];
@@ -776,41 +792,18 @@ async function toggleBucket(id){
 }
 
 /* ================= scoring (Option A) ================= */
-function weight(item, _maxMin){
-  const p = PRIO[item.priority] || 2;
-  const e = (ENERGY[item.energy] || {score:1}).score;
-  const tm = Math.min((item.est_minutes || 15) / 90, 1);   // fixed-90 normalizer: task value is stable across days
-  return (p/3 + e/3 + tm) / 3;
+/* C7 (2026-07-09): client-side weight()/computeScore() DELETED — SQL
+   lifeos_score is the only implementation. The app reads S.scoreNow
+   (fetched in loadAll, refreshed via refreshScore()). */
+async function refreshScore(){
+  const {data} = await db.rpc('lifeos_score', {d: todayISO()});
+  S.scoreNow = data || null;
 }
 function planItems(){
   if (S.brief?.plan?.length) return S.brief.plan;
   // fallback: tasks due today (any status) = the day's implicit plan (goals excluded — they're containers)
   return S.tasks.filter(t => t.bucket === 'active' && t.due === todayISO() && !((S._kids || {})[t.id] || []).length);
 }
-function computeScore(readBrief){
-  const plan = planItems();
-  const done = S.tasks.filter(isDoneToday);
-  const partial = S.tasks.filter(t => isPartialToday(t) && t.status !== 'done');
-  const actuals = S.goalLogsToday.map(gl => S.goals.find(g => g.id === gl.goal_id)).filter(g => g && g.est_minutes);
-  const planNames = new Set(plan.map(p => (p.title || '').toLowerCase()));
-  const offPlanActuals = actuals.filter(a => !planNames.has(a.name.toLowerCase()));
-  const universe = [...plan, ...done, ...partial, ...offPlanActuals];
-  const maxMin = Math.max(...universe.map(i => i.est_minutes || 15), 1);
-  const den = plan.reduce((s, i) => s + weight(i, maxMin), 0);
-  let num = done.reduce((s, i) => s + weight(i, maxMin), 0)
-          + partial.reduce((s, i) => s + 0.5 * weight(i, maxMin), 0)
-          + offPlanActuals.reduce((s, i) => s + weight(i, maxMin), 0);
-  // Lenovo/work day → 40-point head start toward the 70 streak threshold
-  const workday = (S.events || []).some(e => e.date === todayISO() && (e.source === 'work' || (e.title || '').toLowerCase().includes('work at lenovo')));
-  const base = (readBrief ? 2 : 0) + (workday ? 40 : 0);
-  if (den === 0) {
-    if (workday) return {score: Math.min(base, 100), planCount: 0, doneCount: done.length, partialCount: partial.length, workday: true};
-    return {score: null, planCount: 0, doneCount: done.length, partialCount: partial.length};
-  }
-  let score = (num / den) * 100 + base;
-  return {score: Math.min(Math.round(score * 10) / 10, 100), planCount: plan.length, doneCount: done.length, partialCount: partial.length, workday};
-}
-
 /* ================= reflect save ================= */
 async function toggleGoal(goalId, checked){
   S.lastWrite = Date.now();
@@ -821,6 +814,7 @@ async function toggleGoal(goalId, checked){
     const gl = S.goalLogsToday.find(x => x.goal_id === goalId);
     if (gl) { await db.from('goal_logs').delete().eq('id', gl.id); S.goalLogsToday = S.goalLogsToday.filter(x => x.id !== gl.id); }
   }
+  await refreshScore();
   updateScorePreview();
 }
 function refVal(id){ return document.getElementById(id)?.value; }
@@ -851,44 +845,33 @@ function updateScorePreview(){
   if (frozenToday()) { el.innerHTML = 'FROZEN<small>vacation mode — streak preserved, no score needed</small>'; return; }
   const rest = refVal('r-rest') === 'y';
   if (rest) { el.innerHTML = 'REST<small>streak preserved</small>'; return; }
-  const r = computeScore(refVal('r-brief') === 'y');
-  if (r.score === null) { el.innerHTML = '—<small>no plan found for today (no brief, nothing due)</small>'; return; }
+  const r = S.scoreNow || {};
+  if (r.score == null) { el.innerHTML = '—<small>no plan found for today (no brief, nothing due)</small>'; return; }
   const hit = r.score >= 70;
   el.style.color = hit ? 'var(--done)' : 'var(--accent)';
-  el.innerHTML = `${r.score}<small>${r.doneCount} done · ${r.partialCount} partial · plan of ${r.planCount} · ${hit ? 'streak hit' : 'below 70'}</small>`;
+  el.innerHTML = `${r.score}<small>${r.done_count} done · ${r.partial_count} partial · plan of ${r.plan_count} · ${hit ? 'streak hit' : 'below 70'}</small>`;
 }
 async function saveReflection(){
-  const rest = frozenToday() || refVal('r-rest') === 'y';   // vacation counts as rest — streak carries
-  const readBrief = refVal('r-brief') === 'y';
-  const r = computeScore(readBrief);
-  const prevStreak = S.prevLog?.streak_count || 0;
-  const prevShields = S.prevLog?.shields ?? 0;
-  let streak_hit = null, streak_count = prevStreak, shields = prevShields, shieldUsed = false;
-  if (!rest && r.score !== null) {
-    streak_hit = r.score >= 70;
-    if (streak_hit) {
-      streak_count = prevStreak + 1;
-      if (streak_count % 7 === 0) shields = Math.min(2, prevShields + 1);   // bank a shield every 7 straight hits (max 2)
-    } else if (prevShields > 0) {
-      shields = prevShields - 1; streak_count = prevStreak; shieldUsed = true;   // shield absorbs the miss — streak survives
-    } else {
-      streak_count = 0;
-    }
-  }
-  const row = {
+  // C7: the server computes score + streak/shield chain (lifeos_save_reflection
+  // is the only writer of scored rows). The app just sends the form.
+  S.lastWrite = Date.now();
+  const p = {
     date: todayISO(),
-    score: rest ? null : r.score, streak_hit, streak_count, shields, rest_day: rest,
-    tasks_planned: r.planCount, tasks_done: r.doneCount, tasks_partial: r.partialCount,
-    wake_time: refVal('r-wake') || null,
-    focus: refVal('r-focus') ? +refVal('r-focus') : null,
-    energy_now: refVal('r-energy') ? +refVal('r-energy') : null,
-    started_with_start_here: refVal('r-sh') === '' ? null : refVal('r-sh') === 'y',
-    read_brief: readBrief,
-    notes_tomorrow: refVal('r-nt') || null, notes_new: refVal('r-nn') || null, notes_check: refVal('r-nc') || null,
+    rest: frozenToday() || refVal('r-rest') === 'y',   // vacation counts as rest — streak carries
+    read_brief: refVal('r-brief') === 'y',
+    wake_time: refVal('r-wake') || '',
+    focus: refVal('r-focus') || '',
+    energy_now: refVal('r-energy') || '',
+    started_with_start_here: refVal('r-sh') === '' ? '' : (refVal('r-sh') === 'y' ? 'true' : 'false'),
+    notes_tomorrow: refVal('r-nt') || '', notes_new: refVal('r-nn') || '', notes_check: refVal('r-nc') || '',
   };
-  const {error} = await db.from('daily_log').upsert(row);
+  const {data, error} = await db.rpc('lifeos_save_reflection', {p});
   if (error) { toast('Save failed: ' + error.message); return; }
-  toast(rest ? 'Rest day logged — streak preserved' : shieldUsed ? `Below 70 — 🛡 shield used, streak ${streak_count} survives` : `Saved. Score ${r.score} · streak ${streak_count}`);
+  const r = data || {};
+  toast(r.rest ? 'Rest day logged — streak preserved'
+    : r.shield_used ? `Below 70 — 🛡 shield used, streak ${r.streak_count} survives`
+    : r.score == null ? `Saved — no scored plan today · streak ${r.streak_count} carries`
+    : `Saved. Score ${r.score} · streak ${r.streak_count}`);
   loadAll();
 }
 
@@ -1823,22 +1806,15 @@ function overrideWake(){ if (confirm('Skip the challenge? No free wake credits t
 /* live "what do I need tonight" meter */
 function rMeter(){
   if (frozenToday()) return `<div class="card"><h2>Score meter</h2><div class="dim">❄ Vacation mode — streak frozen, nothing owed today.</div></div>`;
-  const r = computeScore(S.todayLog?.read_brief ?? false);
-  if (r.score === null) return '';
+  // C7: score + cheapest-path picks come from the server (lifeos_score via S.scoreNow)
+  const r = S.scoreNow || {};
+  if (r.score == null) return '';
   const hit = r.score >= 70;
-  const plan = planItems();
-  const doneTitles = new Set(S.tasks.filter(isDoneToday).map(t => (t.title || '').toLowerCase()));
-  const open = plan.filter(p => !doneTitles.has((p.title || '').toLowerCase()));
-  const universe = [...plan, ...S.tasks.filter(isDoneToday)];
-  const maxMin = Math.max(...universe.map(i => i.est_minutes || 15), 1);
-  const den = plan.reduce((s, i) => s + weight(i, maxMin), 0);
   let hint = 'streak already hit — everything else is bonus';
-  if (!hit && den > 0) {
-    const sorted = [...open].sort((a, b) => weight(b, maxMin) - weight(a, maxMin));
-    let s = r.score; const picks = [];
-    for (const p of sorted) { if (s >= 70) break; s += weight(p, maxMin) / den * 100; picks.push(p.title); }
-    hint = (picks.length && s >= 70)
-      ? `finish <b>${picks.map(esc).join('</b> + <b>')}</b> → ~${Math.round(s)} · streak safe`
+  if (!hit) {
+    const picks = r.picks || [];
+    hint = (picks.length && r.projected != null && r.projected >= 70)
+      ? `finish <b>${picks.map(esc).join('</b> + <b>')}</b> → ~${Math.round(r.projected)} · streak safe`
       : 'streak needs most of the plan — start with the heaviest item';
   }
   return `<div class="card"><h2>Score meter</h2>
@@ -1997,7 +1973,14 @@ function rReflect(){
   <button class="btn primary" style="width:100%;padding:12px" onclick="saveReflection()">Save reflection</button>
   <div style="height:10px"></div>`;
 }
-document.addEventListener('change', e => { if (['r-rest','r-brief'].includes(e.target.id)) updateScorePreview(); });
+document.addEventListener('change', async e => {
+  if (e.target.id === 'r-rest') updateScorePreview();
+  if (e.target.id === 'r-brief') {   // read_brief feeds the server-side +2 — persist, then re-score
+    S.lastWrite = Date.now();
+    await db.from('daily_log').upsert({date: todayISO(), read_brief: refVal('r-brief') === 'y'});
+    await refreshScore(); updateScorePreview();
+  }
+});
 
 /* --- YC (TimeTree, read-only) — same calendar format as CAL, but her events only --- */
 /* map timetree_events -> {iso: [{date,start_time,end_time,title}]} (all-day expanded across its range) */
