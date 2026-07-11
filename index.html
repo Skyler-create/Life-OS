@@ -450,7 +450,7 @@ document.getElementById('a-email').value = OWNER;
 /* ================= data ================= */
 async function loadAll(){
   const today = todayISO();
-  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh] = await Promise.all([
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
@@ -469,6 +469,8 @@ async function loadAll(){
     db.rpc('lifeos_week_health'),
     db.rpc('lifeos_sleep_stats', {d: today}),
     db.rpc('lifeos_adherence', {p_days: 14}),
+    db.from('experiments').select('*').order('created_at', {ascending: false}).limit(12),
+    db.from('waiting_on').select('*').eq('status', 'open').order('sent_at'),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   S.cards = cd.data || []; S.events = ev.data || []; S.freezes = fz.data || [];
@@ -482,6 +484,20 @@ async function loadAll(){
   S.weekHealth = wh.data || null;  // C4: "am I okay this week" (server-computed)
   S.sleepStats = ss.data || null;  // 5.1: sleep-aware capacity (server-computed)
   S.adherence = adh.data || null;  // fidelity loop: plan vs reality (server-computed)
+  S.experiments = ex.data || [];   // self-experiment engine
+  S.waitingOn = wo.data || [];     // worker v2: sent-but-unanswered ledger
+  S.expStats = {}; S.expArms = {};
+  try {
+    const actives = S.experiments.filter(e => e.status === 'active').slice(0, 4);
+    if (actives.length) {
+      const [ed, ...sts] = await Promise.all([
+        db.from('experiment_days').select('exp_id,arm').eq('date', today),
+        ...actives.map(e => db.rpc('lifeos_experiment_stats', {p_exp: e.id})),
+      ]);
+      S.expArms = Object.fromEntries((ed.data || []).map(r => [r.exp_id, r.arm]));
+      actives.forEach((e, i) => { S.expStats[e.id] = sts[i].data || null; });
+    }
+  } catch (e) { /* experiments card degrades gracefully */ }
   S.settings = Object.fromEntries((st.data || []).map(r => [r.key, r.value]));
   try { S.wakeTargets = JSON.parse(S.settings.wake_targets || '{}'); } catch(e){ S.wakeTargets = {}; }
   const logs = dl.data || [];
@@ -1215,9 +1231,19 @@ function onProjPick(sel){
 function editorHTML(t){
   const opt = (list, cur) => list.map(([v, l]) => `<option value="${v}" ${v === (cur ?? '') ? 'selected' : ''}>${l}</option>`).join('');
   // worker prep (read-only): overnight routine's draft note / research findings
-  const prepBlock = t.prepared_at ? `<div class="full" style="background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.25);border-radius:10px;padding:8px 10px">
+  const prepBlock = t.prepared_at ? (() => {
+    // worker v2: a {"decompose":[...]} proposal renders as steps + Accept button
+    let dec = null;
+    try { const p = JSON.parse(t.prep_output || ''); if (p && Array.isArray(p.decompose) && p.decompose.length >= 2) dec = p.decompose; } catch(e){}
+    const body = dec
+      ? `<div style="font-size:13px;line-height:1.7">${dec.map((s, i) => `${i + 1}. ${esc(s.title || '')} <span class="dim mono" style="font-size:10px">${s.est || 30}m ${esc(s.energy || '')}</span>`).join('<br>')}</div>
+         <button class="btn primary" style="width:100%;margin-top:8px" onclick="applyDecomposition('${t.id}')">Accept breakdown — ${dec.length} subtasks</button>
+         <div class="dim" style="font-size:10px;margin-top:4px">replaces untouched auto-chunks · nothing changes until you tap</div>`
+      : (t.prep_output ? `<div style="font-size:13px;line-height:1.5;white-space:pre-wrap;max-height:40vh;overflow-y:auto">${esc(t.prep_output)}</div>` : '');
+    return `<div class="full" style="background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.25);border-radius:10px;padding:8px 10px">
     <div class="mono" style="font-size:10px;color:var(--focus);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">✨ prepped ${new Date(t.prepared_at).toLocaleDateString([], {month:'short', day:'numeric'})}${t.prep_note ? ' · ' + esc(t.prep_note) : ''}</div>
-    ${t.prep_output ? `<div style="font-size:13px;line-height:1.5;white-space:pre-wrap;max-height:40vh;overflow-y:auto">${esc(t.prep_output)}</div>` : ''}</div>` : '';
+    ${body}</div>`;
+  })() : '';
   // move control depends on layer: a top-level task picks a PROJECT; a subtask picks its parent TASK
   const isSub = !!t.parent_id;
   let moveField;
@@ -1285,6 +1311,36 @@ function startHereNow(todays){
     return {t, why: 'top of today'};
   }
   return null;
+}
+/* worker v2 — accept a proposed semantic breakdown (SQL owns the writes) */
+async function applyDecomposition(id){
+  const t = S.tasks.find(x => x.id === id); if (!t) return;
+  let items;
+  try { items = JSON.parse(t.prep_output).decompose; } catch(e){ toast('⚠ bad breakdown format'); return; }
+  S.lastWrite = Date.now();
+  const {data, error} = await db.rpc('lifeos_apply_decomposition', {p_task: id, p_items: items});
+  if (error || !data || !data.ok) { toast('⚠ ' + ((error && error.message) || (data && data.note) || 'failed')); return; }
+  toast(`✓ ${data.children} subtasks created${data.replaced_chunks ? ' · replaced ' + data.replaced_chunks + ' auto-chunks' : ''}`);
+  S.editing = null;
+  loadAll();
+}
+/* worker v2 — sent-but-unanswered ledger (worker maintains rows + nudge drafts) */
+function waitingOnHTML(){
+  const rows = (S.waitingOn || []).filter(w => w.status === 'open');
+  if (!rows.length) return '';
+  return `<div class="card"><h2>Waiting on</h2>${rows.map(w => `
+    <div style="display:flex;gap:8px;align-items:baseline;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.04)">
+      <span style="flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">✉ ${esc(w.subject || '(no subject)')}</span>
+      <span class="mono dim" style="font-size:10px;flex:0 0 auto">${esc((w.to_addr || '').split('@')[0])} · ${w.days_out ?? '?'}d${w.nudge_draft_at ? ' · 📝' : ''}</span>
+      <button class="btn" style="flex:0 0 auto;font-size:11px;padding:4px 8px" onclick="dismissWaiting('${w.id}')">✕</button>
+    </div>`).join('')}
+    <div class="dim mono" style="font-size:10px;margin-top:6px">from your sent mail · 📝 = nudge draft sitting in Gmail</div></div>`;
+}
+async function dismissWaiting(id){
+  S.lastWrite = Date.now();
+  await db.from('waiting_on').update({status: 'dismissed'}).eq('id', id);
+  toast('dismissed');
+  loadAll();
 }
 /* NL replan — "skipping the gym, push everything back" → edge fn `replan` →
    bounded intent → lifeos_apply_replan (SQL does all scheduling) */
@@ -1357,7 +1413,7 @@ function rToday(){
     });
     return rows.length ? `<div class="pname">FROM TODAY'S PLAN</div>` + rows.map(taskRowHTML).join('') : '';
   })();
-  return wakeChallengeHTML() + goalConfirmsHTML() + shCard + meter + capacityWarnHTML() + planBlocksHTML() + replanCardHTML() + creditsCardHTML() + evCard +
+  return wakeChallengeHTML() + goalConfirmsHTML() + shCard + meter + capacityWarnHTML() + planBlocksHTML() + replanCardHTML() + creditsCardHTML() + waitingOnHTML() + evCard +
     (bar ? `<div class="card"><h2>Today's energy</h2>${bar}</div>` : '') +
     chipsHTML() +
     (sorted.length ? sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — add a task below or check TASKS.</div>`) +
@@ -2241,6 +2297,58 @@ function sleepCardHTML(){
     <div style="font-size:13px;margin-bottom:8px">${esc(s.headline || '')}</div>
     <table>${rows.join('')}</table></div>`;
 }
+/* What-if simulator — bounded hypothetical ops in a SQL savepoint sandbox;
+   NOTHING persists (edge fn `simulate` → rpc lifeos_simulate) */
+function whatIfCardHTML(){
+  const w = S.whatIf;
+  let body = '';
+  if (S.whatIfBusy) body = '<div class="dim" style="font-size:12px;margin-top:8px">simulating — repacking a hypothetical calendar…</div>';
+  else if (w) {
+    if (w.error || !w.result) body = `<div class="dim" style="font-size:12px;margin-top:8px">${esc(w.error || w.summary || '')}</div>`;
+    else {
+      const r = w.result;
+      const col = s => s === 'over' ? 'var(--accent-hi)' : s === 'tight' ? 'var(--focus)' : 'var(--done)';
+      const h = m => Math.round((m || 0) / 60 * 10) / 10;
+      const bd = Object.fromEntries((r.before.days || []).map(d => [d.date, d]));
+      const rows = (r.after.days || []).slice(0, 7).map(d => {
+        const b = bd[d.date] || {};
+        const changed = (b.planned !== d.planned) || (b.status !== d.status);
+        return `<div style="display:flex;gap:8px;align-items:baseline;font-size:12px;padding:2px 0${changed ? '' : ';opacity:.45'}">
+          <span class="mono" style="width:34px">${d.dow}</span>
+          <span class="mono" style="flex:1">${changed ? h(b.planned) + 'h → ' : ''}<b style="color:${col(d.status)}">${h(d.planned)}h</b></span>
+          <span class="mono" style="font-size:10px;color:${col(d.status)}">${b.status !== d.status ? (b.status || '?') + '→' : ''}${d.status}</span>
+        </div>`;
+      }).join('');
+      const risks = (r.diff && r.diff.new_risks || []).map(x => `<div style="font-size:12px;color:var(--accent-hi)">⚠ out of reach: ${esc(x.title)} (due ${x.due})</div>`).join('');
+      body = `<div style="font-size:13px;margin:8px 0 6px"><b>${esc(r.headline || '')}</b></div>
+        <div class="dim mono" style="font-size:10px;margin-bottom:6px">${esc((r.changes || []).join(' · '))} · nothing was actually changed</div>
+        ${risks}${rows}`;
+    }
+  }
+  return `<div class="card"><h2>What if…</h2>
+    <div style="display:flex;gap:6px">
+      <input id="whatifText" placeholder="e.g. I take Friday off / new 5h task due Monday" value="${esc(S.whatIfQ || '')}" ${S.whatIfBusy ? 'disabled' : ''}
+        onkeydown="if(event.key==='Enter')doWhatIf()">
+      <button class="btn primary" style="flex:0 0 auto" ${S.whatIfBusy ? 'disabled' : ''} onclick="doWhatIf()">${S.whatIfBusy ? '…' : 'SIM'}</button>
+    </div>${body}</div>`;
+}
+async function doWhatIf(){
+  const el = document.getElementById('whatifText');
+  const text = (el?.value || '').trim(); if (!text) return;
+  S.whatIfQ = text;
+  S.whatIfBusy = true; render();
+  try {
+    const {data: {session}} = await db.auth.getSession();
+    const r = await fetch(SB_URL + '/functions/v1/simulate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + session.access_token},
+      body: JSON.stringify({text}),
+    });
+    S.whatIf = await r.json();
+    if (!r.ok && !S.whatIf.error) S.whatIf = {error: 'HTTP ' + r.status};
+  } catch (e) { S.whatIf = {error: e.message}; }
+  S.whatIfBusy = false; render();
+}
 /* Fidelity loop — plan vs reality (server-computed via lifeos_adherence) */
 function adherenceCardHTML(){
   const a = S.adherence;
@@ -2269,6 +2377,87 @@ function adherenceCardHTML(){
     <div style="display:flex;gap:4px;margin-bottom:6px">${chips}</div>
     <div class="mono dim" style="font-size:11px">${t.planned} planned · ${t.executed} done · ${t.ghosted} ghosted · ${t.cut} cut${t.followed_pct != null ? ` · ${t.followed_pct}% followed` : ''}</div>
     ${ghLine}</div>`;
+}
+/* Self-experiment engine — deterministic A/B days, SQL owns assignment+stats */
+function experimentsCardHTML(){
+  const exps = S.experiments || [];
+  const actives = exps.filter(e => e.status === 'active');
+  const past = exps.filter(e => e.status !== 'active').slice(0, 3);
+  const metricOpts = ['score','focus_rating','adherence_pct','deep_minutes','credits_spent','sleep_duration'];
+  let allowedKeys = [];
+  try { allowedKeys = JSON.parse((S.settings || {}).experiment_allowed_keys || '[]'); } catch(e){}
+  const rows = actives.map(e => {
+    const st = S.expStats[e.id] || {};
+    const arm = S.expArms[e.id];
+    const live = (st.n_on >= 4 && st.n_off >= 4)
+      ? `on ${st.mean_on} vs off ${st.mean_off} · effect ${st.effect > 0 ? '+' : ''}${st.effect}${st.p_rough != null ? ` (p~${st.p_rough})` : ''}`
+      : 'collecting — needs 4+ days per arm';
+    return `<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04)">
+      <div style="display:flex;gap:8px;align-items:baseline">
+        <span style="flex:1;font-size:13px">🧪 ${esc(e.name)}</span>
+        ${arm ? `<span class="mono" style="font-size:10px;padding:2px 8px;border-radius:99px;background:${arm === 'on' ? 'var(--grad)' : 'rgba(255,255,255,.08)'}">${arm.toUpperCase()} day</span>` : ''}
+        <button class="btn" style="flex:0 0 auto;font-size:11px;padding:4px 8px" onclick="stopExperiment('${e.id}')">✕</button>
+      </div>
+      <div class="dim mono" style="font-size:10px;margin-top:2px">${st.days_have || 0}/${e.min_days}d · ${e.metric} · ${esc(live)}</div>
+      ${e.hypothesis ? `<div class="dim" style="font-size:11px;margin-top:2px">${esc(e.hypothesis)}</div>` : ''}
+    </div>`;
+  }).join('');
+  const pastRows = past.map(e => `<div style="padding:5px 0;font-size:11px" class="dim">
+    ${e.status === 'done' ? '✅' : '🚫'} ${esc(e.name)}${e.verdict ? ' — ' + esc(e.verdict) : ''}</div>`).join('');
+  const form = !S.expForm ? '' : (() => {
+    const kind = S.expKind || 'note';
+    return `<div class="editor" style="margin-top:10px">
+      <input class="full" id="x-name" placeholder="name — e.g. hoop before deep work">
+      <input class="full" id="x-hyp" placeholder="hypothesis (optional)">
+      <select id="x-kind" onchange="S.expKind=this.value;S.expForm=1;render()">
+        <option value="note" ${kind === 'note' ? 'selected' : ''}>behavior (pushed each morning)</option>
+        <option value="setting" ${kind === 'setting' ? 'selected' : ''}>setting flip</option>
+      </select>
+      <select id="x-metric">${metricOpts.map(m => `<option>${m}</option>`).join('')}</select>
+      ${kind === 'setting' ? `
+        <select class="full" id="x-key">${allowedKeys.map(k => `<option>${k}</option>`).join('')}</select>
+        <input id="x-on" placeholder="ON value">
+        <input id="x-off" placeholder="OFF value (baseline)">` : `
+        <input class="full" id="x-onnote" placeholder="ON-day instruction — e.g. 15 min hoops before first DEEP block">
+        <input class="full" id="x-offnote" placeholder="OFF-day instruction (optional) — e.g. normal day">`}
+      <input id="x-days" type="number" value="14" min="6" max="60" title="days">
+      <button class="btn primary" onclick="createExperiment()">Start</button>
+    </div>`;
+  })();
+  return `<div class="card"><h2>Experiments</h2>
+    ${rows || '<div class="dim" style="font-size:12px">No experiment running. Test one knob at a time — alternating days, stratified by workday, verdict when enough days land.</div>'}
+    ${pastRows}
+    <button class="btn" style="width:100%;margin-top:8px" onclick="S.expForm=!S.expForm;S.expKind=S.expKind||'note';render()">${S.expForm ? 'cancel' : '+ new experiment'}</button>
+    ${form}</div>`;
+}
+async function createExperiment(){
+  const g = id => document.getElementById(id)?.value?.trim() || '';
+  const name = g('x-name'); if (!name) { toast('name it first'); return; }
+  const kind = g('x-kind') || 'note';
+  let intervention;
+  if (kind === 'setting') {
+    if (!g('x-key') || !g('x-on') || !g('x-off')) { toast('setting experiments need key + both values'); return; }
+    intervention = {key: g('x-key'), on_value: g('x-on'), off_value: g('x-off')};
+  } else {
+    if (!g('x-onnote')) { toast('describe the ON-day behavior'); return; }
+    intervention = {on_note: g('x-onnote'), off_note: g('x-offnote') || null};
+  }
+  S.lastWrite = Date.now();
+  const {error} = await db.from('experiments').insert({
+    name, hypothesis: g('x-hyp') || null, kind, intervention,
+    metric: g('x-metric') || 'score', min_days: parseInt(g('x-days')) || 14,
+  });
+  if (error) { toast('⚠ ' + error.message); return; }
+  S.expForm = false;
+  toast('🧪 running — first arm assigns by 6 AM');
+  loadAll();
+}
+async function stopExperiment(id){
+  if (!confirm('Stop this experiment? (Flipped settings restore to baseline.)')) return;
+  S.lastWrite = Date.now();
+  const {data, error} = await db.rpc('lifeos_experiment_stop', {p_id: id});
+  toast(error ? '⚠ ' + error.message : 'stopped');
+  loadAll();
 }
 function rTrends(){
   const logs = [...(S.logs || [])].reverse(); // chronological
@@ -2314,7 +2503,7 @@ function rTrends(){
   const fl = logs.filter(l => l.focus);
   const focusAvg = fl.length ? (fl.reduce((s, l) => s + l.focus, 0) / fl.length).toFixed(1) : '—';
   const deep7 = per.slice(-7).reduce((s, p) => s + p.o.DEEP, 0);
-  return weekHealthHTML() + sleepCardHTML() + adherenceCardHTML() + `
+  return weekHealthHTML() + whatIfCardHTML() + sleepCardHTML() + adherenceCardHTML() + experimentsCardHTML() + `
   <div class="card"><h2>Score — last ${line.length} scored days</h2>${scoreSvg}</div>
   <div class="card"><h2>Done work by energy — 14 days</h2>${barsSvg}
     <div class="elegend" style="margin-top:6px">${Object.keys(ENERGY).map(e => `<span><i style="background:${ENERGY[e].hex}"></i>${e}</span>`).join('')}</div></div>
