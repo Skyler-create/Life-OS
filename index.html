@@ -135,6 +135,12 @@ details.goal>summary::-webkit-details-marker{display:none}
 /* touches on the grid body commit to vertical scroll immediately; horizontal
    goes to JS (day paging) and blocks handle their own hold-drag */
 .gridwrap .daygrid,.gridwrap .wk-grid,.gridwrap .wk-col{touch-action:pan-y}
+/* scrollable tail INSIDE the grid scroller (2026-07-10): overscroll-behavior:
+   contain means a maxed-out inner scroll never chains to the page, so any of
+   the wrapper's bottom strip sitting under the fixed glass nav/addbar was
+   unreachable — late evening (≈10:30 PM+) got cut off. 132px = main's own
+   bottom-bar clearance. Taps on the tail are inert (outside .daygrid). */
+.gridwrap::after{content:"";display:block;height:132px}
 .tmeta .due-today{color:var(--focus)}
 .tmeta .overdue{color:var(--accent)}
 .tmeta .hard{color:var(--accent)}
@@ -444,7 +450,7 @@ document.getElementById('a-email').value = OWNER;
 /* ================= data ================= */
 async function loadAll(){
   const today = todayISO();
-  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh] = await Promise.all([
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
@@ -461,6 +467,8 @@ async function loadAll(){
     db.from('day_load').select('*').gte('date', today).order('date').limit(3),
     db.rpc('lifeos_score', {d: today}),
     db.rpc('lifeos_week_health'),
+    db.rpc('lifeos_sleep_stats', {d: today}),
+    db.rpc('lifeos_adherence', {p_days: 14}),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   S.cards = cd.data || []; S.events = ev.data || []; S.freezes = fz.data || [];
@@ -472,6 +480,8 @@ async function loadAll(){
   S.dayLoad = (dload.data || []).find(r => r.date === today) || (dload.data || [])[0] || null;
   S.scoreNow = scn.data || null;   // C7: server is the ONLY score implementation
   S.weekHealth = wh.data || null;  // C4: "am I okay this week" (server-computed)
+  S.sleepStats = ss.data || null;  // 5.1: sleep-aware capacity (server-computed)
+  S.adherence = adh.data || null;  // fidelity loop: plan vs reality (server-computed)
   S.settings = Object.fromEntries((st.data || []).map(r => [r.key, r.value]));
   try { S.wakeTargets = JSON.parse(S.settings.wake_targets || '{}'); } catch(e){ S.wakeTargets = {}; }
   const logs = dl.data || [];
@@ -2199,6 +2209,67 @@ function weekHealthHTML(){
     <div style="display:flex;gap:4px;margin-bottom:10px">${chips}</div>
     ${projRows}</div>`;
 }
+function sleepCardHTML(){
+  const s = S.sleepStats;
+  if (!s) return '';
+  const fmt = m => (m == null ? '—' : Math.floor(m/60) + 'h ' + String(m%60).padStart(2,'0') + 'm');
+  const cr = S.credits || {};
+  // empty state — no sleep logged yet
+  if (s.duration_min == null && !s.baseline_n) {
+    return `<div class="card"><h2>Sleep</h2>
+      <div class="dim" style="font-size:12px">No sleep logged yet. Set up the “Sleep Focus → log bedtime” Shortcut and this fills in — last night's duration, your bed/wake rhythm, a consistency read, and a tired-day capacity check.</div></div>`;
+  }
+  const factor = +s.capacity_factor || 1;
+  const consistent = s.consistent;
+  const cCol = consistent === true ? 'var(--done)' : consistent === false ? 'var(--accent-hi)' : 'var(--dim)';
+  const rows = [];
+  if (s.duration_min != null)
+    rows.push(`<tr><td>last night</td><td>${fmt(s.duration_min)}${s.debt_min > 0 ? ` <span class="dim">· ${s.debt_min}m short of ${Math.round(s.need_min/60)}h</span>` : ' <span style="color:var(--done)">· on target</span>'}</td></tr>`);
+  if (s.baseline_n >= 3)
+    rows.push(`<tr><td>your rhythm</td><td>bed ${s.baseline_bed_clock} · wake ${s.baseline_wake_clock} · ${fmt(s.baseline_dur_min)}</td></tr>`);
+  if (consistent != null)
+    rows.push(`<tr><td>consistency</td><td style="color:${cCol}">${consistent ? 'on rhythm' : `off — bed ±${s.bed_dev_min}m, wake ±${s.wake_dev_min}m`}</td></tr>`);
+  if (factor < 1)
+    rows.push(`<tr><td>today's capacity</td><td style="color:var(--focus)">trimmed to ${Math.round(factor*100)}% (short sleep)</td></tr>`);
+  if (s.trend_dur_delta != null) {
+    const d = s.trend_dur_delta;
+    rows.push(`<tr><td>trend vs prior wk</td><td>${d >= 0 ? '▲ +' + d : '▼ ' + d}m/night${s.trend_dev_delta != null ? ` · ${s.trend_dev_delta < 0 ? 'more' : 'less'} consistent` : ''}</td></tr>`);
+  }
+  if (cr.sleep_bonus > 0)
+    rows.push(`<tr><td>credits earned</td><td style="color:var(--done)">+${cr.sleep_bonus} (${cr.sleep_tier})</td></tr>`);
+  return `<div class="card"><h2>Sleep</h2>
+    <div style="font-size:13px;margin-bottom:8px">${esc(s.headline || '')}</div>
+    <table>${rows.join('')}</table></div>`;
+}
+/* Fidelity loop — plan vs reality (server-computed via lifeos_adherence) */
+function adherenceCardHTML(){
+  const a = S.adherence;
+  if (!a) return '';
+  const t = a.totals || {};
+  if (!t.planned) {
+    return `<div class="card"><h2>Plan vs reality</h2>
+      <div class="dim" style="font-size:12px">${esc(a.headline || 'Recording plan history — first scored day lands tomorrow.')}</div></div>`;
+  }
+  const col = p => p == null ? 'var(--dim)' : p >= 80 ? 'var(--done)' : p >= 55 ? 'var(--focus)' : 'var(--accent-hi)';
+  const chips = (a.days || []).slice(-14).map(d => {
+    const pct = d.followed_pct;
+    const dow = new Date(d.date + 'T12:00:00').toLocaleDateString('en-US', {weekday:'narrow'});
+    return `<div style="flex:1;min-width:0;text-align:center" title="${d.date}: ${d.in_slot} in-slot · ${d.off_slot} moved · ${d.attempted} attempted · ${d.ghosted} ghosted · ${d.cut} cut">
+      <div class="mono" style="font-size:9px;color:var(--dim)">${dow}</div>
+      <div style="height:34px;display:flex;align-items:flex-end;justify-content:center;margin:3px 0">
+        <div style="width:60%;height:${Math.max((pct || 0) * 0.34, 2)}px;border-radius:3px;background:${col(pct)};opacity:.85"></div></div>
+      <div class="mono" style="font-size:9px;color:${col(pct)}">${pct == null ? '—' : pct + '%'}</div>
+      ${d.ghosted > 0 ? '<div style="font-size:9px">👻</div>' : ''}</div>`;
+  }).join('');
+  const gh = a.ghost_hours || [];
+  const hr12 = h => { const x = h % 12 || 12; return x + (h < 12 ? ' AM' : ' PM'); };
+  const ghLine = gh.length ? `<div class="dim mono" style="font-size:11px;margin-top:8px">ghosted blocks land at: ${gh.map(g => `${hr12(g.hour)} ×${g.n}`).join(' · ')}</div>` : '';
+  return `<div class="card"><h2>Plan vs reality</h2>
+    <div style="font-size:13px;margin-bottom:10px">${esc(a.headline || '')}</div>
+    <div style="display:flex;gap:4px;margin-bottom:6px">${chips}</div>
+    <div class="mono dim" style="font-size:11px">${t.planned} planned · ${t.executed} done · ${t.ghosted} ghosted · ${t.cut} cut${t.followed_pct != null ? ` · ${t.followed_pct}% followed` : ''}</div>
+    ${ghLine}</div>`;
+}
 function rTrends(){
   const logs = [...(S.logs || [])].reverse(); // chronological
   const W = 560, H = 150, P = 10;
@@ -2243,7 +2314,7 @@ function rTrends(){
   const fl = logs.filter(l => l.focus);
   const focusAvg = fl.length ? (fl.reduce((s, l) => s + l.focus, 0) / fl.length).toFixed(1) : '—';
   const deep7 = per.slice(-7).reduce((s, p) => s + p.o.DEEP, 0);
-  return weekHealthHTML() + `
+  return weekHealthHTML() + sleepCardHTML() + adherenceCardHTML() + `
   <div class="card"><h2>Score — last ${line.length} scored days</h2>${scoreSvg}</div>
   <div class="card"><h2>Done work by energy — 14 days</h2>${barsSvg}
     <div class="elegend" style="margin-top:6px">${Object.keys(ENERGY).map(e => `<span><i style="background:${ENERGY[e].hex}"></i>${e}</span>`).join('')}</div></div>
