@@ -502,6 +502,19 @@ main[data-view="yc"] .seg button.on{background:linear-gradient(135deg,#A855F7,#7
 main[data-view="yc"] .nowline{background:linear-gradient(90deg,#E9D5FF,#A855F7 55%,rgba(168,85,247,.25));box-shadow:0 0 10px rgba(192,132,252,.55)}
 main[data-view="yc"] .nowline::before{background:#E9D5FF;box-shadow:0 0 10px rgba(192,132,252,.9), 0 0 22px rgba(192,132,252,.45)}
 
+/* her cycle on the month grid: actual period days solid rose, estimates a soft ring */
+.mo-cell.cyca{background:rgba(251,113,133,.14);border-color:rgba(251,113,133,.3)}
+.mo-cell.cyca .mo-d{color:#FDA4AF}
+.mo-cell.cycp{box-shadow:inset 0 0 0 1px rgba(251,113,133,.35);background:rgba(251,113,133,.05)}
+
+/* the time cursor goes COOL BLUE everywhere (s31, Skyler's ask) — a red line
+   on a red theme camouflaged; blue cuts through. YC's stays violet via the
+   higher-specificity data-view override above. */
+.nowline{background:linear-gradient(90deg,#BAE6FD,#38BDF8 55%,rgba(56,189,248,.25));
+  box-shadow:0 0 10px rgba(56,189,248,.6)}
+.nowline::before{background:#E0F2FE;
+  box-shadow:0 0 10px rgba(125,211,252,.95), 0 0 22px rgba(56,189,248,.5)}
+
 /* auth */
 #auth{max-width:340px;margin:80px auto;display:none}
 #auth .card{padding:20px}
@@ -613,7 +626,7 @@ document.getElementById('a-email').value = OWNER;
 /* ================= data ================= */
 async function loadAll(){
   const today = todayISO();
-  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp] = await Promise.all([
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
@@ -640,6 +653,14 @@ async function loadAll(){
     db.rpc('lifeos_retention'),
     db.from('person_notes').select('*').eq('done', false).order('created_at'),
     db.from('people').select('*').order('month').order('day'),
+    db.rpc('lifeos_cycle'),
+    db.from('cycle_marks').select('*').order('date'),
+    db.rpc('lifeos_money_week'),
+    db.from('fin_accounts').select('*').order('institution').order('name'),
+    db.from('fin_transactions').select('*').gte('posted', new Date(Date.now() - 35 * 864e5).toLocaleDateString('sv-SE'))
+      .order('posted', {ascending: false}).limit(250),
+    db.from('fin_recurring').select('*').eq('active', true).eq('ignored', false).order('avg_amount', {ascending: false}),
+    db.rpc('lifeos_stocks_context'),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   S.cards = cd.data || []; S.events = ev.data || []; S.freezes = fz.data || [];
@@ -660,6 +681,13 @@ async function loadAll(){
   S.retention = rt.data || null;   // C3: per-topic retention health
   S.personNotes = pn.data || [];   // relationship layer: tell-YC ledger
   S.people = pp.data || [];        // people & dates
+  S.cycle = cy.data || null;       // her cycle: estimates, never scripts
+  S.cycleMarks = cm.data || [];    // actual period start marks
+  S.money = mw.data || null;       // finance engine: single-source weekly read
+  S.finAccounts = fa.data || [];
+  S.finTx = ft.data || [];
+  S.finRecurring = fr.data || [];
+  S.stocks = stx.data || null;     // stocks agent: quotes + indicators + latest report
   S.expStats = {}; S.expArms = {};
   try {
     const actives = S.experiments.filter(e => e.status === 'active').slice(0, 4);
@@ -1094,7 +1122,7 @@ async function saveReflection(){
 }
 
 /* ================= rendering ================= */
-const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['cal','CAL'],['chat','CHAT'],['reflect','REFLECT'],['yc','YC'],['log','LOG'],['trends','TRENDS'],['cards','CARDS'],['settings','SETTINGS']];
+const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['cal','CAL'],['chat','CHAT'],['reflect','REFLECT'],['yc','YC'],['log','LOG'],['trends','TRENDS'],['money','MONEY'],['cards','CARDS'],['settings','SETTINGS']];
 function setView(v){ S.view = v; S.editing = null; localStorage.setItem('view', v); render(); }
 function setFilt(f){ S.filt = f; localStorage.setItem('filt', f); render(); }
 
@@ -1122,6 +1150,7 @@ function render(){
   if (S.view === 'yc')      main.innerHTML = rYC();
   if (S.view === 'log')     main.innerHTML = rLog();
   if (S.view === 'trends')  main.innerHTML = rTrends();
+  if (S.view === 'money')   main.innerHTML = rMoney();
   if (S.view === 'cal')     main.innerHTML = rCal();
   if (S.view === 'cards')   main.innerHTML = rCards();
   if (S.view === 'chat')    { main.innerHTML = rChat(); const cl = document.getElementById('chatlog'); if (cl) cl.scrollTop = cl.scrollHeight; }
@@ -1502,9 +1531,11 @@ function callPrepHTML(){
     const dd = (new Date(d + 'T12:00:00') - new Date(todayISO() + 'T12:00:00')) / 864e5;
     return dd >= -1 && dd <= 2;
   });
-  if (!notes.length && !soon.length) return '';
+  const cyc = S.cycle && S.cycle.status === 'ok' && (S.cycle.phase === 'period' || S.cycle.phase === 'pms') ? S.cycle : null;
+  if (!notes.length && !soon.length && !cyc) return '';
   const sig = {exam: '📚', interview: '💼', travel: '✈️', big: '⭐'};
   return `<div class="card"><h2>📞 Call prep — YC</h2>
+    ${cyc ? `<div style="font-size:12px;padding:2px 0;color:#FB9FAE">🌸 ${esc(cyc.context)}</div>` : ''}
     ${soon.map(e => `<div style="font-size:12px;padding:2px 0">${sig[e.significance] || '⭐'} ${esc(e.title)} <span class="dim mono" style="font-size:10px">${esc(e.start_date || (e.start_ts || '').slice(5, 10))}</span></div>`).join('')}
     ${notes.map(n => `<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0">
       <span style="flex:1;font-size:13px">💬 ${esc(n.note)}</span>
@@ -2354,6 +2385,49 @@ function navYC(dir){
   else { const d = fromISO(S.ycSel); d.setDate(d.getDate() + (S.ycView === 'week' ? 7 : 1) * dir); S.ycSel = d.toLocaleDateString('sv-SE'); S.ycY = d.getFullYear(); S.ycM = d.getMonth(); }
   render();
 }
+/* her cycle — context strip on the YC tab. Estimates from her real dates,
+   framed as weather, not a script. */
+const CYC_PHASE = {
+  period:     {icon: '🌸', label: 'period',       color: '#FB7185'},
+  pms:        {icon: '🌙', label: 'PMS window',   color: 'var(--focus)'},
+  follicular: {icon: '🌱', label: 'follicular',   color: 'var(--done)'},
+  mid:        {icon: '☀️', label: 'mid-cycle',    color: '#C084FC'},
+  luteal:     {icon: '🌾', label: 'luteal',       color: '#A78BFA'},
+  unknown:    {icon: '❔', label: 'past estimate', color: 'var(--dim)'},
+};
+function cycleCardHTML(){
+  const c = S.cycle;
+  const markBtn = `<button class="btn" style="width:100%;margin-top:8px;font-size:11px" onclick="markPeriod()">+ mark a period start date</button>`;
+  if (!c || c.status !== 'ok') {
+    return `<div class="card"><h2>Her cycle</h2>
+      <div class="dim" style="font-size:12px">Add her period start dates (one per cycle) and this fills in — cycle day, phase, next estimate, and gentle context before your calls.</div>${markBtn}</div>`;
+  }
+  const ph = CYC_PHASE[c.phase] || CYC_PHASE.unknown;
+  const pct = Math.min(Math.round(c.day / Math.max(c.avg_len, 1) * 100), 100);
+  const pZone = Math.round(c.period_days / c.avg_len * 100);
+  const pmsZone = Math.round(5 / c.avg_len * 100);
+  return `<div class="card" style="border-color:${c.phase === 'period' || c.phase === 'pms' ? 'rgba(251,113,133,.35)' : 'rgba(255,255,255,.07)'}">
+    <div style="display:flex;align-items:baseline;gap:8px">
+      <h2 style="margin:0;flex:1">Her cycle</h2>
+      <span class="mono" style="font-size:11px;color:${ph.color}">${ph.icon} day ${c.day} of ~${c.avg_len} · ${ph.label}</span>
+    </div>
+    <div style="position:relative;height:6px;border-radius:99px;background:rgba(255,255,255,.06);margin:10px 0 8px;overflow:hidden">
+      <div style="position:absolute;left:0;top:0;bottom:0;width:${pZone}%;background:rgba(251,113,133,.35)"></div>
+      <div style="position:absolute;right:0;top:0;bottom:0;width:${pmsZone}%;background:rgba(251,191,36,.25)"></div>
+      <div style="position:absolute;left:${pct}%;top:-2px;width:10px;height:10px;margin-left:-5px;border-radius:50%;background:${ph.color};box-shadow:0 0 8px ${ph.color}"></div>
+    </div>
+    <div style="font-size:12px;line-height:1.5">${esc(c.context)}</div>
+    <div class="mono dim" style="font-size:10px;margin-top:6px">next est. ${c.next.slice(5).replace('-', '/')} ±${c.uncertainty_days}d (in ${c.days_until}d) · ${esc(c.disclaimer)}</div>
+    ${markBtn}</div>`;
+}
+async function markPeriod(){
+  const d = prompt('Period start date (YYYY-MM-DD)', todayISO());
+  if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) { if (d) toast('format: YYYY-MM-DD'); return; }
+  S.lastWrite = Date.now();
+  const {error} = await db.from('cycle_marks').insert({date: d});
+  toast(error ? '⚠ ' + error.message : '🌸 marked');
+  loadAll();
+}
 function rYC(){
   if (!S.ycSel) S.ycSel = todayISO();
   if (!S.ycView) S.ycView = localStorage.getItem('ycView') || 'day';
@@ -2375,7 +2449,7 @@ function rYC(){
   const body = S.ycView === 'day' ? ycDayHTML(S.ycSel, evByDay)
              : S.ycView === 'week' ? ycWeekHTML(evByDay)
              : ycMonthHTML(evByDay);
-  return header + body;
+  return header + cycleCardHTML() + body;
 }
 function ycDayHTML(iso, evByDay){
   const evs = (evByDay[iso] || []).slice().sort((a,b) => (a.start_time || '').localeCompare(b.start_time || ''));
@@ -2427,6 +2501,22 @@ function ycWeekHTML(evByDay){
 function ycMonthHTML(evByDay){
   const y = S.ycY, m = S.ycM;
   const startDow = (new Date(y, m, 1).getDay()+6)%7, days = new Date(y, m+1, 0).getDate();
+  // cycle shading: actual marks (solid rose) + predicted ranges (soft ring)
+  const plen = (S.cycle && S.cycle.period_days) || 4;
+  const cycDays = {};
+  (S.cycleMarks || []).forEach(mk => {
+    for (let i = 0; i < plen; i++) {
+      const d2 = new Date(mk.date + 'T12:00:00'); d2.setDate(d2.getDate() + i);
+      cycDays[d2.toLocaleDateString('sv-SE')] = 'cyca';
+    }
+  });
+  ((S.cycle && S.cycle.upcoming) || []).forEach(r => {
+    const e2 = new Date(r.end + 'T12:00:00');
+    for (let d2 = new Date(r.start + 'T12:00:00'); d2 <= e2; d2.setDate(d2.getDate() + 1)) {
+      const k = d2.toLocaleDateString('sv-SE');
+      if (!cycDays[k]) cycDays[k] = 'cycp';
+    }
+  });
   let cells = '';
   for (let i = 0; i < startDow; i++) cells += '<span></span>';
   for (let d = 1; d <= days; d++) {
@@ -2434,10 +2524,10 @@ function ycMonthHTML(evByDay){
     const evs = (evByDay[iso] || []).slice().sort((a,b) => (a.start_time || '').localeCompare(b.start_time || ''));
     const shown = evs.slice(0,3).map(e => `<div class="mo-chip" style="border-color:#818CF8">${esc(e.title)}</div>`).join('');
     const more = evs.length > 3 ? `<div class="mo-more">+${evs.length-3}</div>` : '';
-    cells += `<button class="mo-cell ${S.ycSel === iso ? 'selq' : ''} ${iso === todayISO() ? 'today' : ''}" onclick="selYCDay('${iso}')"><span class="mo-d">${d}</span>${shown}${more}</button>`;
+    cells += `<button class="mo-cell ${S.ycSel === iso ? 'selq' : ''} ${iso === todayISO() ? 'today' : ''} ${cycDays[iso] || ''}" onclick="selYCDay('${iso}')"><span class="mo-d">${d}</span>${shown}${more}</button>`;
   }
   return `<div class="card"><div class="cal-g">${['M','T','W','T','F','S','S'].map(d => `<span class="dow">${d}</span>`).join('')}${cells}</div>
-    <div class="elegend" style="margin-top:8px"><span><i style="background:#818CF8"></i>her events</span><span style="margin-left:auto" class="dim">tap a day</span></div></div>`;
+    <div class="elegend" style="margin-top:8px"><span><i style="background:#818CF8"></i>her events</span><span><i style="background:#FB7185"></i>period</span><span><i style="background:rgba(251,113,133,.35)"></i>est.</span><span style="margin-left:auto" class="dim">tap a day</span></div></div>`;
 }
 
 /* --- LOG --- */
@@ -3554,6 +3644,189 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && document.activeElement?.id === 'chatinput') sendChat();
 });
 
+/* ================= MONEY (finance engine phase 2) =================
+   Read-only mirror of every account; SQL owns all numbers (lifeos_money_week).
+   Tap a category chip to fix it — your fix becomes a permanent rule. */
+function fmt$(n){ const v = Math.abs(+n || 0); const s = v >= 1000 ? (v/1000).toFixed(v >= 10000 ? 0 : 1) + 'k' : v.toFixed(v < 100 ? 2 : 0); return (+n < 0 ? '-$' : '$') + s; }
+function rMoney(){
+  if (!S.moneyView) S.moneyView = localStorage.getItem('moneyView') || 'overview';
+  const seg = `<div class="seg" style="display:flex;margin-bottom:10px">${[['overview','OVERVIEW'],['spending','SPENDING'],['stocks','STOCKS']].map(([v, l]) =>
+    `<button class="${S.moneyView === v ? 'on' : ''}" style="flex:1" onclick="S.moneyView='${v}';localStorage.setItem('moneyView','${v}');render()">${l}</button>`).join('')}</div>`;
+  const body = S.moneyView === 'spending' ? moneySpendingHTML()
+             : S.moneyView === 'stocks' ? moneyStocksHTML()
+             : moneyOverviewHTML();
+  return seg + body;
+}
+/* --- STOCKS section: read-only market mirror + the analyst's latest take --- */
+function moneyStocksHTML(){
+  const st = S.stocks || {};
+  const rows = st.tickers || [];
+  const hold = rows.filter(r => r.role === 'holding');
+  const watch = rows.filter(r => r.role === 'watch');
+  const pc = v => v == null ? '<span class="dim">—</span>' : `<span style="color:${v >= 0 ? 'var(--done)' : 'var(--accent-hi)'}">${v >= 0 ? '+' : ''}${v}%</span>`;
+  const row = r => `<div style="display:flex;gap:8px;align-items:baseline;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:12px">
+      <b class="mono" style="flex:0 0 52px">${esc(r.ticker)}</b>
+      <span class="mono" style="flex:0 0 62px">${r.close != null ? '$' + r.close : '—'}</span>
+      <span class="mono" style="flex:0 0 52px">${pc(r.pct_1d)}</span>
+      <span class="mono dim" style="flex:1;min-width:0;font-size:10px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${r.rsi14 != null ? 'RSI ' + r.rsi14 : ''}${r.pct_off_52wk_high != null ? ' · ' + r.pct_off_52wk_high + '% off hi' : ''}${r.next_earnings ? ' · 📅 ' + r.next_earnings.slice(5).replace('-','/') : ''}</span>
+      ${r.role === 'holding' && r.value != null ? `<span class="mono" style="flex:0 0 auto">${fmt$(r.value)}${r.pl_pct != null ? ` <span style="font-size:10px;color:${r.pl_pct >= 0 ? 'var(--done)' : 'var(--accent-hi)'}">${r.pl_pct >= 0 ? '+' : ''}${r.pl_pct}%</span>` : ''}</span>` : ''}
+      <button class="btn" style="flex:0 0 auto;font-size:10px;padding:2px 7px" onclick="delTicker('${esc(r.ticker)}','${r.role}')">✕</button>
+    </div>`;
+  const totalVal = hold.reduce((s, r) => s + (+r.value || 0), 0);
+  const rep = st.latest_report;
+  return `
+  <div class="card"><h2>Holdings${totalVal ? ` — ${fmt$(totalVal)}` : ''}</h2>
+    ${hold.length ? hold.map(row).join('') : '<div class="dim" style="font-size:12px">Add what you own — ticker, shares, avg cost. Everything else fills itself in nightly.</div>'}
+    <div style="display:flex;gap:6px;margin-top:8px">
+      <input id="h-tk" placeholder="TICKER" style="flex:1;min-width:60px;text-transform:uppercase">
+      <input id="h-sh" type="number" placeholder="shares" style="flex:1;min-width:64px">
+      <input id="h-cb" type="number" placeholder="avg $" style="flex:1;min-width:64px">
+      <button class="btn primary" style="flex:0 0 auto" onclick="addHolding()">add</button>
+    </div></div>
+  <div class="card"><h2>Watchlist</h2>
+    ${watch.length ? watch.map(row).join('') : '<div class="dim" style="font-size:12px">Tickers you\\'re eyeing — lighter coverage.</div>'}
+    <div style="display:flex;gap:6px;margin-top:8px">
+      <input id="w-tk" placeholder="TICKER" style="flex:1;text-transform:uppercase">
+      <button class="btn primary" style="flex:0 0 auto" onclick="addWatch()">watch</button>
+    </div></div>
+  ${rep ? `<div class="card"><h2>Analyst — ${esc(rep.kind === 'deep_dive' ? 'weekly deep-dive' : 'daily')} ${(rep.date || '').slice(5).replace('-','/')}</h2>
+    <div style="font-size:13px;line-height:1.55;white-space:pre-wrap">${esc(rep.summary)}</div>
+    <div class="dim mono" style="font-size:10px;margin-top:6px">facts, flags, trade-offs — never directives · Rod stays the advisor</div></div>`
+    : '<div class="card"><h2>Analyst</h2><div class="dim" style="font-size:12px">Daily notes + Monday deep-dives appear here once the radio routine is live.</div></div>'}
+  <div class="dim mono" style="font-size:10px;padding:0 2px">quotes: end-of-day, synced weekday evenings · read-only — no trade path exists</div>
+  <div style="height:10px"></div>`;
+}
+async function addHolding(){
+  const tk = (document.getElementById('h-tk')?.value || '').trim().toUpperCase();
+  if (!/^[A-Z.\-]{1,8}$/.test(tk)) { toast('ticker?'); return; }
+  const sh = parseFloat(document.getElementById('h-sh')?.value) || 0;
+  const cb = parseFloat(document.getElementById('h-cb')?.value) || null;
+  S.lastWrite = Date.now();
+  const {error} = await db.from('holdings').upsert({ticker: tk, shares: sh, cost_basis: cb});
+  if (error) { toast('⚠ ' + error.message); return; }
+  await db.rpc('lifeos_stocks_sync');   // pull history for the new ticker now
+  toast('✓ ' + tk + ' — history syncing');
+  setTimeout(loadAll, 12000);
+  loadAll();
+}
+async function addWatch(){
+  const tk = (document.getElementById('w-tk')?.value || '').trim().toUpperCase();
+  if (!/^[A-Z.\-]{1,8}$/.test(tk)) { toast('ticker?'); return; }
+  S.lastWrite = Date.now();
+  await db.from('watch_tickers').upsert({ticker: tk});
+  await db.rpc('lifeos_stocks_sync');
+  toast('✓ watching ' + tk);
+  setTimeout(loadAll, 12000);
+  loadAll();
+}
+async function delTicker(tk, role){
+  if (!confirm('Remove ' + tk + '?')) return;
+  S.lastWrite = Date.now();
+  await db.from(role === 'holding' ? 'holdings' : 'watch_tickers').delete().eq('ticker', tk);
+  loadAll();
+}
+/* --- OVERVIEW + SPENDING sections --- */
+function moneyOverviewHTML(){
+  const m = S.money;
+  if (!m) return `<div class="empty">Money data loads after the first sync — check back in a couple hours.</div>`;
+  const nw = m.net_worth || {};
+  const wk = m.week || {}, mo = m.month || {};
+  const groups = {};
+  S.finAccounts.filter(a => !a.rollup).forEach(a => { (groups[a.institution || 'Other'] = groups[a.institution || 'Other'] || []).push(a); });
+  const acctRows = Object.entries(groups).map(([inst, accts]) => `
+    <div class="pname" style="margin:8px 2px 2px">${esc(inst)}</div>
+    ${accts.map(a => `<div style="display:flex;gap:8px;align-items:baseline;padding:2px 0;font-size:13px">
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.name)}${a.manual ? ` <button class="btn" style="font-size:10px;padding:1px 7px" onclick="editManualBalance('${a.id}')">✎</button>` : ''}</span>
+      <span class="mono" style="color:${+a.balance < 0 ? 'var(--accent-hi)' : 'var(--text)'}">${a.currency === 'TWD' ? 'NT$' + Math.round(a.balance).toLocaleString() : fmt$(a.balance)}</span>
+    </div>`).join('')}`).join('');
+  return `
+  <div class="card"><h2>Net worth</h2>
+    <div style="font-size:30px;font-weight:800;letter-spacing:.5px">${fmt$(nw.total_usd)}</div>
+    <div class="dim mono" style="font-size:11px;margin-top:2px">linked ${fmt$(nw.linked_usd)} · 台灣銀行 NT$${Math.round(nw.twd || 0).toLocaleString()}${nw.twd_usd ? ' ≈ ' + fmt$(nw.twd_usd) : ''}</div>
+  </div>
+  <div class="card"><h2>Cashflow</h2>
+    <table>
+      <tr><td>last 7 days</td><td class="mono">in ${fmt$(wk.in)} · out ${fmt$(wk.out)} · net <b style="color:${(wk.in - wk.out) >= 0 ? 'var(--done)' : 'var(--accent-hi)'}">${fmt$(wk.in - wk.out)}</b></td></tr>
+      <tr><td>this month</td><td class="mono">in ${fmt$(mo.in)} · out ${fmt$(mo.out)}</td></tr>
+    </table></div>
+  <div class="card"><h2>Accounts</h2>${acctRows}
+    <div class="dim mono" style="font-size:10px;margin-top:8px">read-only mirror · synced every 2h via SimpleFIN · nothing here can move money</div></div>
+  <div style="height:10px"></div>`;
+}
+function moneySpendingHTML(){
+  const m = S.money;
+  if (!m) return `<div class="empty">Money data loads after the first sync.</div>`;
+  const cats = (m.week_categories || []).filter(c => c.amt > 0);
+  const maxCat = Math.max(...cats.map(c => +c.amt), 1);
+  const catBars = cats.map(c => `
+    <div style="display:flex;gap:8px;align-items:center;padding:3px 0;font-size:12px">
+      <span style="flex:0 0 92px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" class="${c.cat === 'uncategorized' ? 'dim' : ''}">${esc(c.cat)}</span>
+      <div style="flex:1;height:8px;border-radius:99px;background:rgba(255,255,255,.05);overflow:hidden">
+        <div style="width:${Math.round(c.amt / maxCat * 100)}%;height:100%;background:var(--grad);opacity:.8"></div></div>
+      <span class="mono" style="flex:0 0 auto;font-size:11px">${fmt$(c.amt)}</span>
+    </div>`).join('');
+  const subs = S.finRecurring.filter(r => ['monthly','yearly'].includes(r.kind));
+  const subRows = subs.map(r => `
+    <div style="display:flex;gap:8px;align-items:baseline;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.04)">
+      <span style="flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.payee)}</span>
+      <span class="mono dim" style="font-size:11px;flex:0 0 auto">${fmt$(r.avg_amount)}/${r.kind === 'yearly' ? 'yr' : 'mo'} · next ${(r.next_expected || '').slice(5).replace('-','/')}</span>
+      <button class="btn" style="flex:0 0 auto;font-size:11px;padding:3px 8px" onclick="ignoreRecurring('${esc(r.payee).replace(/'/g, "\\'")}')" title="not a subscription">✕</button>
+    </div>`).join('');
+  const catList = (() => { try { return JSON.parse(S.settings.fin_categories || '[]'); } catch(e){ return []; } })();
+  const txRows = S.finTx.filter(t => t.category !== 'transfers').slice(0, 30).map(t => {
+    const key = t.account_id + '|' + t.tx_id;
+    const chip = S.txEdit === key
+      ? `<select onchange="recatTx('${t.account_id}','${esc(t.tx_id)}',this.value)" onblur="S.txEdit=null;render()">
+          <option value="">—</option>${catList.map(c => `<option ${c === t.category ? 'selected' : ''}>${c}</option>`).join('')}</select>`
+      : `<button class="btn" style="font-size:10px;padding:2px 8px;color:${t.category ? 'var(--dim)' : 'var(--focus)'}"
+          onclick="S.txEdit='${key}';render()">${esc(t.category || 'tag it')}</button>`;
+    return `<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.03)">
+      <span class="mono dim" style="flex:0 0 34px;font-size:10px">${(t.posted || '').slice(5).replace('-','/')}</span>
+      <span style="flex:1;min-width:0;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.payee || t.description || '?')}</span>
+      ${chip}
+      <span class="mono" style="flex:0 0 auto;font-size:12px;color:${+t.amount > 0 ? 'var(--done)' : 'var(--text)'}">${fmt$(t.amount)}</span>
+    </div>`;
+  }).join('');
+  return `
+  ${m.uncategorized > 0 ? `<div class="card"><div class="dim" style="font-size:11px">🏷 ${m.uncategorized} transactions still auto-categorizing (drains ~150/hr)</div></div>` : ''}
+  ${cats.length ? `<div class="card"><h2>Where it went — 7 days</h2>${catBars}</div>` : ''}
+  <div class="card"><h2>Subscriptions</h2>
+    ${subRows || '<div class="dim" style="font-size:12px">None detected yet — monthly patterns need 3+ charges of history. They\\'ll surface as cycles accrue.</div>'}
+  </div>
+  <div class="card"><h2>Recent</h2>${txRows || '<div class="dim">no transactions yet</div>'}
+    <div class="dim mono" style="font-size:10px;margin-top:6px">tap a tag to fix it — your fix becomes a permanent rule</div></div>
+  <div style="height:10px"></div>`;
+}
+async function recatTx(accountId, txId, cat){
+  S.txEdit = null;
+  if (!cat) { render(); return; }
+  S.lastWrite = Date.now();
+  const tx = S.finTx.find(t => t.account_id === accountId && t.tx_id === txId);
+  await db.from('fin_transactions').update({category: cat, category_src: 'manual'})
+    .eq('account_id', accountId).eq('tx_id', txId);
+  if (tx && (tx.payee || tx.description)) {
+    await db.from('fin_rules').insert({pattern: (tx.payee || tx.description), category: cat, priority: 50});
+  }
+  if (tx) tx.category = cat;
+  toast('✓ ' + cat + ' — rule saved');
+  render();
+}
+async function ignoreRecurring(payee){
+  S.lastWrite = Date.now();
+  await db.from('fin_recurring').update({ignored: true}).eq('payee', payee);
+  S.finRecurring = S.finRecurring.filter(r => r.payee !== payee);
+  toast('ignored');
+  render();
+}
+async function editManualBalance(id){
+  const a = S.finAccounts.find(x => x.id === id); if (!a) return;
+  const v = prompt(`${a.name} balance (${a.currency})`, a.balance);
+  if (v == null || isNaN(parseFloat(v))) return;
+  S.lastWrite = Date.now();
+  await db.from('fin_accounts').update({balance: parseFloat(v), as_of: new Date().toISOString()}).eq('id', id);
+  toast('✓ updated');
+  loadAll();
+}
 /* relationship layer — people & dates: lead-time prep tasks spawn automatically */
 function peopleCardHTML(){
   const rows = (S.people || []).map(p => `
