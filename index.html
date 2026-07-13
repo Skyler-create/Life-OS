@@ -3684,7 +3684,7 @@ function moneyStocksHTML(){
       <button class="btn primary" style="flex:0 0 auto" onclick="addHolding()">add</button>
     </div></div>
   <div class="card"><h2>Watchlist</h2>
-    ${watch.length ? watch.map(row).join('') : '<div class="dim" style="font-size:12px">Tickers you\\'re eyeing — lighter coverage.</div>'}
+    ${watch.length ? watch.map(row).join('') : '<div class="dim" style="font-size:12px">Tickers on your radar — lighter coverage.</div>'}
     <div style="display:flex;gap:6px;margin-top:8px">
       <input id="w-tk" placeholder="TICKER" style="flex:1;text-transform:uppercase">
       <button class="btn primary" style="flex:0 0 auto" onclick="addWatch()">watch</button>
@@ -3791,7 +3791,7 @@ function moneySpendingHTML(){
   ${m.uncategorized > 0 ? `<div class="card"><div class="dim" style="font-size:11px">🏷 ${m.uncategorized} transactions still auto-categorizing (drains ~150/hr)</div></div>` : ''}
   ${cats.length ? `<div class="card"><h2>Where it went — 7 days</h2>${catBars}</div>` : ''}
   <div class="card"><h2>Subscriptions</h2>
-    ${subRows || '<div class="dim" style="font-size:12px">None detected yet — monthly patterns need 3+ charges of history. They\\'ll surface as cycles accrue.</div>'}
+    ${subRows || '<div class="dim" style="font-size:12px">None detected yet — monthly patterns need 3+ charges of history. These surface as cycles accrue.</div>'}
   </div>
   <div class="card"><h2>Recent</h2>${txRows || '<div class="dim">no transactions yet</div>'}
     <div class="dim mono" style="font-size:10px;margin-top:6px">tap a tag to fix it — your fix becomes a permanent rule</div></div>
