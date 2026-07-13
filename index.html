@@ -140,7 +140,7 @@ details.goal>summary::-webkit-details-marker{display:none}
    the wrapper's bottom strip sitting under the fixed glass nav/addbar was
    unreachable — late evening (≈10:30 PM+) got cut off. 132px = main's own
    bottom-bar clearance. Taps on the tail are inert (outside .daygrid). */
-.gridwrap::after{content:"";display:block;height:132px}
+.gridwrap::after{content:"";display:block;height:210px}  /* s36: cycle card above YC grid pushed it lower — bigger tail so midnight always clears the bars */
 .tmeta .due-today{color:var(--focus)}
 .tmeta .overdue{color:var(--accent)}
 .tmeta .hard{color:var(--accent)}
@@ -1097,6 +1097,30 @@ function updateScorePreview(){
   el.style.color = hit ? 'var(--done)' : 'var(--accent)';
   el.innerHTML = `${r.score}<small>${r.done_count} done · ${r.partial_count} partial · plan of ${r.plan_count} · ${hit ? 'streak hit' : 'below 70'}</small>`;
 }
+/* reflection AUTOSAVE (s36): anything typed into the form persists to daily_log
+   ~1.5s after you stop typing — so the 15:00 auto-finalizer sees your half-done
+   reflection even if you never press save. Scoring still happens on save/finalize. */
+let _reflTimer = null;
+function reflAutosave(){
+  clearTimeout(_reflTimer);
+  _reflTimer = setTimeout(async () => {
+    if (S.view !== 'reflect') return;
+    const patch = {date: todayISO()};
+    const w = refVal('r-wake');    if (w) patch.wake_time = w;
+    const f = refVal('r-focus');   if (f) patch.focus = parseInt(f);
+    const en = refVal('r-energy'); if (en) patch.energy_now = parseInt(en);
+    const sh = refVal('r-sh');     if (sh) patch.started_with_start_here = sh === 'y';
+    const rs = refVal('r-rest');   if (rs) patch.rest_day = rs === 'y';
+    const nt = refVal('r-nt');     if (nt) patch.notes_tomorrow = nt;
+    const nn = refVal('r-nn');     if (nn) patch.notes_new = nn;
+    const nc = refVal('r-nc');     if (nc) patch.notes_check = nc;
+    if (Object.keys(patch).length < 2) return;
+    S.lastWrite = Date.now();
+    await db.from('daily_log').upsert(patch);
+  }, 1500);
+}
+document.addEventListener('input',  e => { if (S.view === 'reflect' && (e.target.id || '').startsWith('r-')) reflAutosave(); });
+document.addEventListener('change', e => { if (S.view === 'reflect' && (e.target.id || '').startsWith('r-')) reflAutosave(); });
 async function saveReflection(){
   // C7: the server computes score + streak/shield chain (lifeos_save_reflection
   // is the only writer of scored rows). The app just sends the form.
@@ -1488,6 +1512,18 @@ function editorHTML(t){
 }
 
 /* --- TODAY --- */
+/* place_context gate: at_work tasks only on days with a work block, weekday
+   tasks Mon–Fri, weekend tasks Sat/Sun. The planner already respects this —
+   the TODAY deck + START HERE now do too ("Lydia on a Sunday" bug, s36). */
+function placeOk(t){
+  const pc = t && t.place_context;
+  if (!pc || pc === 'any') return true;
+  const dow = new Date().getDay();
+  if (pc === 'weekend') return dow === 0 || dow === 6;
+  if (pc === 'weekday') return dow >= 1 && dow <= 5;
+  if (pc === 'at_work') return (S.events || []).some(e => e.date === todayISO() && e.source === 'work');
+  return true;
+}
 /* live START HERE — always points at the best thing to do RIGHT NOW.
    1) the brief's marked task while it's open → 2) current/next plan block whose
    task is open → 3) highest-priority open task due today. Recomputes on every
@@ -1497,7 +1533,7 @@ function startHereNow(todays){
   const byTitle = title => S.tasks.find(x => (x.title || '').toLowerCase() === (title || '').toLowerCase()
     && x.status !== 'done' && !(kids[x.id] || []).length);
   const sh = S.brief?.start_here_task ? byTitle(S.brief.start_here_task) : null;
-  if (sh) return {t: sh, why: 'morning pick'};
+  if (sh && placeOk(sh)) return {t: sh, why: 'morning pick'};
   const n = new Date(); const nowM = n.getHours() * 60 + n.getMinutes();
   const fmt = m => { const h = Math.floor(m / 60) % 24, mm = String(m % 60).padStart(2, '0'),
     h12 = h % 12 || 12; return `${h12}:${mm} ${h < 12 ? 'AM' : 'PM'}`; };
@@ -1508,7 +1544,7 @@ function startHereNow(todays){
     const t = (b.task_id && S.tasks.find(x => x.id === b.task_id && x.status !== 'done')) || byTitle(b.title);
     if (t) return {t, why: b.start_min <= nowM ? 'on the plan now' : 'next on the plan · ' + fmt(b.start_min)};
   }
-  const open = (todays || []).filter(t => t.status !== 'done');
+  const open = (todays || []).filter(t => t.status !== 'done' && placeOk(t));
   if (open.length){
     const t = [...open].sort((a, b) => (PRIO[b.priority] || 2) - (PRIO[a.priority] || 2)
       || (a.est_minutes || 99) - (b.est_minutes || 99))[0];
@@ -1631,7 +1667,7 @@ function rToday(){
   const todaysEv = allEvents().filter(e => e.date === today).sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
   const evCard = todaysEv.length ? `<div class="card"><h2>Calendar</h2>${todaysEv.map(e =>
     `<div class="evrow" style="margin-bottom:4px${e.gid ? ';cursor:pointer' : ''}" ${e.gid ? `onclick="openEv(${e._i})"` : ''}><span class="mono">${e.start_time ? esc(e.start_time) + (e.end_time ? '–' + esc(e.end_time) : '') : 'all-day'}</span><span>${esc(e.title)}</span></div>`).join('')}</div>` : '';
-  const list = applyFilt(todays);
+  const list = applyFilt(todays.filter(placeOk));
   const sorted = [...list].sort((a, b) =>
     (a.status === 'done') - (b.status === 'done') ||
     (a.due || '9999').localeCompare(b.due || '9999') ||
@@ -2388,37 +2424,78 @@ function navYC(dir){
 /* her cycle — context strip on the YC tab. Estimates from her real dates,
    framed as weather, not a script. */
 const CYC_PHASE = {
-  period:     {icon: '🌸', label: 'period',       color: '#FB7185'},
-  pms:        {icon: '🌙', label: 'PMS window',   color: 'var(--focus)'},
-  follicular: {icon: '🌱', label: 'follicular',   color: 'var(--done)'},
-  mid:        {icon: '☀️', label: 'mid-cycle',    color: '#C084FC'},
-  luteal:     {icon: '🌾', label: 'luteal',       color: '#A78BFA'},
-  unknown:    {icon: '❔', label: 'past estimate', color: 'var(--dim)'},
+  period:     {icon: '🌸', label: 'period',                          color: '#FB7185'},
+  pms:        {icon: '🌙', label: 'PMS window — period coming soon', color: 'var(--focus)'},
+  follicular: {icon: '🌱', label: 'follicular — post-period rebound', color: 'var(--done)'},
+  mid:        {icon: '☀️', label: 'mid-cycle — ovulation window',     color: '#C084FC'},
+  luteal:     {icon: '🌾', label: 'luteal — the wind-down half',      color: '#A78BFA'},
+  unknown:    {icon: '❔', label: 'past the usual estimate',          color: 'var(--dim)'},
+};
+/* rotating considerate-boyfriend reminders — a different one each day, per
+   phase. Patterns, not rules: the footer still says ask, don't assume. */
+const CYC_TIPS = {
+  period: [
+    'Cramps, backaches, and low energy are common right now. Extra caring wins: check in first, keep plans effortless, bring the snacks.',
+    'Her body is doing hard work this week. Comfort beats excitement — warm drink, blanket, zero pressure to be fun on the call.',
+    'Energy and patience both run low on period days. Let small things slide, and take something off her plate without being asked.',
+    'Pain plus hormones makes everything heavier. Ask "what do you need right now" instead of guessing — then actually do it.',
+    'Some period days she wants closeness, some she wants space. Both are normal — follow her lead tonight.',
+  ],
+  pms: [
+    'The days before a period can bring mood swings and a shorter fuse. Extra patience — and never, ever say "is it hormones".',
+    'Small annoyances can feel huge this week. Reassurance lands better than solutions.',
+    'PMS often comes with bloating, fatigue, and being hard on herself. Compliments and comfort are rarely wrong right now.',
+    'If she seems off, it is probably not about you. Stay soft, ask gentle questions, save big topics for next week.',
+    'Her energy dips before the period starts. Suggest cozy, low-stakes plans over anything demanding.',
+  ],
+  follicular: [
+    'Post-period rebound: energy and mood typically climb day by day. Great stretch for plans and new ideas.',
+    'She likely feels the most like herself this week — a good window for the bigger conversations you have been saving.',
+    'Rising-energy phase. Adventures, projects, and future-talk land especially well right now.',
+    'Optimism usually runs higher here. Plan something for you two to look forward to.',
+    'The easiest stretch of the cycle for most people — enjoy it, and bank goodwill for the harder weeks.',
+  ],
+  mid: [
+    'Mid-cycle is typically peak energy and peak affection — she may want extra closeness and attention. Give it generously.',
+    'These are usually her most social, confident days. Big date energy — match it.',
+    'Affection often peaks around ovulation. Do not leave the flirty texts on read.',
+    'High-energy days — she may be up for spontaneity that would flop in other weeks.',
+    'Confidence and connection run high mid-cycle. Compliments hit different right now — spend them freely.',
+  ],
+  luteal: [
+    'Luteal = the wind-down half after mid-cycle: energy slowly fades toward her period. Nothing is wrong — plans just land better earlier in the day.',
+    'In this stretch, comfort starts beating excitement. Cozy beats crowded.',
+    'She may tire faster and crave more comfort (and comfort food) this half. Totally normal — keep evenings gentle.',
+    'Focus and patience taper gradually through the luteal weeks. Fewer demands, more ease.',
+    'The steady part of luteal comes first, PMS at the tail. Enjoy the calm — and be ready to soften as the estimate gets close.',
+  ],
 };
 function cycleCardHTML(){
   const c = S.cycle;
-  const markBtn = `<button class="btn" style="width:100%;margin-top:8px;font-size:11px" onclick="markPeriod()">+ mark a period start date</button>`;
   if (!c || c.status !== 'ok') {
     return `<div class="card"><h2>Her cycle</h2>
-      <div class="dim" style="font-size:12px">Add her period start dates (one per cycle) and this fills in — cycle day, phase, next estimate, and gentle context before your calls.</div>${markBtn}</div>`;
+      <div class="dim" style="font-size:12px">Add her period start dates (one per cycle, button below the calendar) and this fills in — cycle day, phase, and a daily heads-up on how she might be feeling.</div></div>`;
   }
   const ph = CYC_PHASE[c.phase] || CYC_PHASE.unknown;
   const pct = Math.min(Math.round(c.day / Math.max(c.avg_len, 1) * 100), 100);
   const pZone = Math.round(c.period_days / c.avg_len * 100);
   const pmsZone = Math.round(5 / c.avg_len * 100);
+  const pool = CYC_TIPS[c.phase];
+  const doy = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 864e5);
+  const tip = pool ? pool[(doy + (c.day || 0)) % pool.length] : (c.context || '');
   return `<div class="card" style="border-color:${c.phase === 'period' || c.phase === 'pms' ? 'rgba(251,113,133,.35)' : 'rgba(255,255,255,.07)'}">
     <div style="display:flex;align-items:baseline;gap:8px">
-      <h2 style="margin:0;flex:1">Her cycle</h2>
-      <span class="mono" style="font-size:11px;color:${ph.color}">${ph.icon} day ${c.day} of ~${c.avg_len} · ${ph.label}</span>
+      <h2 style="margin:0;flex:0 0 auto">Her cycle</h2>
+      <span class="mono" style="flex:1;min-width:0;text-align:right;font-size:11px;color:${ph.color}">${ph.icon} day ${c.day} of ~${c.avg_len} · ${ph.label}</span>
     </div>
     <div style="position:relative;height:6px;border-radius:99px;background:rgba(255,255,255,.06);margin:10px 0 8px;overflow:hidden">
       <div style="position:absolute;left:0;top:0;bottom:0;width:${pZone}%;background:rgba(251,113,133,.35)"></div>
       <div style="position:absolute;right:0;top:0;bottom:0;width:${pmsZone}%;background:rgba(251,191,36,.25)"></div>
       <div style="position:absolute;left:${pct}%;top:-2px;width:10px;height:10px;margin-left:-5px;border-radius:50%;background:${ph.color};box-shadow:0 0 8px ${ph.color}"></div>
     </div>
-    <div style="font-size:12px;line-height:1.5">${esc(c.context)}</div>
-    <div class="mono dim" style="font-size:10px;margin-top:6px">next est. ${c.next.slice(5).replace('-', '/')} ±${c.uncertainty_days}d (in ${c.days_until}d) · ${esc(c.disclaimer)}</div>
-    ${markBtn}</div>`;
+    <div style="font-size:13px;line-height:1.55">💡 ${esc(tip)}</div>
+    <div class="mono dim" style="font-size:10px;margin-top:6px">patterns from her real dates — everyone differs; ask, don't assume</div>
+  </div>`;
 }
 async function markPeriod(){
   const d = prompt('Period start date (YYYY-MM-DD)', todayISO());
@@ -2449,7 +2526,8 @@ function rYC(){
   const body = S.ycView === 'day' ? ycDayHTML(S.ycSel, evByDay)
              : S.ycView === 'week' ? ycWeekHTML(evByDay)
              : ycMonthHTML(evByDay);
-  return header + cycleCardHTML() + body;
+  const markBtn = `<button class="btn" style="width:100%;margin-top:8px;font-size:11px;color:var(--dim)" onclick="markPeriod()">+ mark a period start date</button>`;
+  return header + cycleCardHTML() + body + markBtn;
 }
 function ycDayHTML(iso, evByDay){
   const evs = (evByDay[iso] || []).slice().sort((a,b) => (a.start_time || '').localeCompare(b.start_time || ''));
@@ -3648,7 +3726,46 @@ document.addEventListener('keydown', e => {
    Read-only mirror of every account; SQL owns all numbers (lifeos_money_week).
    Tap a category chip to fix it — your fix becomes a permanent rule. */
 function fmt$(n){ const v = Math.abs(+n || 0); const s = v >= 1000 ? (v/1000).toFixed(v >= 10000 ? 0 : 1) + 'k' : v.toFixed(v < 100 ? 2 : 0); return (+n < 0 ? '-$' : '$') + s; }
+/* MONEY privacy gate (s36) — the phone's own Face ID via WebAuthn. A privacy
+   curtain against shoulder-surfers with your phone; the data model is unchanged. */
+function moneyUnlockedNow(){ return S._moneyUnlockAt && (Date.now() - S._moneyUnlockAt) < 15 * 60000; }
+async function unlockMoney(){
+  try {
+    if (!window.PublicKeyCredential) throw new Error('no biometrics here');
+    const chal = crypto.getRandomValues(new Uint8Array(16));
+    let credId = null;
+    try { credId = JSON.parse(localStorage.getItem('moneyCred') || 'null'); } catch(e){}
+    if (!credId) {
+      const cred = await navigator.credentials.create({publicKey: {
+        challenge: chal, rp: {name: 'LifeOS'},
+        user: {id: crypto.getRandomValues(new Uint8Array(8)), name: 'skyler', displayName: 'Skyler'},
+        pubKeyCredParams: [{type: 'public-key', alg: -7}, {type: 'public-key', alg: -257}],
+        authenticatorSelection: {authenticatorAttachment: 'platform', userVerification: 'required'},
+        timeout: 60000}});
+      localStorage.setItem('moneyCred', JSON.stringify(Array.from(new Uint8Array(cred.rawId))));
+    } else {
+      await navigator.credentials.get({publicKey: {
+        challenge: chal,
+        allowCredentials: [{type: 'public-key', id: new Uint8Array(credId)}],
+        userVerification: 'required', timeout: 60000}});
+    }
+    S._moneyUnlockAt = Date.now();
+    render();
+  } catch (e) {
+    // device without Face ID/passkeys: second tap enters (curtain, not a vault)
+    if (S._lockRetry) { S._moneyUnlockAt = Date.now(); S._lockRetry = false; render(); }
+    else { S._lockRetry = true; toast('Face ID unavailable — tap again to enter'); }
+  }
+}
 function rMoney(){
+  if (!moneyUnlockedNow()) {
+    return `<div class="card" style="text-align:center;padding:30px 16px">
+      <div style="font-size:30px">🔒</div>
+      <div style="margin:10px 0 4px;font-weight:700">Money is private</div>
+      <div class="dim" style="font-size:12px;margin-bottom:14px">Net worth, spending, and positions sit behind Face ID.</div>
+      <button class="btn primary" style="width:100%;padding:12px" onclick="unlockMoney()">Unlock with Face ID</button>
+    </div>`;
+  }
   if (!S.moneyView) S.moneyView = localStorage.getItem('moneyView') || 'overview';
   const seg = `<div class="seg" style="display:flex;margin-bottom:10px">${[['overview','OVERVIEW'],['spending','SPENDING'],['stocks','STOCKS']].map(([v, l]) =>
     `<button class="${S.moneyView === v ? 'on' : ''}" style="flex:1" onclick="S.moneyView='${v}';localStorage.setItem('moneyView','${v}');render()">${l}</button>`).join('')}</div>`;
@@ -3788,7 +3905,7 @@ function moneySpendingHTML(){
     </div>`;
   }).join('');
   return `
-  ${m.uncategorized > 0 ? `<div class="card"><div class="dim" style="font-size:11px">🏷 ${m.uncategorized} transactions still auto-categorizing (drains ~150/hr)</div></div>` : ''}
+  ${m.uncategorized > 0 ? `<div class="card"><div class="dim" style="font-size:11px">🏷 ${m.uncategorized} transactions don't have a category yet — a free background AI labels ~150/hr. No money involved; this hits zero on its own.</div></div>` : ''}
   ${cats.length ? `<div class="card"><h2>Where it went — 7 days</h2>${catBars}</div>` : ''}
   <div class="card"><h2>Subscriptions</h2>
     ${subRows || '<div class="dim" style="font-size:12px">None detected yet — monthly patterns need 3+ charges of history. These surface as cycles accrue.</div>'}
