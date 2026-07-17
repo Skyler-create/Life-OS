@@ -1146,7 +1146,7 @@ async function saveReflection(){
 }
 
 /* ================= rendering ================= */
-const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['cal','CAL'],['chat','CHAT'],['reflect','REFLECT'],['yc','YC'],['log','LOG'],['trends','TRENDS'],['money','MONEY'],['cards','CARDS'],['settings','SETTINGS']];
+const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['cal','CAL'],['chat','CHAT'],['reflect','REFLECT'],['yc','YC'],['time','TIME'],['log','LOG'],['trends','TRENDS'],['money','MONEY'],['cards','CARDS'],['settings','SETTINGS']];
 function setView(v){ S.view = v; S.editing = null; localStorage.setItem('view', v); render(); }
 function setFilt(f){ S.filt = f; localStorage.setItem('filt', f); render(); }
 
@@ -1173,6 +1173,7 @@ function render(){
   if (S.view === 'reflect') { main.innerHTML = rReflect(); updateScorePreview(); }
   if (S.view === 'yc')      main.innerHTML = rYC();
   if (S.view === 'log')     main.innerHTML = rLog();
+  if (S.view === 'time')    main.innerHTML = rTime();
   if (S.view === 'trends')  main.innerHTML = rTrends();
   if (S.view === 'money')   main.innerHTML = rMoney();
   if (S.view === 'cal')     main.innerHTML = rCal();
@@ -1793,6 +1794,97 @@ function startStartHere(){
   const t = S.tasks.find(x => (x.title || '').trim().toLowerCase() === sh && x.status !== 'done');
   if (!t) { toast('START HERE task not found — check TASKS'); return; }
   startTask(t.id);
+}
+
+/* ================= TIME — what actually happened, from the clock ================= */
+async function loadTimeline(){
+  if (S._tlLoading) return; S._tlLoading = true;
+  const {data, error} = await db.rpc('lifeos_timeline', {p_days: 14});
+  S._tlLoading = false;
+  if (error) { toast('Timeline load failed: ' + error.message); return; }
+  S.timeline = data || []; render();
+}
+function reloadTimeline(){ S.timeline = null; loadTimeline(); render(); }
+function rTime(){
+  if (!S.timeline) { loadTimeline(); return '<div class="empty">Loading your last 14 days…</div>'; }
+  const tl = S.timeline;
+  const hm = d => new Date(d).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', hour12: false});
+  // ---- aggregate per credit-day ----
+  const days = {};
+  const D = d => days[d] || (days[d] = {focus: 0, plan: 0, off: 0, scroll: 0, starter: 0, byHour: Array(24).fill(0)});
+  const proj = {};
+  tl.forEach(s => {
+    const d = D(s.day), m = +s.minutes || 0;
+    if (s.kind === 'scroll') { d.scroll += m; return; }
+    d.focus += m;
+    (+s.rate || 1) >= 1 ? d.plan += m : d.off += m;
+    if (s.starter) d.starter += m;
+    const p = s.project || (s.title ? 'other tasks' : 'general (untethered)');
+    proj[p] = (proj[p] || 0) + m;
+    // spread minutes across hour bins for the heatmap
+    let t0 = new Date(s.start).getTime(); const t1 = new Date(s.end).getTime();
+    for (; t0 < t1; t0 += 15 * 60000) d.byHour[new Date(t0).getHours()] += Math.min(15, (t1 - t0) / 60000);
+  });
+  const dayKeys = Object.keys(days).sort();
+  const tot = k => dayKeys.reduce((s, d) => s + days[d][k], 0);
+  const fH = m => (m / 60).toFixed(1) + 'h';
+  const totFocus = tot('focus'), totPlan = tot('plan'), totScroll = tot('scroll');
+  const starterDays = dayKeys.filter(d => days[d].starter >= 10).length;
+  // peak focus hours across all days
+  const allHours = Array(24).fill(0);
+  dayKeys.forEach(d => days[d].byHour.forEach((m, h) => allHours[h] += m));
+  const peak = allHours.map((m, h) => [h, m]).sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .filter(x => x[1] > 0).map(x => String(x[0]).padStart(2, '0') + ':00').join(' · ');
+  const planPct = totFocus ? Math.round(totPlan / totFocus * 100) : 0;
+  const stat = (v, label, color) => `<div style="flex:1;text-align:center">
+      <div class="mono" style="font-size:20px;font-weight:700;${color ? 'color:' + color : ''}">${v}</div>
+      <div class="dim" style="font-size:10px;letter-spacing:.08em;font-family:var(--mono)">${label}</div></div>`;
+  const stats = `<div class="card"><h2>Last 14 days</h2>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      ${stat(fH(totFocus), 'FOCUSED', 'var(--done)')}
+      ${stat(planPct + '%', 'ON PLAN', planPct >= 60 ? 'var(--done)' : 'var(--focus)')}
+      ${stat(fH(totScroll), 'SCROLLED', 'var(--accent-hi)')}
+      ${stat(starterDays + '/' + dayKeys.length, 'STARTER DAYS')}
+    </div>
+    <div class="dim" style="font-size:11px;font-family:var(--mono)">peak focus hours: ${peak || '—'}</div></div>`;
+  // ---- heatmap: day rows × 24 hour cells ----
+  const heat = `<div class="card"><h2>When you actually work</h2>
+    ${dayKeys.map(d => `<div style="display:flex;align-items:center;gap:5px;margin-bottom:2px">
+      <span class="mono dim" style="font-size:9px;width:36px;flex:0 0 auto">${d.slice(5)}</span>
+      <div style="display:flex;flex:1;gap:1px">${days[d].byHour.map(m =>
+        `<i style="flex:1;height:11px;border-radius:2px;background:${m >= 1 ? `rgba(74,222,128,${Math.min(.18 + m / 60 * .82, 1).toFixed(2)}` + ')' : 'rgba(255,255,255,.04)'}"></i>`).join('')}</div></div>`).join('')}
+    <div style="display:flex;margin-top:3px;margin-left:41px">${[0, 6, 12, 18].map(h =>
+      `<span class="mono dim" style="font-size:9px;flex:1">${String(h).padStart(2, '0')}</span>`).join('')}</div></div>`;
+  // ---- project split ----
+  const pk = Object.entries(proj).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const pmax = pk.length ? pk[0][1] : 1;
+  const projects = `<div class="card"><h2>Where the minutes went</h2>
+    ${pk.map(([p, m]) => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+      <span style="font-size:12px;flex:0 0 45%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p)}</span>
+      <div style="flex:1;height:10px;background:#12141C;border-radius:5px;overflow:hidden">
+        <div style="width:${Math.round(m / pmax * 100)}%;height:100%;background:var(--grad)"></div></div>
+      <span class="mono dim" style="font-size:10px;flex:0 0 44px;text-align:right">${fH(m)}</span></div>`).join('')}</div>`;
+  // ---- per-day session log, newest first, today open ----
+  const row = s => s.kind === 'scroll'
+    ? `<div style="display:flex;gap:8px;font-size:12px;padding:3px 0;color:var(--accent-hi)">
+        <span class="mono" style="flex:0 0 86px">${hm(s.start)}–${hm(s.end)}</span>
+        <span>📱 ${esc(s.title || 'scroll')}</span>
+        <span class="mono" style="margin-left:auto;flex:0 0 auto">${s.minutes}m</span></div>`
+    : `<div style="display:flex;gap:8px;font-size:12px;padding:3px 0">
+        <span class="mono dim" style="flex:0 0 86px">${hm(s.start)}–${hm(s.end)}</span>
+        <span class="mono" style="flex:0 0 auto;color:${(ENERGY[s.energy] || {}).hex || 'var(--dim)'}">${s.energy || ''}</span>
+        <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.starter ? '⭐ ' : ''}${esc(s.title || 'general')}</span>
+        <span class="dim mono" style="margin-left:auto;flex:0 0 auto">${s.minutes}m${(+s.rate || 1) < 1 ? ' · ⅓' : ''}</span></div>`;
+  const today = todayISO();
+  const log = dayKeys.slice().reverse().map(d => {
+    const dd = days[d];
+    const sess = tl.filter(s => s.day === d);
+    return `<details class="bsec"${d === today ? ' open' : ''}><summary>${d === today ? 'TODAY' : d} · ${fH(dd.focus)} focused${dd.scroll ? ' · ' + dd.scroll + 'm scroll' : ''}${dd.starter >= 10 ? ' ⭐' : ''}</summary>
+      <div style="padding:6px 8px">${sess.map(row).join('') || '<span class="dim">nothing clocked</span>'}</div></details>`;
+  }).join('');
+  return `<div style="display:flex;justify-content:flex-end;margin:4px 0 8px">
+      <button class="btn" onclick="reloadTimeline()">⟳ refresh</button></div>
+    ${stats}${heat}${projects}<div class="card"><h2>Session log</h2>${log}</div>`;
 }
 /* task clock-in: ▶ on a task row — same timer, tethered to the task */
 async function startTask(id){
