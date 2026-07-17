@@ -2364,7 +2364,9 @@ async function newsVote(id, v){
   const n = (S.news || []).find(x => x.id === id);
   if (n) n.feedback = v;
   render();
-  await db.rpc('lifeos_news_feedback', {p_id: id, p_vote: v});
+  const {data, error} = await db.rpc('lifeos_news_feedback', {p_id: id, p_vote: v});
+  if (error) { toast('⚠ vote failed: ' + error.message); return; }
+  if (data?.ok) toast(`${v === 1 ? '👍' : '👎'} ${data.topic} — weight now ×${data.weight} (tunes tomorrow's mix)`);
 }
 function rBrief(){
   const ctl = `<div style="display:flex;gap:6px;margin-bottom:10px;justify-content:flex-end">
@@ -3896,7 +3898,16 @@ function moneyStocksHTML(){
     </div>`;
   const totalVal = hold.reduce((s, r) => s + (+r.value || 0), 0);
   const rep = st.latest_report;
-  return `
+  const pending = st.unregistered_trades || [];
+  const pendCard = !pending.length ? '' : `
+  <div class="card" style="border-color:var(--focus)"><h2>Detected buys — not in holdings yet</h2>
+    ${pending.map(p => `<div style="display:flex;gap:8px;align-items:baseline;padding:4px 0;font-size:12px">
+      <span class="mono dim" style="flex:0 0 44px">${(p.posted || '').slice(5).replace('-','/')}</span>
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((p.payee || '').replace(/\s*(un)?solicited trade\s*/i, '').replace(/^bought\s*/i, ''))}</span>
+      <span class="mono" style="flex:0 0 auto">${fmt$(Math.abs(p.amount))}</span>
+      <button class="btn" style="flex:0 0 auto;font-size:10px;padding:2px 7px" onclick="ackTrade('${esc(p.key)}')" title="dismiss — already registered or not a buy">✕</button></div>`).join('')}
+    <div class="dim" style="font-size:11px;margin-top:6px">From your brokerage feed. Register below (ticker · shares · avg $) — quotes fill in automatically — then ✕ to dismiss.</div></div>`;
+  return `${pendCard}
   <div class="card"><h2>Holdings${totalVal ? ` — ${fmt$(totalVal)}` : ''}</h2>
     ${hold.length ? hold.map(row).join('') : '<div class="dim" style="font-size:12px">Add what you own — ticker, shares, avg cost. Everything else fills itself in nightly.</div>'}
     <div style="display:flex;gap:6px;margin-top:8px">
@@ -3917,6 +3928,12 @@ function moneyStocksHTML(){
     : '<div class="card"><h2>Analyst</h2><div class="dim" style="font-size:12px">Daily notes + Monday deep-dives appear here once the radio routine is live.</div></div>'}
   <div class="dim mono" style="font-size:10px;padding:0 2px">quotes: end-of-day, synced weekday evenings · read-only — no trade path exists</div>
   <div style="height:10px"></div>`;
+}
+async function ackTrade(key){
+  S.lastWrite = Date.now();
+  const {error} = await db.from('stock_trade_acks').insert({key});
+  if (error) { toast('⚠ ' + error.message); return; }
+  toast('dismissed'); loadAll();
 }
 async function addHolding(){
   const tk = (document.getElementById('h-tk')?.value || '').trim().toUpperCase();
@@ -3969,7 +3986,7 @@ function moneyOverviewHTML(){
   <div class="card"><h2>Cashflow</h2>
     <table>
       <tr><td>last 7 days</td><td class="mono">in ${fmt$(wk.in)} · out ${fmt$(wk.out)} · net <b style="color:${(wk.in - wk.out) >= 0 ? 'var(--done)' : 'var(--accent-hi)'}">${fmt$(wk.in - wk.out)}</b></td></tr>
-      <tr><td>this month</td><td class="mono">in ${fmt$(mo.in)} · out ${fmt$(mo.out)}</td></tr>
+      <tr><td>this month</td><td class="mono">in ${fmt$(mo.in)} · out ${fmt$(mo.out)}${+mo.invested ? ` · <span style="color:var(--deep)">invested ${fmt$(mo.invested)}</span>` : ''}</td></tr>
     </table></div>
   <div class="card"><h2>Accounts</h2>${acctRows}
     <div class="dim mono" style="font-size:10px;margin-top:8px">read-only mirror · synced every 2h via SimpleFIN · nothing here can move money</div></div>
