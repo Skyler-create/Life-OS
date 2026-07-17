@@ -1777,7 +1777,7 @@ function creditsCardHTML(){
       ${stat(c.gross, 'EARNED')}
     </div>
     <div class="ebar" style="margin-bottom:6px"><div style="width:${pct}%;background:${pct >= 85 ? '#E1251B' : pct >= 60 ? '#FBBF24' : '#4ADE80'}"></div></div>
-    <div class="dim" style="font-size:11px;margin-bottom:10px">earned = ${c.free} free + ${c.timer} clocked + ${c.bonus} completions${c.wake_bonus ? ` + ${c.wake_bonus} wake` : ''} · daily cap ${c.cap}${c.gross >= c.cap ? ' — HIT' : ''}</div>
+    <div class="dim" style="font-size:11px;margin-bottom:10px">earned = ${c.free} free + ${c.timer} clocked + ${c.bonus} completions${c.wake_bonus ? ` + ${c.wake_bonus} wake` : ''}${c.reflect_bonus ? ` + ${c.reflect_bonus} reflected` : ''} · daily cap ${c.cap}${c.gross >= c.cap ? ' — HIT' : ''}</div>
     ${starterLine}${timer}${scroll}${wakeLine}${sleepHTML()}
   </div>`;
 }
@@ -3903,7 +3903,7 @@ function moneyStocksHTML(){
   <div class="card" style="border-color:var(--focus)"><h2>Detected buys — not in holdings yet</h2>
     ${pending.map(p => `<div style="display:flex;gap:8px;align-items:baseline;padding:4px 0;font-size:12px">
       <span class="mono dim" style="flex:0 0 44px">${(p.posted || '').slice(5).replace('-','/')}</span>
-      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((p.payee || '').replace(/\s*(un)?solicited trade\s*/i, '').replace(/^bought\s*/i, ''))}</span>
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((p.payee || '').replace(/\s*(un)?solicited trade\s*/i, '').replace(/^bought\s*/i, ''))}${p.institution ? ` <span class="dim" style="font-size:10px">· ${esc(p.institution)}</span>` : ''}</span>
       <span class="mono" style="flex:0 0 auto">${fmt$(Math.abs(p.amount))}</span>
       <button class="btn" style="flex:0 0 auto;font-size:10px;padding:2px 7px" onclick="ackTrade('${esc(p.key)}')" title="dismiss — already registered or not a buy">✕</button></div>`).join('')}
     <div class="dim" style="font-size:11px;margin-top:6px">From your brokerage feed. Register below (ticker · shares · avg $) — quotes fill in automatically — then ✕ to dismiss.</div></div>`;

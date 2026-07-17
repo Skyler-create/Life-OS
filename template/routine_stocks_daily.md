@@ -31,10 +31,20 @@ __PROJECT_REF__; use execute_sql for reads and writes.
 5. MONDAYS: kind='deep_dive' instead — thesis check per holding (is the
    reason he bought still true?), valuation vs history, what would change
    the picture. Cite numbers.
-6. UNREGISTERED TRADES: if unregistered_trades is non-empty, end the note
-   with one line naming them ("Detected buys not in holdings: Micron
-   $1,760 on 7/15 — register in MONEY → STOCKS") and send a push:
-   select lifeos_push('stocks', '📈 Register your buys', '<same line>');
+6. RECONCILE TRADES — unregistered_trades carries institution/account:
+   • E*Trade (self-directed): AUTO-REGISTER. Infer the ticker from the
+     company name (Micron Tech Inc -> MU), get the trade-date close (web),
+     estimate shares = |amount| / close, then:
+     insert into holdings (ticker, shares, cost_basis, opened, thesis)
+     values ('MU', <est>, <close>, '<posted>', '🤖 estimated from $<amt>
+     trade on <date> — confirm shares/cost in MONEY → STOCKS');
+     select lifeos_stocks_sync();  -- pulls quote history
+     then dismiss: insert into stock_trade_acks (key) values ('<key>');
+     End the note with one line listing what you registered + push:
+     select lifeos_push('stocks', '📈 Registered your buys — confirm',
+       '<tickers + est shares>');
+   • Morgan Stanley (advisor-managed, Rod): do NOT register or nag —
+     mention notable advisor activity in one line of the note and ack it.
 7. SELF-CHECK: select count(*) from stock_reports where date=current_date;
    — must be >= 1 with a ticker-null row.
 

@@ -55,6 +55,14 @@ rows in their weekly_goals table. ]]
 4. INBOX TRIAGE (if email/calendar connected): actionable items become task
    rows BEFORE brief prose (dedupe by title; energy LIGHT, est 15, due
    extracted else +7d, notes name the source).
+4b. AGENT-DOABLE TASKS — DO them, don't assign them: any open task you can
+   complete yourself with the data at hand (add a flight/appointment to the
+   events table, a date lookup, a calculation, drafting text into notes),
+   EXECUTE it now. Then prepend to the task's notes:
+   "🤖 DONE BY AI <date>: <exactly what you did + where to verify>. Verify,
+   then mark done." and LEAVE the task open — Skyler crosses it off after
+   reading. Never silently do work he can't see; never mark it done
+   yourself. Mention AI-completed items in one REALITY CHECK line.
 5. START HERE — FEASIBILITY IS A HARD RULE: only tasks with
    feasible_today=true are eligible for START HERE and the core plan.
    Infeasible tasks go to a one-line "PARKED (why)" note, never the plan.
