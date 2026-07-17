@@ -1746,11 +1746,12 @@ function creditsCardHTML(){
     const tTitle = fo.task_id ? (S.tasks.find(x => x.id === fo.task_id)?.title || 'task') : null;
     timer = `<div style="display:flex;align-items:center;gap:10px">
       <span class="mono" style="font-size:20px;font-weight:700;color:${(ENERGY[fo.energy] || {}).hex}">⏱ ${Math.floor(mins/60)}:${String(mins%60).padStart(2,'0')}</span>
-      <span class="dim" style="font-size:11px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${tTitle ? '▶ ' + esc(tTitle) : fo.energy + ' (general)'} · ~${Math.floor(mins / CREDIT_RATE[fo.energy])}cr</span>
+      <span class="dim" style="font-size:11px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${tTitle ? '▶ ' + esc(tTitle) : fo.energy + ' (general)'}${(+fo.credit_rate || 1) < 1 ? ' · ⅓ rate' : ''} · ~${Math.floor(mins / CREDIT_RATE[fo.energy] * (+fo.credit_rate || 1))}cr</span>
       <button class="btn primary" style="margin-left:auto;flex:0 0 auto" onclick="clockOut()">Clock out</button></div>`;
   } else {
     timer = `<div style="display:flex;align-items:center;gap:6px">
-      ${['DEEP','FOCUS','LIGHT'].map(e => `<button class="schip" style="flex:1;white-space:nowrap;font-size:11px;padding:7px 6px;text-align:center;touch-action:pan-y;border-color:${ENERGY[e].hex};color:${ENERGY[e].hex}" onclick="clockIn('${e}')">${e} · ${CREDIT_RATE[e]}m/cr</button>`).join('')}</div>`;
+      ${['DEEP','FOCUS','LIGHT'].map(e => `<button class="schip" style="flex:1;white-space:nowrap;font-size:11px;padding:7px 6px;text-align:center;touch-action:pan-y;border-color:${ENERGY[e].hex};color:${ENERGY[e].hex}" onclick="clockIn('${e}')">${e} · ${CREDIT_RATE[e] * 3}m/cr</button>`).join('')}</div>
+    <div class="dim" style="font-size:10px;font-family:var(--mono);margin-top:4px">general clock-in = ⅓ rate · hit ▶ on a plan task for full rate (${['DEEP','FOCUS','LIGHT'].map(e => CREDIT_RATE[e] + 'm').join('/')})</div>`;
   }
   const scroll = c.scroll_open
     ? `<div style="color:var(--accent);font-family:var(--mono);font-size:11px;margin-top:6px">📱 ${esc(c.scroll_open)} meter RUNNING — 1 credit/min, auto-cuts at 10m without a close</div>`
@@ -1763,6 +1764,11 @@ function creditsCardHTML(){
         wt==='override' ? 'override — no free credits today' :
         'after the bonus window — no wake bonus (cap 90)'}</div>`
     : '';
+  const starterLine = !c.start_here ? '' : c.starter_done
+    ? `<div class="dim" style="font-family:var(--mono);font-size:11px;margin-bottom:8px">🔓 starter done — ${c.starter_min}m on “${esc(c.start_here)}”</div>`
+    : `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;border:1px solid var(--focus);border-radius:10px;background:rgba(251,191,36,.06)">
+        <span style="font-size:12px;color:var(--focus);min-width:0">🔒 10 free credits locked — ${Math.max(10 - (c.starter_min || 0), 0)} more min on <b>${esc(c.start_here)}</b></span>
+        <button class="btn primary" style="margin-left:auto;flex:0 0 auto" onclick="startStartHere()">▶ Start</button></div>`;
   return `<div class="card"><h2>Screen-time credits</h2>
     <div style="display:flex;gap:8px;margin-bottom:8px">
       ${stat(c.balance, 'MIN LEFT', c.balance > 0 ? 'var(--done)' : 'var(--accent)')}
@@ -1771,7 +1777,7 @@ function creditsCardHTML(){
     </div>
     <div class="ebar" style="margin-bottom:6px"><div style="width:${pct}%;background:${pct >= 85 ? '#E1251B' : pct >= 60 ? '#FBBF24' : '#4ADE80'}"></div></div>
     <div class="dim" style="font-size:11px;margin-bottom:10px">earned = ${c.free} free + ${c.timer} clocked + ${c.bonus} completions${c.wake_bonus ? ` + ${c.wake_bonus} wake` : ''} · daily cap ${c.cap}${c.gross >= c.cap ? ' — HIT' : ''}</div>
-    ${timer}${scroll}${wakeLine}${sleepHTML()}
+    ${starterLine}${timer}${scroll}${wakeLine}${sleepHTML()}
   </div>`;
 }
 /* general clock-in: untethered, time credits only */
@@ -1779,7 +1785,14 @@ async function clockIn(energy){
   S.lastWrite = Date.now();
   const {data, error} = await db.from('focus_sessions').insert({energy}).select().single();
   if (error) { toast('Clock-in failed: ' + error.message); return; }
-  S.focusOpen = data; render(); toast('Clocked in — ' + energy + ', 1 credit per ' + CREDIT_RATE[energy] + ' min');
+  S.focusOpen = data; render(); toast('Clocked in — ' + energy + ' general = ⅓ rate (1cr per ' + CREDIT_RATE[energy] * 3 + 'm) · plan tasks earn full');
+}
+/* one-tap clock-in on today's START HERE task — unlocks the 10 free credits */
+function startStartHere(){
+  const sh = (S.credits?.start_here || S.brief?.start_here_task || '').trim().toLowerCase();
+  const t = S.tasks.find(x => (x.title || '').trim().toLowerCase() === sh && x.status !== 'done');
+  if (!t) { toast('START HERE task not found — check TASKS'); return; }
+  startTask(t.id);
 }
 /* task clock-in: ▶ on a task row — same timer, tethered to the task */
 async function startTask(id){
@@ -1819,7 +1832,7 @@ async function clockOut(){
   } else {
     await db.from('focus_sessions').update({ended_at: new Date().toISOString()}).eq('id', fo.id).is('ended_at', null);
     const mins = Math.floor((Date.now() - new Date(fo.started_at).getTime()) / 60000);
-    toast(`Clocked out — ${mins} min → ~${Math.floor(mins / CREDIT_RATE[fo.energy])} credits`);
+    toast(`Clocked out — ${mins} min → ~${Math.floor(mins / CREDIT_RATE[fo.energy] * (+fo.credit_rate || 1))} credits${(+fo.credit_rate || 1) < 1 ? ' (⅓ rate)' : ''}`);
   }
   S.focusOpen = null; loadAll();
 }
