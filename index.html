@@ -626,7 +626,7 @@ document.getElementById('a-email').value = OWNER;
 /* ================= data ================= */
 async function loadAll(){
   const today = todayISO();
-  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx] = await Promise.all([
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, jp] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
@@ -661,6 +661,7 @@ async function loadAll(){
       .order('posted', {ascending: false}).limit(250),
     db.from('fin_recurring').select('*').eq('active', true).eq('ignored', false).order('avg_amount', {ascending: false}),
     db.rpc('lifeos_stocks_context'),
+    db.from('job_postings').select('*').neq('status','archived').order('found_at', {ascending:false}).limit(200),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   S.cards = cd.data || []; S.events = ev.data || []; S.freezes = fz.data || [];
@@ -688,6 +689,7 @@ async function loadAll(){
   S.finTx = ft.data || [];
   S.finRecurring = fr.data || [];
   S.stocks = stx.data || null;     // stocks agent: quotes + indicators + latest report
+  S.jobs = jp.data || [];          // Slipstream job pipeline (spec 06)
   S.expStats = {}; S.expArms = {};
   try {
     const actives = S.experiments.filter(e => e.status === 'active').slice(0, 4);
@@ -1146,7 +1148,7 @@ async function saveReflection(){
 }
 
 /* ================= rendering ================= */
-const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['cal','CAL'],['chat','CHAT'],['reflect','REFLECT'],['yc','YC'],['time','TIME'],['log','LOG'],['trends','TRENDS'],['money','MONEY'],['cards','CARDS'],['settings','SETTINGS']];
+const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['cal','CAL'],['chat','CHAT'],['reflect','REFLECT'],['yc','YC'],['log','LOG'],['trends','TRENDS'],['money','MONEY'],['jobs','JOBS'],['cards','CARDS'],['settings','SETTINGS']];
 function setView(v){ S.view = v; S.editing = null; localStorage.setItem('view', v); render(); }
 function setFilt(f){ S.filt = f; localStorage.setItem('filt', f); render(); }
 
@@ -1173,9 +1175,9 @@ function render(){
   if (S.view === 'reflect') { main.innerHTML = rReflect(); updateScorePreview(); }
   if (S.view === 'yc')      main.innerHTML = rYC();
   if (S.view === 'log')     main.innerHTML = rLog();
-  if (S.view === 'time')    main.innerHTML = rTime();
   if (S.view === 'trends')  main.innerHTML = rTrends();
   if (S.view === 'money')   main.innerHTML = rMoney();
+  if (S.view === 'jobs')    main.innerHTML = rJobs();
   if (S.view === 'cal')     main.innerHTML = rCal();
   if (S.view === 'cards')   main.innerHTML = rCards();
   if (S.view === 'chat')    { main.innerHTML = rChat(); const cl = document.getElementById('chatlog'); if (cl) cl.scrollTop = cl.scrollHeight; }
@@ -1747,12 +1749,11 @@ function creditsCardHTML(){
     const tTitle = fo.task_id ? (S.tasks.find(x => x.id === fo.task_id)?.title || 'task') : null;
     timer = `<div style="display:flex;align-items:center;gap:10px">
       <span class="mono" style="font-size:20px;font-weight:700;color:${(ENERGY[fo.energy] || {}).hex}">⏱ ${Math.floor(mins/60)}:${String(mins%60).padStart(2,'0')}</span>
-      <span class="dim" style="font-size:11px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${tTitle ? '▶ ' + esc(tTitle) : fo.energy + ' (general)'}${(+fo.credit_rate || 1) < 1 ? ' · ⅓ rate' : ''} · ~${Math.floor(mins / CREDIT_RATE[fo.energy] * (+fo.credit_rate || 1))}cr</span>
+      <span class="dim" style="font-size:11px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${tTitle ? '▶ ' + esc(tTitle) : fo.energy + ' (general)'} · ~${Math.floor(mins / CREDIT_RATE[fo.energy])}cr</span>
       <button class="btn primary" style="margin-left:auto;flex:0 0 auto" onclick="clockOut()">Clock out</button></div>`;
   } else {
     timer = `<div style="display:flex;align-items:center;gap:6px">
-      ${['DEEP','FOCUS','LIGHT'].map(e => `<button class="schip" style="flex:1;white-space:nowrap;font-size:11px;padding:7px 6px;text-align:center;touch-action:pan-y;border-color:${ENERGY[e].hex};color:${ENERGY[e].hex}" onclick="clockIn('${e}')">${e} · ${CREDIT_RATE[e] * 3}m/cr</button>`).join('')}</div>
-    <div class="dim" style="font-size:10px;font-family:var(--mono);margin-top:4px">general clock-in = ⅓ rate · hit ▶ on a plan task for full rate (${['DEEP','FOCUS','LIGHT'].map(e => CREDIT_RATE[e] + 'm').join('/')})</div>`;
+      ${['DEEP','FOCUS','LIGHT'].map(e => `<button class="schip" style="flex:1;white-space:nowrap;font-size:11px;padding:7px 6px;text-align:center;touch-action:pan-y;border-color:${ENERGY[e].hex};color:${ENERGY[e].hex}" onclick="clockIn('${e}')">${e} · ${CREDIT_RATE[e]}m/cr</button>`).join('')}</div>`;
   }
   const scroll = c.scroll_open
     ? `<div style="color:var(--accent);font-family:var(--mono);font-size:11px;margin-top:6px">📱 ${esc(c.scroll_open)} meter RUNNING — 1 credit/min, auto-cuts at 10m without a close</div>`
@@ -1765,11 +1766,6 @@ function creditsCardHTML(){
         wt==='override' ? 'override — no free credits today' :
         'after the bonus window — no wake bonus (cap 90)'}</div>`
     : '';
-  const starterLine = !c.start_here ? '' : c.starter_done
-    ? `<div class="dim" style="font-family:var(--mono);font-size:11px;margin-bottom:8px">🔓 starter done — ${c.starter_min}m on “${esc(c.start_here)}”</div>`
-    : `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;border:1px solid var(--focus);border-radius:10px;background:rgba(251,191,36,.06)">
-        <span style="font-size:12px;color:var(--focus);min-width:0">🔒 10 free credits locked — ${Math.max(10 - (c.starter_min || 0), 0)} more min on <b>${esc(c.start_here)}</b></span>
-        <button class="btn primary" style="margin-left:auto;flex:0 0 auto" onclick="startStartHere()">▶ Start</button></div>`;
   return `<div class="card"><h2>Screen-time credits</h2>
     <div style="display:flex;gap:8px;margin-bottom:8px">
       ${stat(c.balance, 'MIN LEFT', c.balance > 0 ? 'var(--done)' : 'var(--accent)')}
@@ -1777,8 +1773,8 @@ function creditsCardHTML(){
       ${stat(c.gross, 'EARNED')}
     </div>
     <div class="ebar" style="margin-bottom:6px"><div style="width:${pct}%;background:${pct >= 85 ? '#E1251B' : pct >= 60 ? '#FBBF24' : '#4ADE80'}"></div></div>
-    <div class="dim" style="font-size:11px;margin-bottom:10px">earned = ${c.free} free + ${c.timer} clocked + ${c.bonus} completions${c.wake_bonus ? ` + ${c.wake_bonus} wake` : ''}${c.reflect_bonus ? ` + ${c.reflect_bonus} reflected` : ''} · daily cap ${c.cap}${c.gross >= c.cap ? ' — HIT' : ''}</div>
-    ${starterLine}${timer}${scroll}${wakeLine}${sleepHTML()}
+    <div class="dim" style="font-size:11px;margin-bottom:10px">earned = ${c.free} free + ${c.timer} clocked + ${c.bonus} completions${c.wake_bonus ? ` + ${c.wake_bonus} wake` : ''} · daily cap ${c.cap}${c.gross >= c.cap ? ' — HIT' : ''}</div>
+    ${timer}${scroll}${wakeLine}${sleepHTML()}
   </div>`;
 }
 /* general clock-in: untethered, time credits only */
@@ -1786,105 +1782,7 @@ async function clockIn(energy){
   S.lastWrite = Date.now();
   const {data, error} = await db.from('focus_sessions').insert({energy}).select().single();
   if (error) { toast('Clock-in failed: ' + error.message); return; }
-  S.focusOpen = data; render(); toast('Clocked in — ' + energy + ' general = ⅓ rate (1cr per ' + CREDIT_RATE[energy] * 3 + 'm) · plan tasks earn full');
-}
-/* one-tap clock-in on today's START HERE task — unlocks the 10 free credits */
-function startStartHere(){
-  const sh = (S.credits?.start_here || S.brief?.start_here_task || '').trim().toLowerCase();
-  const t = S.tasks.find(x => (x.title || '').trim().toLowerCase() === sh && x.status !== 'done');
-  if (!t) { toast('START HERE task not found — check TASKS'); return; }
-  startTask(t.id);
-}
-
-/* ================= TIME — what actually happened, from the clock ================= */
-async function loadTimeline(){
-  if (S._tlLoading) return; S._tlLoading = true;
-  const {data, error} = await db.rpc('lifeos_timeline', {p_days: 14});
-  S._tlLoading = false;
-  if (error) { toast('Timeline load failed: ' + error.message); return; }
-  S.timeline = data || []; render();
-}
-function reloadTimeline(){ S.timeline = null; loadTimeline(); render(); }
-function rTime(){
-  if (!S.timeline) { loadTimeline(); return '<div class="empty">Loading your last 14 days…</div>'; }
-  const tl = S.timeline;
-  const hm = d => new Date(d).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', hour12: false});
-  // ---- aggregate per credit-day ----
-  const days = {};
-  const D = d => days[d] || (days[d] = {focus: 0, plan: 0, off: 0, scroll: 0, starter: 0, byHour: Array(24).fill(0)});
-  const proj = {};
-  tl.forEach(s => {
-    const d = D(s.day), m = +s.minutes || 0;
-    if (s.kind === 'scroll') { d.scroll += m; return; }
-    d.focus += m;
-    (+s.rate || 1) >= 1 ? d.plan += m : d.off += m;
-    if (s.starter) d.starter += m;
-    const p = s.project || (s.title ? 'other tasks' : 'general (untethered)');
-    proj[p] = (proj[p] || 0) + m;
-    // spread minutes across hour bins for the heatmap
-    let t0 = new Date(s.start).getTime(); const t1 = new Date(s.end).getTime();
-    for (; t0 < t1; t0 += 15 * 60000) d.byHour[new Date(t0).getHours()] += Math.min(15, (t1 - t0) / 60000);
-  });
-  const dayKeys = Object.keys(days).sort();
-  const tot = k => dayKeys.reduce((s, d) => s + days[d][k], 0);
-  const fH = m => (m / 60).toFixed(1) + 'h';
-  const totFocus = tot('focus'), totPlan = tot('plan'), totScroll = tot('scroll');
-  const starterDays = dayKeys.filter(d => days[d].starter >= 10).length;
-  // peak focus hours across all days
-  const allHours = Array(24).fill(0);
-  dayKeys.forEach(d => days[d].byHour.forEach((m, h) => allHours[h] += m));
-  const peak = allHours.map((m, h) => [h, m]).sort((a, b) => b[1] - a[1]).slice(0, 3)
-    .filter(x => x[1] > 0).map(x => String(x[0]).padStart(2, '0') + ':00').join(' · ');
-  const planPct = totFocus ? Math.round(totPlan / totFocus * 100) : 0;
-  const stat = (v, label, color) => `<div style="flex:1;text-align:center">
-      <div class="mono" style="font-size:20px;font-weight:700;${color ? 'color:' + color : ''}">${v}</div>
-      <div class="dim" style="font-size:10px;letter-spacing:.08em;font-family:var(--mono)">${label}</div></div>`;
-  const stats = `<div class="card"><h2>Last 14 days</h2>
-    <div style="display:flex;gap:8px;margin-bottom:8px">
-      ${stat(fH(totFocus), 'FOCUSED', 'var(--done)')}
-      ${stat(planPct + '%', 'ON PLAN', planPct >= 60 ? 'var(--done)' : 'var(--focus)')}
-      ${stat(fH(totScroll), 'SCROLLED', 'var(--accent-hi)')}
-      ${stat(starterDays + '/' + dayKeys.length, 'STARTER DAYS')}
-    </div>
-    <div class="dim" style="font-size:11px;font-family:var(--mono)">peak focus hours: ${peak || '—'}</div></div>`;
-  // ---- heatmap: day rows × 24 hour cells ----
-  const heat = `<div class="card"><h2>When you actually work</h2>
-    ${dayKeys.map(d => `<div style="display:flex;align-items:center;gap:5px;margin-bottom:2px">
-      <span class="mono dim" style="font-size:9px;width:36px;flex:0 0 auto">${d.slice(5)}</span>
-      <div style="display:flex;flex:1;gap:1px">${days[d].byHour.map(m =>
-        `<i style="flex:1;height:11px;border-radius:2px;background:${m >= 1 ? `rgba(74,222,128,${Math.min(.18 + m / 60 * .82, 1).toFixed(2)}` + ')' : 'rgba(255,255,255,.04)'}"></i>`).join('')}</div></div>`).join('')}
-    <div style="display:flex;margin-top:3px;margin-left:41px">${[0, 6, 12, 18].map(h =>
-      `<span class="mono dim" style="font-size:9px;flex:1">${String(h).padStart(2, '0')}</span>`).join('')}</div></div>`;
-  // ---- project split ----
-  const pk = Object.entries(proj).sort((a, b) => b[1] - a[1]).slice(0, 8);
-  const pmax = pk.length ? pk[0][1] : 1;
-  const projects = `<div class="card"><h2>Where the minutes went</h2>
-    ${pk.map(([p, m]) => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
-      <span style="font-size:12px;flex:0 0 45%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p)}</span>
-      <div style="flex:1;height:10px;background:#12141C;border-radius:5px;overflow:hidden">
-        <div style="width:${Math.round(m / pmax * 100)}%;height:100%;background:var(--grad)"></div></div>
-      <span class="mono dim" style="font-size:10px;flex:0 0 44px;text-align:right">${fH(m)}</span></div>`).join('')}</div>`;
-  // ---- per-day session log, newest first, today open ----
-  const row = s => s.kind === 'scroll'
-    ? `<div style="display:flex;gap:8px;font-size:12px;padding:3px 0;color:var(--accent-hi)">
-        <span class="mono" style="flex:0 0 86px">${hm(s.start)}–${hm(s.end)}</span>
-        <span>📱 ${esc(s.title || 'scroll')}</span>
-        <span class="mono" style="margin-left:auto;flex:0 0 auto">${s.minutes}m</span></div>`
-    : `<div style="display:flex;gap:8px;font-size:12px;padding:3px 0">
-        <span class="mono dim" style="flex:0 0 86px">${hm(s.start)}–${hm(s.end)}</span>
-        <span class="mono" style="flex:0 0 auto;color:${(ENERGY[s.energy] || {}).hex || 'var(--dim)'}">${s.energy || ''}</span>
-        <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.starter ? '⭐ ' : ''}${esc(s.title || 'general')}</span>
-        <span class="dim mono" style="margin-left:auto;flex:0 0 auto">${s.minutes}m${(+s.rate || 1) < 1 ? ' · ⅓' : ''}</span></div>`;
-  const today = todayISO();
-  const log = dayKeys.slice().reverse().map(d => {
-    const dd = days[d];
-    const sess = tl.filter(s => s.day === d);
-    return `<details class="bsec"${d === today ? ' open' : ''}><summary>${d === today ? 'TODAY' : d} · ${fH(dd.focus)} focused${dd.scroll ? ' · ' + dd.scroll + 'm scroll' : ''}${dd.starter >= 10 ? ' ⭐' : ''}</summary>
-      <div style="padding:6px 8px">${sess.map(row).join('') || '<span class="dim">nothing clocked</span>'}</div></details>`;
-  }).join('');
-  return `<div style="display:flex;justify-content:flex-end;margin:4px 0 8px">
-      <button class="btn" onclick="reloadTimeline()">⟳ refresh</button></div>
-    ${stats}${heat}${projects}<div class="card"><h2>Session log</h2>${log}</div>`;
+  S.focusOpen = data; render(); toast('Clocked in — ' + energy + ', 1 credit per ' + CREDIT_RATE[energy] + ' min');
 }
 /* task clock-in: ▶ on a task row — same timer, tethered to the task */
 async function startTask(id){
@@ -1924,7 +1822,7 @@ async function clockOut(){
   } else {
     await db.from('focus_sessions').update({ended_at: new Date().toISOString()}).eq('id', fo.id).is('ended_at', null);
     const mins = Math.floor((Date.now() - new Date(fo.started_at).getTime()) / 60000);
-    toast(`Clocked out — ${mins} min → ~${Math.floor(mins / CREDIT_RATE[fo.energy] * (+fo.credit_rate || 1))} credits${(+fo.credit_rate || 1) < 1 ? ' (⅓ rate)' : ''}`);
+    toast(`Clocked out — ${mins} min → ~${Math.floor(mins / CREDIT_RATE[fo.energy])} credits`);
   }
   S.focusOpen = null; loadAll();
 }
@@ -2364,9 +2262,7 @@ async function newsVote(id, v){
   const n = (S.news || []).find(x => x.id === id);
   if (n) n.feedback = v;
   render();
-  const {data, error} = await db.rpc('lifeos_news_feedback', {p_id: id, p_vote: v});
-  if (error) { toast('⚠ vote failed: ' + error.message); return; }
-  if (data?.ok) toast(`${v === 1 ? '👍' : '👎'} ${data.topic} — weight now ×${data.weight} (tunes tomorrow's mix)`);
+  await db.rpc('lifeos_news_feedback', {p_id: id, p_vote: v});
 }
 function rBrief(){
   const ctl = `<div style="display:flex;gap:6px;margin-bottom:10px;justify-content:flex-end">
@@ -3898,16 +3794,7 @@ function moneyStocksHTML(){
     </div>`;
   const totalVal = hold.reduce((s, r) => s + (+r.value || 0), 0);
   const rep = st.latest_report;
-  const pending = st.unregistered_trades || [];
-  const pendCard = !pending.length ? '' : `
-  <div class="card" style="border-color:var(--focus)"><h2>Detected buys — not in holdings yet</h2>
-    ${pending.map(p => `<div style="display:flex;gap:8px;align-items:baseline;padding:4px 0;font-size:12px">
-      <span class="mono dim" style="flex:0 0 44px">${(p.posted || '').slice(5).replace('-','/')}</span>
-      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((p.payee || '').replace(/\s*(un)?solicited trade\s*/i, '').replace(/^bought\s*/i, ''))}${p.institution ? ` <span class="dim" style="font-size:10px">· ${esc(p.institution)}</span>` : ''}</span>
-      <span class="mono" style="flex:0 0 auto">${fmt$(Math.abs(p.amount))}</span>
-      <button class="btn" style="flex:0 0 auto;font-size:10px;padding:2px 7px" onclick="ackTrade('${esc(p.key)}')" title="dismiss — already registered or not a buy">✕</button></div>`).join('')}
-    <div class="dim" style="font-size:11px;margin-top:6px">From your brokerage feed. Register below (ticker · shares · avg $) — quotes fill in automatically — then ✕ to dismiss.</div></div>`;
-  return `${pendCard}
+  return `
   <div class="card"><h2>Holdings${totalVal ? ` — ${fmt$(totalVal)}` : ''}</h2>
     ${hold.length ? hold.map(row).join('') : '<div class="dim" style="font-size:12px">Add what you own — ticker, shares, avg cost. Everything else fills itself in nightly.</div>'}
     <div style="display:flex;gap:6px;margin-top:8px">
@@ -3924,16 +3811,11 @@ function moneyStocksHTML(){
     </div></div>
   ${rep ? `<div class="card"><h2>Analyst — ${esc(rep.kind === 'deep_dive' ? 'weekly deep-dive' : 'daily')} ${(rep.date || '').slice(5).replace('-','/')}</h2>
     <div style="font-size:13px;line-height:1.55;white-space:pre-wrap">${esc(rep.summary)}</div>
-    <div class="dim mono" style="font-size:10px;margin-top:6px">facts, flags, trade-offs — never directives · Rod stays the advisor</div></div>`
-    : '<div class="card"><h2>Analyst</h2><div class="dim" style="font-size:12px">Daily notes + Monday deep-dives appear here once the radio routine is live.</div></div>'}
+    <div class="dim mono" style="font-size:10px;margin-top:6px">facts, flags, trade-offs — never directives · Rod stays the advisor</div>
+    ${st.mf_digest ? `<div class="dim" style="font-size:11px;margin-top:8px">📰 ${esc(st.mf_digest)}</div>` : ''}</div>`
+    : '<div class="card"><h2>Analyst</h2><div class="dim" style="font-size:12px">Daily notes + Monday deep-dives appear here once the stocks routine runs.</div></div>'}
   <div class="dim mono" style="font-size:10px;padding:0 2px">quotes: end-of-day, synced weekday evenings · read-only — no trade path exists</div>
   <div style="height:10px"></div>`;
-}
-async function ackTrade(key){
-  S.lastWrite = Date.now();
-  const {error} = await db.from('stock_trade_acks').insert({key});
-  if (error) { toast('⚠ ' + error.message); return; }
-  toast('dismissed'); loadAll();
 }
 async function addHolding(){
   const tk = (document.getElementById('h-tk')?.value || '').trim().toUpperCase();
@@ -3986,7 +3868,7 @@ function moneyOverviewHTML(){
   <div class="card"><h2>Cashflow</h2>
     <table>
       <tr><td>last 7 days</td><td class="mono">in ${fmt$(wk.in)} · out ${fmt$(wk.out)} · net <b style="color:${(wk.in - wk.out) >= 0 ? 'var(--done)' : 'var(--accent-hi)'}">${fmt$(wk.in - wk.out)}</b></td></tr>
-      <tr><td>this month</td><td class="mono">in ${fmt$(mo.in)} · out ${fmt$(mo.out)}${+mo.invested ? ` · <span style="color:var(--deep)">invested ${fmt$(mo.invested)}</span>` : ''}</td></tr>
+      <tr><td>this month</td><td class="mono">in ${fmt$(mo.in)} · out ${fmt$(mo.out)}</td></tr>
     </table></div>
   <div class="card"><h2>Accounts</h2>${acctRows}
     <div class="dim mono" style="font-size:10px;margin-top:8px">read-only mirror · synced every 2h via SimpleFIN · nothing here can move money</div></div>
@@ -4101,6 +3983,110 @@ async function delPerson(id){
   loadAll();
 }
 /* ================= SETTINGS ================= */
+
+/* =========================================================================
+   JOBS — Slipstream job pipeline (spec 06). Postings flow in from the
+   Slipstream push script; daily apply-tasks are created server-side
+   (lifeos_jobs_daily, 5:30 AM ET). This view is the pipeline board: status
+   moves are the ONLY writes (insert stays service-role = Slipstream).
+   ========================================================================= */
+const JOB_NEXT = {new:'interested', interested:'applied', applied:'interviewing', interviewing:'offer'};
+const JOB_ICON = {new:'✨', interested:'👀', applied:'📨', interviewing:'🎤', offer:'🏆', rejected:'✖'};
+
+function rJobs(){
+  if (!S.jobs || !S.jobs.length) {
+    return `<div class="card" style="text-align:center;padding:30px 16px">
+      <div style="font-size:30px">🛩️</div>
+      <div style="margin:10px 0 4px;font-weight:700">No postings yet</div>
+      <div class="dim" style="font-size:12px">Slipstream feeds this — run a sync:<br><span class="mono">python scripts\\push_to_lifeos.py</span> in the Slipstream folder.</div>
+    </div>`;
+  }
+  if (!S.jobsView) S.jobsView = localStorage.getItem('jobsView') || 'pipeline';
+  const seg = `<div class="seg" style="display:flex;margin-bottom:10px">${[['pipeline','PIPELINE'],['stats','STATS']].map(([v, l]) =>
+    `<button class="${S.jobsView === v ? 'on' : ''}" style="flex:1" onclick="S.jobsView='${v}';localStorage.setItem('jobsView','${v}');render()">${l}</button>`).join('')}</div>`;
+  return seg + (S.jobsView === 'stats' ? jobsStatsHTML() : jobsPipelineHTML());
+}
+
+function jobRowHTML(j){
+  const soon = new Date(); soon.setHours(soon.getHours() - 6); soon.setDate(soon.getDate() + 2);
+  const dl = j.deadline ? (j.deadline <= soon.toLocaleDateString('sv-SE')
+      ? `<span style="color:var(--accent-hi);font-weight:700">⏳ ${j.deadline.slice(5).replace('-','/')}</span>`
+      : `<span class="dim">${j.deadline.slice(5).replace('-','/')}</span>`) : '';
+  const fit = j.fit_score != null ? `<span class="mono dim">${Math.round(j.fit_score * 100)}%</span>` : '';
+  const adv = JOB_NEXT[j.status];
+  return `<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:12px">
+    <div style="flex:1;min-width:0">
+      <div style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${j.url ? `<a href="${esc(j.url)}" target="_blank" rel="noopener" style="color:inherit">${esc(j.title)}</a>` : esc(j.title)}${j.company ? ` <span class="dim">@ ${esc(j.company)}</span>` : ''}</div>
+      <div class="dim" style="font-size:10px">${[j.company_tier ? 'tier ' + esc(j.company_tier) : '', j.source ? esc(j.source) : '', j.location ? esc(j.location) : ''].filter(Boolean).join(' · ')}</div>
+    </div>
+    ${fit} ${dl}
+    ${adv ? `<button class="btn" style="flex:0 0 auto;font-size:10px;padding:3px 8px" onclick="jobMove('${esc(j.id)}','${adv}')">→ ${adv}</button>` : ''}
+    <button class="btn" style="flex:0 0 auto;font-size:10px;padding:3px 7px" onclick="jobArchive('${esc(j.id)}')">✕</button>
+  </div>`;
+}
+
+function jobsPipelineHTML(){
+  const groups = [
+    ['ACTIVE (new + interested)', S.jobs.filter(j => j.status === 'new' || j.status === 'interested')],
+    ['APPLIED',      S.jobs.filter(j => j.status === 'applied')],
+    ['INTERVIEWING', S.jobs.filter(j => j.status === 'interviewing')],
+    ['OFFER',        S.jobs.filter(j => j.status === 'offer')],
+    ['REJECTED',     S.jobs.filter(j => j.status === 'rejected')],
+  ];
+  return groups.filter(([, rows]) => rows.length).map(([label, rows]) =>
+    `<div class="card"><div class="dim" style="font-size:10px;letter-spacing:.08em;margin-bottom:4px">${JOB_ICON[label.split(' ')[0].toLowerCase()] || ''} ${label} · ${rows.length}</div>${rows.map(jobRowHTML).join('')}</div>`).join('');
+}
+
+function jobsStatsHTML(){
+  const counts = {};
+  S.jobs.forEach(j => counts[j.status] = (counts[j.status] || 0) + 1);
+  const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString();
+  const appliedish = S.jobs.filter(j => ['applied','interviewing','offer'].includes(j.status));
+  const thisWeek = appliedish.filter(j => (j.status_changed_at || '') >= weekAgo).length;
+  const target = (parseInt(S.settings && S.settings.jobs_daily_target || '2', 10) || 2) * 7;
+  const days = appliedish
+    .map(j => (new Date(j.status_changed_at) - new Date(j.found_at)) / 864e5)
+    .filter(d => isFinite(d) && d >= 0);
+  const avgDays = days.length ? (days.reduce((a, b) => a + b, 0) / days.length).toFixed(1) : null;
+  return `<div class="card">
+      <div class="dim" style="font-size:10px;letter-spacing:.08em;margin-bottom:6px">PIPELINE COUNTS</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${['new','interested','applied','interviewing','offer','rejected'].map(s =>
+        `<div style="flex:1;min-width:70px;text-align:center;padding:8px 4px;border-radius:10px;background:rgba(255,255,255,.04)">
+           <div style="font-size:16px;font-weight:700">${counts[s] || 0}</div>
+           <div class="dim" style="font-size:9px">${JOB_ICON[s]} ${s}</div></div>`).join('')}</div>
+    </div>
+    <div class="card">
+      <div class="dim" style="font-size:10px;letter-spacing:.08em;margin-bottom:6px">VELOCITY</div>
+      <div style="font-size:12px;line-height:1.9">
+        Applications this week: <b>${thisWeek}</b> <span class="dim">/ ${target} target</span><br>
+        ${avgDays != null ? `Avg days found → applied: <b>≈${avgDays}</b> <span class="dim">(from last status change)</span><br>` : ''}
+        Total tracked: <b>${S.jobs.length}</b> <span class="dim">(archived hidden)</span>
+      </div>
+    </div>`;
+}
+
+async function jobMove(id, next){
+  S.lastWrite = Date.now();
+  const { error } = await db.from('job_postings')
+    .update({status: next, status_changed_at: new Date().toISOString()}).eq('id', id);
+  if (error) { toast('failed: ' + error.message); return; }
+  const j = S.jobs.find(x => x.id === id);
+  if (j) { j.status = next; j.status_changed_at = new Date().toISOString(); }
+  toast('→ ' + next);
+  render();
+}
+
+async function jobArchive(id){
+  if (!confirm('Archive this posting?')) return;
+  S.lastWrite = Date.now();
+  const { error } = await db.from('job_postings')
+    .update({status: 'archived', status_changed_at: new Date().toISOString()}).eq('id', id);
+  if (error) { toast('failed: ' + error.message); return; }
+  S.jobs = S.jobs.filter(x => x.id !== id);
+  toast('archived');
+  render();
+}
+
 function rSettings(){
   const gate = (S.settings && S.settings.wake_gate) === 'on';
   const pushOn = pushSupported() && Notification.permission === 'granted';
