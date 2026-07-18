@@ -1,14 +1,16 @@
 {
   "name": "LifeOS",
   "short_name": "LifeOS",
-  "start_url": "/Life-OS/",
-  "scope": "/Life-OS/",
+  "description": "Skyler's personal operating system — tasks, plan, money, jobs, life.",
+  "start_url": ".",
+  "scope": ".",
   "display": "standalone",
-  "background_color": "#17181A",
-  "theme_color": "#17181A",
-  "description": "Energy-based task system",
+  "orientation": "portrait",
+  "background_color": "#0B0C10",
+  "theme_color": "#0B0C10",
   "icons": [
-    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
-    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }
