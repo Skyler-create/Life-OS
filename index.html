@@ -242,6 +242,7 @@ details.bsec>.ginner{padding:0 10px 10px}
 .cal-h button{padding:4px 14px;color:var(--dim);font-size:16px;border:1px solid var(--line);border-radius:999px;
   background:rgba(255,255,255,.02)}
 .cal-h button:active{color:var(--text);border-color:var(--dim)}
+.cal-h button.ycnav{padding:7px 20px;font-size:22px;line-height:1}  /* bigger prev/next tap targets on the YC header */
 .cal-g{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
 .cal-g .dow{text-align:center;font-family:var(--mono);font-size:9px;color:var(--dim);letter-spacing:1px;padding:4px 0 6px}
 .cal-d{position:relative;aspect-ratio:1;border-radius:10px;font-size:12px;color:var(--text);border:1px solid transparent;background:none}
@@ -1294,13 +1295,14 @@ function render(){
     // tab-switch band is roughly 20-70px from either edge.
     const EDGE = 70;
     const fromEdge = swX < EDGE || swX > window.innerWidth - EDGE;
-    if (S.view === 'cal' && !fromEdge) {
+    if ((S.view === 'cal' || S.view === 'yc') && !fromEdge) {
       const dir = dx < 0 ? 1 : -1;
+      const pageFn = S.view === 'yc' ? navYC : navCal;   // YC tab pages her calendar, same feel as CAL
       const w = Math.min(window.innerWidth, 640);
       mainEl.style.transition = 'transform .13s ease-in, opacity .13s ease-in';
       mainEl.style.transform = `translateX(${-dir * w}px)`; mainEl.style.opacity = '0';
       setTimeout(() => {
-        navCal(dir);
+        pageFn(dir);
         mainEl.style.transition = 'none';
         mainEl.style.transform = `translateX(${dir * w * 0.55}px)`; mainEl.style.opacity = '0.3';
         requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -2058,6 +2060,14 @@ async function savePlanEdit(){
   toast('Plan saved & repacked');
   loadAll();
 }
+/* Non-passive touchmove blocker for ALL drags (plan list, grid create, plan
+   blocks). Attached ONLY while a drag is actually active — a permanently
+   attached non-passive listener routed every touch scroll through the main
+   thread and could wedge calendar views unscrollable. Armed at
+   drag-activation, disarmed on drag end/cancel. */
+const dragBlockTouch = e => e.preventDefault();
+function armDragTouch(){ document.addEventListener('touchmove', dragBlockTouch, {passive: false}); }
+function disarmDragTouch(){ document.removeEventListener('touchmove', dragBlockTouch); }
 /* drag-to-reorder with a floating clone that follows the finger */
 let PDrag = null;
 function planDragStart(e){
@@ -2068,6 +2078,7 @@ function planDragStart(e){
   g.style.cssText += ';position:fixed;left:' + r.left + 'px;top:' + r.top + 'px;width:' + r.width + 'px;margin:0;z-index:99;pointer-events:none;background:var(--card);border:1px solid var(--accent);border-radius:8px;box-shadow:0 10px 28px rgba(0,0,0,.55)';
   document.body.appendChild(g);
   PDrag = {from: +row.dataset.pi, ghost: g, x0: e.clientX, y0: e.clientY};
+  armDragTouch();   // this drag is active from pointerdown (dedicated ≡ handle)
   document.body.style.userSelect = 'none';
   if (navigator.vibrate) navigator.vibrate(10);
 }
@@ -2089,6 +2100,16 @@ document.addEventListener('pointermove', e => {
 document.addEventListener('pointerup', () => {
   if (PDrag) {
     PDrag.ghost?.remove(); PDrag = null;
+    disarmDragTouch();
+    document.body.style.userSelect = '';
+    const box = document.getElementById('planEditRows');
+    if (box) box.innerHTML = planEditRowsHTML();
+  }
+});
+document.addEventListener('pointercancel', () => {   // without this, a cancelled drag left PDrag set forever → the touchmove blocker ate all scrolling
+  if (PDrag) {
+    PDrag.ghost?.remove(); PDrag = null;
+    disarmDragTouch();
     document.body.style.userSelect = '';
     const box = document.getElementById('planEditRows');
     if (box) box.innerHTML = planEditRowsHTML();
@@ -2546,18 +2567,24 @@ const CYC_PHASE = {
    phase. Patterns, not rules: the footer still says ask, don't assume. */
 const CYC_TIPS = {
   period: [
-    'Cramps, backaches, and low energy are common right now. Extra caring wins: check in first, keep plans effortless, bring the snacks.',
-    'Her body is doing hard work this week. Comfort beats excitement — warm drink, blanket, zero pressure to be fun on the call.',
-    'Energy and patience both run low on period days. Let small things slide, and take something off her plate without being asked.',
-    'Pain plus hormones makes everything heavier. Ask "what do you need right now" instead of guessing — then actually do it.',
-    'Some period days she wants closeness, some she wants space. Both are normal — follow her lead tonight.',
+    'Cramps and low energy usually hit hardest the first day or two. Open with "how are you feeling?" before your own day, and keep the call low-pressure.',
+    'You can still take care of her from far away — order a warm meal or her comfort snack to her place. A small gesture across the distance lands big right now.',
+    'Patience runs thin on period days. If she seems short on the call, let it slide tonight and don\'t take the edge personally — it\'s the week, not you.',
+    'Skip fixing it. "That sounds really rough, I\'m sorry" beats any solution — she wants to feel heard, not problem-solved.',
+    'Ask "what do you need right now?" instead of guessing, then actually follow through — even a heating-pad reminder or a good-night playlist counts.',
+    'Some period days she wants closeness, some she wants space. Read her energy at the start of the call and follow her lead — don\'t force either.',
+    'A quick "thinking of you, go rest" text mid-day her time hits harder than you\'d expect when she\'s not feeling great. Low effort, high payoff.',
+    'Her sleep and appetite can be off this week. Keep the call gentle and let her tap out early if she\'s tired — reschedule the big talks for the good days.',
   ],
   pms: [
-    'The days before a period can bring mood swings and a shorter fuse. Extra patience — and never, ever say "is it hormones".',
-    'Small annoyances can feel huge this week. Reassurance lands better than solutions.',
-    'PMS often comes with bloating, fatigue, and being hard on herself. Compliments and comfort are rarely wrong right now.',
-    'If she seems off, it is probably not about you. Stay soft, ask gentle questions, save big topics for next week.',
-    'Her energy dips before the period starts. Suggest cozy, low-stakes plans over anything demanding.',
+    'The days before her period can bring mood swings and a shorter fuse. Lead with patience — and never, ever say "is it your hormones".',
+    'Small annoyances can feel huge this week. Reassurance lands better than logic — "you\'re right, that\'s frustrating" goes further than fixing it.',
+    'PMS often brings bloating, fatigue, and being hard on herself. A genuine compliment or a "you\'re doing great" is rarely wrong right now.',
+    'If she seems off on the call, it\'s probably not about you. Stay soft, ask gentle questions, and save the big topics for next week.',
+    'Her energy dips before it starts. Suggest cozy, low-stakes plans — a movie over video call beats anything demanding.',
+    'Cravings are real this week. Surprising her with a food delivery to her place is an easy way to say "I\'ve got you" from across the distance.',
+    'Sleep can get restless right before her period. If she\'s wiped on the call, let her crash early instead of stretching it out.',
+    'Give a little extra grace with slow replies and short texts right now — she\'s running on less. A patient "no rush, rest up" reassures more than it seems.',
   ],
   follicular: [
     'Post-period rebound: energy and mood typically climb day by day. Great stretch for plans and new ideas.',
@@ -2629,8 +2656,8 @@ function rYC(){
     label = mon.toLocaleDateString('en-US', {month:'short', day:'numeric'}) + ' – ' + sun.toLocaleDateString('en-US', {month:'short', day:'numeric'}); }
   const lastSync = (S.ttEvents || []).reduce((mx,e) => (e.updated_at || '') > mx ? e.updated_at : mx, '');
   const header = `<div class="cal-h" style="margin-bottom:8px">
-    <button onclick="navYC(-1)">‹</button><span class="mono">${label}</span>
-    <span><button class="btn" style="padding:2px 10px;font-size:10px;margin-right:6px" onclick="ycToday()">today</button><button onclick="navYC(1)">›</button></span></div>
+    <button class="ycnav" onclick="navYC(-1)">‹</button><span class="mono">${label}</span>
+    <span><button class="btn" style="padding:2px 10px;font-size:10px;margin-right:6px" onclick="ycToday()">today</button><button class="ycnav" onclick="navYC(1)">›</button></span></div>
   <div class="dim" style="font-size:11px;margin-bottom:8px">YC · TimeTree — read-only (her schedule)${lastSync ? ` · synced ${new Date(lastSync).toLocaleDateString([], {month:'short', day:'numeric'})}` : ''}</div>
   <div class="chiprow" style="margin-bottom:10px">${['day','week','month'].map(v =>
     `<button class="schip ${S.ycView === v ? 'on' : ''}" style="flex:1" onclick="setYCView('${v}')">${v.toUpperCase()}</button>`).join('')}</div>`;
@@ -3167,6 +3194,7 @@ function gridPressStart(ev, iso, pph, h0){
 function gridDragActivate(){
   if (!GD) return;
   GD.active = true;
+  armDragTouch();
   document.body.style.userSelect = 'none';
   GD.rect = GD.el.getBoundingClientRect();
   GD.startH = Math.max(0, Math.floor((GD.y0 - GD.rect.top) / GD.pph * 2) / 2);
@@ -3189,12 +3217,15 @@ document.addEventListener('pointermove', e => {
   GD.endY = e.clientY;
   GD.ghost.style.height = ((gridDragEndH(GD) - GD.startH) * GD.pph) + 'px';
 }, {passive: true});
-document.addEventListener('touchmove', e => { if ((GD && GD.active) || (BD && BD.active) || PDrag) e.preventDefault(); }, {passive: false});
-document.addEventListener('pointercancel', () => { if (GD) { clearTimeout(GD.timer); GD.ghost?.remove(); document.body.style.userSelect = ''; GD = null; } });
+/* (the permanently-attached non-passive touchmove blocker that lived here is
+   gone — armDragTouch()/disarmDragTouch() near PDrag attach it only while a
+   drag is active, so plain calendar scrolling never touches the main thread) */
+document.addEventListener('pointercancel', () => { if (GD) { clearTimeout(GD.timer); GD.ghost?.remove(); disarmDragTouch(); document.body.style.userSelect = ''; GD = null; } });
 document.addEventListener('pointerup', () => {
   if (!GD) return;
   clearTimeout(GD.timer);
   const g = GD; GD = null;
+  disarmDragTouch();
   document.body.style.userSelect = '';
   if (!g.active) return;              // plain tap — the onclick handler covers it
   g.ghost.remove();
@@ -3223,6 +3254,7 @@ function blockDragStart(ev, id, pph, mode){
 function blockDragActivate(){
   if (!BD) return;
   BD.active = true;
+  armDragTouch();
   document.body.style.userSelect = 'none';
   const r = BD.el.getBoundingClientRect();
   const g = BD.el.cloneNode(true);
@@ -3242,12 +3274,13 @@ document.addEventListener('pointermove', e => {
   BD.ghost.style.transform = `translate(${e.clientX - BD.x0}px, ${e.clientY - BD.y0}px) scale(1.03)`;
 }, {passive: true});
 document.addEventListener('pointercancel', () => {
-  if (BD) { clearTimeout(BD.timer); BD.ghost?.remove(); if (BD.el) BD.el.style.opacity = ''; document.body.style.userSelect = ''; BD = null; }
+  if (BD) { clearTimeout(BD.timer); BD.ghost?.remove(); if (BD.el) BD.el.style.opacity = ''; disarmDragTouch(); document.body.style.userSelect = ''; BD = null; }
 });
 document.addEventListener('pointerup', e => {
   if (!BD) return;
   clearTimeout(BD.timer);
   const d = BD; BD = null;
+  disarmDragTouch();
   document.body.style.userSelect = '';
   if (!d.active) return;
   d.ghost.remove(); d.el.style.opacity = '';
@@ -4232,7 +4265,8 @@ function rSettings(){
   <div class="card"><h2>Reading</h2>
     ${toggleRow('Aa', 'Bionic reading', 'Bold word-starts in the brief for faster scanning (this device).', S.bionic, `toggleBionic()`)}
   </div>
-  ${projectsCardHTML()}`;
+  ${projectsCardHTML()}
+  ${manageTasksCardHTML()}`;
 }
 function projectsCardHTML(){
   const projs = distinctProjects();
@@ -4291,6 +4325,61 @@ async function deleteProject(idx){
   const reg = projectRegistry().filter(p => p !== name);
   await db.from('lifeos_settings').upsert({key: 'projects', value: JSON.stringify(reg)});
   toast('Project deleted: ' + name); loadAll();
+}
+/* ---- Manage tasks: filter + delete individual rows (done + "(n/m)" chunk
+   children included). Lazy — the list only renders once the card is opened. */
+function manageTasksCardHTML(){
+  if (!S.mtOpen) return `<div class="card"><h2>Tasks</h2>
+    <div class="dim" style="font-size:11px;margin-bottom:8px">Delete junk, done, or leftover chunk rows for good. Deleting never counts toward the score.</div>
+    <button class="btn" onclick="S.mtOpen=true;render()">Manage tasks…</button>
+  </div>`;
+  return `<div class="card"><h2>Tasks</h2>
+    <div class="dim" style="font-size:11px;margin-bottom:6px">✕ deletes a row outright. Deleting a goal also deletes its chunks; ↳ = chunk under its goal.</div>
+    <input id="mtFilter" placeholder="filter by title / project…" value="${esc(S.mtFilter || '')}"
+      oninput="S.mtFilter=this.value;const b=document.getElementById('mtList');if(b)b.innerHTML=mtListHTML()">
+    <div id="mtList">${mtListHTML()}</div>
+  </div>`;
+}
+function mtRowHTML(t, child){
+  const st = t.status === 'done' ? '✓ done' : (t.status || 'not started').replace('_', ' ');
+  const meta = [st, t.bucket || 'active', t.project || 'Inbox'].join(' · ');
+  return `<div style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px;${t.status === 'done' ? 'opacity:.55;' : ''}${child ? 'padding-left:14px;' : ''}">
+    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${child ? '↳ ' : ''}${esc(t.title || '')} <span class="dim" style="font-size:10px">— ${esc(meta)}</span></span>
+    <button class="btn" style="padding:2px 9px;color:var(--accent);flex:0 0 auto" onclick="mtDelete('${t.id}')" title="Delete task">✕</button>
+  </div>`;
+}
+function mtListHTML(){
+  const q = (S.mtFilter || '').trim().toLowerCase();
+  const all = S.tasks || [];
+  const kids = {};
+  all.forEach(t => { if (t.parent_id) (kids[t.parent_id] = kids[t.parent_id] || []).push(t); });
+  const hit = t => !q || (t.title || '').toLowerCase().includes(q) || (t.project || '').toLowerCase().includes(q);
+  const tops = all.filter(t => !t.parent_id).filter(t => hit(t) || (kids[t.id] || []).some(hit));   // family matches if goal OR any chunk does
+  if (!tops.length) return '<div class="dim" style="font-size:12px;margin-top:8px">No matching tasks.</div>';
+  const CAP = 60;
+  let out = tops.slice(0, CAP).map(t =>
+    mtRowHTML(t, false) + (kids[t.id] || []).map(c => mtRowHTML(c, true)).join('')).join('');
+  if (tops.length > CAP) out += `<div class="dim" style="font-size:11px;margin-top:8px">…${tops.length - CAP} more — narrow the filter.</div>`;
+  return out;
+}
+async function mtDelete(id){
+  const t = (S.tasks || []).find(x => x.id === id); if (!t) return;
+  const kids = (S.tasks || []).filter(x => x.parent_id === id);
+  if (kids.length) {
+    if (!confirm(`Delete goal "${t.title}" + its ${kids.length} chunk${kids.length === 1 ? '' : 's'}?`)) return;
+    S.lastWrite = Date.now();
+    const {error: ce} = await db.from('tasks').delete().eq('parent_id', id);   // children first
+    if (ce) { toast('Delete failed: ' + ce.message); return; }
+  } else if (!confirm(`Delete "${t.title}"?`)) return;
+  S.lastWrite = Date.now();
+  const {error} = await db.from('tasks').delete().eq('id', id);
+  if (error) { toast('Delete failed: ' + error.message); return; }
+  if (!kids.length && t.parent_id) {   // last chunk gone → parent becomes a plain task again
+    const {data: sibs} = await db.from('tasks').select('id').eq('parent_id', t.parent_id);
+    if (!sibs || !sibs.length) await db.from('tasks').update({chunk_total: null}).eq('id', t.parent_id);
+  }
+  toast('Deleted: ' + (t.title || 'task'));
+  loadAll();
 }
 function toggleBionic(){ S.bionic = !S.bionic; localStorage.setItem('bionic', S.bionic ? '1' : '0'); render(); }
 async function saveWakeGate(v){
