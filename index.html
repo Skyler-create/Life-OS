@@ -2514,7 +2514,24 @@ document.addEventListener('change', async e => {
 });
 
 /* --- YC (TimeTree, read-only) — same calendar format as CAL, but her events only --- */
-/* map timetree_events -> {iso: [{date,start_time,end_time,title}]} (all-day expanded across its range) */
+/* HER wall clock: the whole tab is laid out on Asia/Taipei days (fixed UTC+8,
+   no DST), exactly like TimeTree shows her. Shift the epoch +8h and read UTC
+   fields. Rendering in viewer-local time shifted her morning events onto the
+   previous ET day — they looked "missing". */
+const TPE_MS = 8 * 3600000;
+const tpeWall = ts => new Date(ts + TPE_MS);              // wall-clock via getUTC*
+const w2iso = w => w.toISOString().slice(0, 10);
+const tpeTodayISO = () => w2iso(tpeWall(Date.now()));
+const tpeNowMins = () => { const w = tpeWall(Date.now()); return w.getUTCHours() * 60 + w.getUTCMinutes(); };
+/* your-time label for a segment: "11 PM" (+ "Jul 24" when it's a different local day than her date) */
+function yourTimeLabel(ts0, herIso){
+  if (!ts0) return '';
+  const d = new Date(ts0);
+  const t = d.toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit'});
+  const sameDay = d.toLocaleDateString('sv-SE') === herIso;
+  return t + (sameDay ? '' : ' ' + d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'}));
+}
+/* map timetree_events -> {iso: [{date,start_time,end_time,title,ts0,ts1}]} (all-day expanded across its range) */
 function ttEvByDay(){
   const map = {};
   const push = (iso, ev) => { if (iso) (map[iso] = map[iso] || []).push(ev); };
@@ -2527,26 +2544,27 @@ function ttEvByDay(){
       else { for (let d = new Date(startD); d < endD; d.setDate(d.getDate()+1)) {   // DTEND is exclusive for all-day
         const iso = d.toLocaleDateString('sv-SE'); push(iso, {date:iso, start_time:null, end_time:null, title}); } }
     } else if (e.start_ts) {
-      const hm = x => String(x.getHours()).padStart(2,'0') + ':' + String(x.getMinutes()).padStart(2,'0');
-      const s = new Date(e.start_ts);
-      const en = e.end_ts ? new Date(e.end_ts) : new Date(s.getTime() + 3600000);
-      const sIso = s.toLocaleDateString('sv-SE'), eIso = en.toLocaleDateString('sv-SE');
+      const hm = w => w.toISOString().slice(11, 16);       // her wall-clock HH:MM
+      const t0 = +new Date(e.start_ts);
+      const t1 = e.end_ts ? +new Date(e.end_ts) : t0 + 3600000;
+      const s = tpeWall(t0), en = tpeWall(t1);
+      const sIso = w2iso(s), eIso = w2iso(en);
       if (sIso === eIso) {
-        push(sIso, {date:sIso, start_time:hm(s), end_time:hm(en), title});
+        push(sIso, {date:sIso, start_time:hm(s), end_time:hm(en), title, ts0:t0, ts1:t1});
       } else {
-        // spans midnight / multiple days -> split into per-day segments
-        push(sIso, {date:sIso, start_time:hm(s), end_time:'24:00', title});
-        let cur = new Date(s); cur.setHours(0,0,0,0); cur.setDate(cur.getDate() + 1);
-        const endDay = new Date(en); endDay.setHours(0,0,0,0);
-        while (cur < endDay) { push(cur.toLocaleDateString('sv-SE'), {date:cur.toLocaleDateString('sv-SE'), start_time:'00:00', end_time:'24:00', title}); cur.setDate(cur.getDate() + 1); }
-        if (en.getHours() * 60 + en.getMinutes() > 0) push(eIso, {date:eIso, start_time:'00:00', end_time:hm(en), title});
+        // spans her midnight / multiple days -> split into per-day segments
+        push(sIso, {date:sIso, start_time:hm(s), end_time:'24:00', title, ts0:t0, ts1:t1});
+        let cur = new Date(Date.UTC(s.getUTCFullYear(), s.getUTCMonth(), s.getUTCDate() + 1));
+        const endDay = new Date(Date.UTC(en.getUTCFullYear(), en.getUTCMonth(), en.getUTCDate()));
+        while (cur < endDay) { const i2 = w2iso(cur); push(i2, {date:i2, start_time:'00:00', end_time:'24:00', title, ts0:t0, ts1:t1}); cur.setUTCDate(cur.getUTCDate() + 1); }
+        if (en.getUTCHours() * 60 + en.getUTCMinutes() > 0) push(eIso, {date:eIso, start_time:'00:00', end_time:hm(en), title, ts0:t0, ts1:t1});
       }
     }
   });
   return map;
 }
 function setYCView(v){ S.ycView = v; localStorage.setItem('ycView', v); render(); }
-function ycToday(){ S.ycSel = todayISO(); const n = new Date(); S.ycY = n.getFullYear(); S.ycM = n.getMonth(); render(); }
+function ycToday(){ S.ycSel = tpeTodayISO(); const d = fromISO(S.ycSel); S.ycY = d.getFullYear(); S.ycM = d.getMonth(); render(); }
 function selYCDay(iso){ S.ycSel = iso; S.ycView = 'day'; localStorage.setItem('ycView','day'); const d = fromISO(iso); S.ycY = d.getFullYear(); S.ycM = d.getMonth(); render(); }
 function navYC(dir){
   if (S.ycView === 'month') { let m = S.ycM + dir, y = S.ycY; if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; } S.ycM = m; S.ycY = y; }
@@ -2644,7 +2662,7 @@ async function markPeriod(){
   loadAll();
 }
 function rYC(){
-  if (!S.ycSel) S.ycSel = todayISO();
+  if (!S.ycSel) S.ycSel = tpeTodayISO();
   if (!S.ycView) S.ycView = localStorage.getItem('ycView') || 'day';
   if (S.ycY == null) { const n = new Date(); S.ycY = n.getFullYear(); S.ycM = n.getMonth(); }
   const evByDay = ttEvByDay();
@@ -2658,7 +2676,7 @@ function rYC(){
   const header = `<div class="cal-h" style="margin-bottom:8px">
     <button class="ycnav" onclick="navYC(-1)">‹</button><span class="mono">${label}</span>
     <span><button class="btn" style="padding:2px 10px;font-size:10px;margin-right:6px" onclick="ycToday()">today</button><button class="ycnav" onclick="navYC(1)">›</button></span></div>
-  <div class="dim" style="font-size:11px;margin-bottom:8px">YC · TimeTree — read-only (her schedule)${lastSync ? ` · synced ${new Date(lastSync).toLocaleDateString([], {month:'short', day:'numeric'})}` : ''}</div>
+  <div class="dim" style="font-size:11px;margin-bottom:8px">YC · TimeTree — read-only (her schedule)${lastSync ? ` · synced ${new Date(lastSync).toLocaleDateString([], {month:'short', day:'numeric'})}` : ''} · her clock (Taipei, +${Math.round((480 + new Date().getTimezoneOffset()) / 60)}h)</div>
   <div class="chiprow" style="margin-bottom:10px">${['day','week','month'].map(v =>
     `<button class="schip ${S.ycView === v ? 'on' : ''}" style="flex:1" onclick="setYCView('${v}')">${v.toUpperCase()}</button>`).join('')}</div>`;
   const body = S.ycView === 'day' ? ycDayHTML(S.ycSel, evByDay)
@@ -2675,10 +2693,11 @@ function ycDayHTML(iso, evByDay){
     const [sh,sm] = e.start_time.split(':').map(Number);
     let dur = 60; if (e.end_time) { const [eh,em] = e.end_time.split(':').map(Number); dur = Math.max(20, (eh*60+em) - (sh*60+sm)); }
     const top = Math.max(0, ((sh-H0)*60+sm) * (PPH/60)), h = Math.max(22, dur * (PPH/60));
-    return `<div class="evblk" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px" title="${esc(e.title)}"><b>${esc(e.start_time)}${e.end_time ? '–' + esc(e.end_time) : ''}</b>${esc(e.title)}</div>`;
+    const yt = yourTimeLabel(e.ts0, iso);
+    return `<div class="evblk" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px" title="${esc(e.title)}"><b>${esc(e.start_time)}${e.end_time ? '–' + esc(e.end_time) : ''}</b>${esc(e.title)}${yt ? `<span style="opacity:.55"> · you ${esc(yt)}</span>` : ''}</div>`;
   }).join('');
   const rail = [...Array(H1-H0)].map((_,i) => `<div class="hrow" style="top:${i*PPH}px"><span>${hourLabel(H0+i)}</span></div>`).join('');
-  const nowLine = iso === todayISO() ? (() => { const n = new Date(); const mins = (n.getHours()-H0)*60 + n.getMinutes(); return (mins > 0 && mins < (H1-H0)*60) ? `<div class="nowline" style="top:${(mins*PPH/60).toFixed(0)}px"></div>` : ''; })() : '';
+  const nowLine = iso === tpeTodayISO() ? (() => { const mins = tpeNowMins() - H0*60; return (mins > 0 && mins < (H1-H0)*60) ? `<div class="nowline" style="top:${(mins*PPH/60).toFixed(0)}px"></div>` : ''; })() : '';
   return `${allday.map(e => `<div class="evrow"><span class="mono">all-day</span><span>${esc(e.title)}</span></div>`).join('')}
   <div class="gridwrap" id="gridScroll" data-h6="${6*PPH}" onscroll="S._gsPos=this.scrollTop;S._gsAt=Date.now()">
     <div class="daygrid" style="height:${(H1-H0)*PPH}px;position:relative">${rail}${blocks}${nowLine}</div></div>
@@ -2690,9 +2709,10 @@ function ycWeekHTML(evByDay){
   const H0 = 0, H1 = 24, PPH = 44;
   const days = [...Array(7)].map((_,i) => { const d = new Date(mon); d.setDate(mon.getDate()+i); return d; });
   const isos = days.map(d => d.toLocaleDateString('sv-SE'));
+  const tpeToday = tpeTodayISO();
   const head = `<div class="wk-head"><span class="wk-gutter"></span>${days.map((d,i) => {
     const iso = isos[i], n = (evByDay[iso] || []).length;
-    return `<button class="wk-col-h ${iso === todayISO() ? 'now' : ''}" onclick="selYCDay('${iso}')">
+    return `<button class="wk-col-h ${iso === tpeToday ? 'now' : ''}" onclick="selYCDay('${iso}')">
       <span class="wd">${d.toLocaleDateString('en-US', {weekday:'narrow'})}</span>
       <span class="dn">${d.getDate()}</span>${n ? `<i class="td">${n}</i>` : ''}</button>`; }).join('')}</div>`;
   const allday = isos.map(iso => (evByDay[iso] || []).filter(e => !e.start_time));
@@ -2707,8 +2727,8 @@ function ycWeekHTML(evByDay){
       const top = Math.max(0, ((sh-H0)*60+sm) * (PPH/60)), h = Math.max(18, dur * (PPH/60));
       return `<div class="wk-ev" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px" title="${esc(e.title)}">${esc(e.title)}</div>`;
     }).join('');
-    const nowline = iso === todayISO() ? (() => { const n = new Date(); const mins = (n.getHours()-H0)*60 + n.getMinutes(); return (mins > 0 && mins < (H1-H0)*60) ? `<div class="nowline" style="top:${(mins*PPH/60).toFixed(0)}px"></div>` : ''; })() : '';
-    return `<div class="wk-col ${iso === todayISO() ? 'now' : ''}" style="position:relative">${blocks}${nowline}</div>`;
+    const nowline = iso === tpeToday ? (() => { const mins = tpeNowMins() - H0*60; return (mins > 0 && mins < (H1-H0)*60) ? `<div class="nowline" style="top:${(mins*PPH/60).toFixed(0)}px"></div>` : ''; })() : '';
+    return `<div class="wk-col ${iso === tpeToday ? 'now' : ''}" style="position:relative">${blocks}${nowline}</div>`;
   }).join('');
   return head + adRow + `<div class="gridwrap" id="gridScroll" data-h6="${6*PPH}" onscroll="S._gsPos=this.scrollTop;S._gsAt=Date.now()">
     <div class="wk-grid" style="height:${(H1-H0)*PPH}px"><div class="wk-rail">${rail}</div>${cols}</div></div>
@@ -2740,7 +2760,7 @@ function ycMonthHTML(evByDay){
     const evs = (evByDay[iso] || []).slice().sort((a,b) => (a.start_time || '').localeCompare(b.start_time || ''));
     const shown = evs.slice(0,3).map(e => `<div class="mo-chip" style="border-color:#818CF8">${esc(e.title)}</div>`).join('');
     const more = evs.length > 3 ? `<div class="mo-more">+${evs.length-3}</div>` : '';
-    cells += `<button class="mo-cell ${S.ycSel === iso ? 'selq' : ''} ${iso === todayISO() ? 'today' : ''} ${cycDays[iso] || ''}" onclick="selYCDay('${iso}')"><span class="mo-d">${d}</span>${shown}${more}</button>`;
+    cells += `<button class="mo-cell ${S.ycSel === iso ? 'selq' : ''} ${iso === tpeTodayISO() ? 'today' : ''} ${cycDays[iso] || ''}" onclick="selYCDay('${iso}')"><span class="mo-d">${d}</span>${shown}${more}</button>`;
   }
   return `<div class="card"><div class="cal-g">${['M','T','W','T','F','S','S'].map(d => `<span class="dow">${d}</span>`).join('')}${cells}</div>
     <div class="elegend" style="margin-top:8px"><span><i style="background:#818CF8"></i>her events</span><span><i style="background:#FB7185"></i>period</span><span><i style="background:rgba(251,113,133,.35)"></i>est.</span><span style="margin-left:auto" class="dim">tap a day</span></div></div>`;
