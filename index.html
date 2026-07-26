@@ -600,6 +600,9 @@ let S = {
 
 // "today" = the CREDIT DAY (resets 6 AM, not midnight) so score/streak/done don't roll over overnight
 const todayISO = () => { const d = new Date(); d.setHours(d.getHours() - 6); return d.toLocaleDateString('sv-SE'); };
+// civil calendar date — CAL grids only (today-highlight, now-line, event defaults).
+// At 12:40 AM Sunday the calendar says Sunday, even though the credit day is still Saturday.
+const calTodayISO = () => new Date().toLocaleDateString('sv-SE');
 const esc = s => (s ?? '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const toast = m => { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2200); };
 
@@ -3109,13 +3112,13 @@ function navCal(dir){
     if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; }
     S.calM = m; S.calY = y; render(); return;
   }
-  const d = fromISO(S.calSel || todayISO());
+  const d = fromISO(S.calSel || calTodayISO());
   d.setDate(d.getDate() + (S.calView === 'week' ? 7 : 1) * dir);
   S.calSel = d.toLocaleDateString('sv-SE');
   S.calY = d.getFullYear(); S.calM = d.getMonth();
   render();
 }
-function calToday(){ const n = new Date(); S.calY = n.getFullYear(); S.calM = n.getMonth(); S.calSel = todayISO(); render(); }
+function calToday(){ const n = new Date(); S.calY = n.getFullYear(); S.calM = n.getMonth(); S.calSel = calTodayISO(); render(); }
 function selDay(iso){ S.calSel = iso; const d = fromISO(iso); S.calY = d.getFullYear(); S.calM = d.getMonth(); setCalView('day'); }
 function addForDay(){
   const n = new Date();
@@ -3170,7 +3173,7 @@ function openEv(i){
   if (!gcalToken()) { toast('Connect Google on the CAL tab first'); return; }
   if (i == null) {
     const cal = (S.gcalCals || []).find(c => c.primary) || (S.gcalCals || [])[0] || {id: 'primary'};
-    S.evSheet = {gid: null, calId: cal.id, writable: true, title: '', date: S.calSel || todayISO(), start: '', end: ''};
+    S.evSheet = {gid: null, calId: cal.id, writable: true, title: '', date: S.calSel || calTodayISO(), start: '', end: ''};
   } else {
     const e = allEvents()[i]; if (!e) return;
     if (!e.gid) { toast('Cached event — tap connect Google for live editing'); return; }
@@ -3428,7 +3431,7 @@ async function saveEv(){
   if (!tok) { gcalAuthLost(); return; }
   const g = id => document.getElementById(id)?.value || '';
   const title = g('ev-title').trim() || '(untitled)';
-  const date = g('ev-date') || todayISO(), st = g('ev-start'), en = g('ev-end');
+  const date = g('ev-date') || calTodayISO(), st = g('ev-start'), en = g('ev-end');
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const body = {summary: title};
   if (st) {
@@ -3530,7 +3533,7 @@ function calMaps(){
 }
 function rCal(){
   if (S.calY == null) { const n = new Date(); S.calY = n.getFullYear(); S.calM = n.getMonth(); }
-  if (!S.calSel) S.calSel = todayISO();
+  if (!S.calSel) S.calSel = calTodayISO();
   const {byDay, evByDay} = calMaps();
   const sel = fromISO(S.calSel);
   let label;
@@ -3543,7 +3546,7 @@ function rCal(){
   }
   const onToday = S.calView === 'month'
     ? (S.calY === new Date().getFullYear() && S.calM === new Date().getMonth())
-    : S.calSel === todayISO();
+    : S.calSel === calTodayISO();
   const header = `<div class="cal-h" style="margin-bottom:10px">
     <button onclick="navCal(-1)">‹</button>
     <span class="mono" style="font-size:15px;font-weight:800;letter-spacing:.5px">${label}</span>
@@ -3578,7 +3581,7 @@ function calMonthHTML(byDay, evByDay){
     ];
     const shown = items.slice(0, 3).map(it => `<div class="mo-chip" style="border-color:${it.c}">${esc(it.t)}</div>`).join('');
     const more = items.length > 3 ? `<div class="mo-more">+${items.length - 3}</div>` : '';
-    cells += `<button class="mo-cell ${S.calSel === iso ? 'selq' : ''} ${iso === todayISO() ? 'today' : ''} ${(startDow + d - 1) % 7 >= 5 ? 'wknd' : ''}" onclick="selDay('${iso}')">
+    cells += `<button class="mo-cell ${S.calSel === iso ? 'selq' : ''} ${iso === calTodayISO() ? 'today' : ''} ${(startDow + d - 1) % 7 >= 5 ? 'wknd' : ''}" onclick="selDay('${iso}')">
       <span class="mo-d">${d}</span>${shown}${more}</button>`;
   }
   return `<div class="card">
@@ -3594,7 +3597,7 @@ function calWeekHTML(byDay, evByDay){
   const isos = days.map(d => d.toLocaleDateString('sv-SE'));
   const head = `<div class="wk-head"><span class="wk-gutter"></span>${days.map((d, i) => {
     const iso = isos[i]; const nT = (byDay[iso] || []).length;
-    return `<button class="wk-col-h ${iso === todayISO() ? 'now' : ''} ${d.getDay() % 6 === 0 ? 'wknd' : ''}" onclick="selDay('${iso}')">
+    return `<button class="wk-col-h ${iso === calTodayISO() ? 'now' : ''} ${d.getDay() % 6 === 0 ? 'wknd' : ''}" onclick="selDay('${iso}')">
       <span class="wd">${d.toLocaleDateString('en-US', {weekday: 'narrow'})}</span>
       <span class="dn">${d.getDate()}</span>${nT ? `<i class="td">${nT}</i>` : ''}</button>`;
   }).join('')}</div>`;
@@ -3612,11 +3615,11 @@ function calWeekHTML(byDay, evByDay){
       const h = Math.max(18, dur * (PPH / 60));
       return `<div class="wk-ev${e.source === 'work' ? ' work' : ''}" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px;cursor:pointer" onclick="event.stopPropagation();openEv(${e._i})">${esc(e.title)}</div>`;
     }).join('');
-    const nowline = iso === todayISO() ? (() => {
+    const nowline = iso === calTodayISO() ? (() => {
       const n = new Date(); const mins = (n.getHours() - H0) * 60 + n.getMinutes();
       return (mins > 0 && mins < (H1 - H0) * 60) ? `<div class="nowline" style="top:${(mins * PPH / 60).toFixed(0)}px"></div>` : '';
     })() : '';
-    return `<div class="wk-col ${iso === todayISO() ? 'now' : ''} ${fromISO(iso).getDay() % 6 === 0 ? 'wknd' : ''}" data-iso="${iso}" style="position:relative" onclick="weekGridTap(event, '${iso}')" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${blocks}${planBlockDivs(iso, H0, PPH, 'week')}${nowline}</div>`;
+    return `<div class="wk-col ${iso === calTodayISO() ? 'now' : ''} ${fromISO(iso).getDay() % 6 === 0 ? 'wknd' : ''}" data-iso="${iso}" style="position:relative" onclick="weekGridTap(event, '${iso}')" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${blocks}${planBlockDivs(iso, H0, PPH, 'week')}${nowline}</div>`;
   }).join('');
   return head + adRow + `<div class="gridwrap" id="gridScroll" data-h6="${6 * PPH}" onscroll="S._gsPos=this.scrollTop;S._gsAt=Date.now()">
     <div class="wk-grid" style="height:${(H1 - H0) * PPH}px"><div class="wk-rail">${rail}</div>${cols}</div></div>
@@ -3637,7 +3640,7 @@ function calDayHTML(iso, byDay, evByDay){
     return `<div class="evblk${e.source === 'work' ? ' work' : ''}" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px;cursor:pointer" onclick="event.stopPropagation();openEv(${e._i})"><b>${esc(e.start_time)}${e.end_time ? '–' + esc(e.end_time) : ''}</b>${esc(e.title)}${e.cal && !e.writable ? ' 🔒' : ''}</div>`;
   }).join('');
   const rail = [...Array(H1 - H0)].map((_, i) => `<div class="hrow" style="top:${i * PPH}px"><span>${hourLabel(H0 + i)}</span></div>`).join('');
-  const nowLine = iso === todayISO() ? (() => {
+  const nowLine = iso === calTodayISO() ? (() => {
     const n = new Date(); const mins = (n.getHours() - H0) * 60 + n.getMinutes();
     return (mins > 0 && mins < (H1 - H0) * 60) ? `<div class="nowline" style="top:${(mins * PPH / 60).toFixed(0)}px"></div>` : '';
   })() : '';
