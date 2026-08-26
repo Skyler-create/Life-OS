@@ -644,7 +644,9 @@ async function loadAll(){
     db.rpc('lifeos_credits'),
     db.from('plan_blocks').select('*').gte('date', today).order('date').order('start_min'),
     db.from('lifeos_settings').select('key,value'),
-    db.from('timetree_events').select('*').limit(500),
+    db.from('timetree_events').select('*')
+      .or(`start_ts.gte.${new Date(Date.now() - 60 * 864e5).toISOString()},start_date.gte.${new Date(Date.now() - 60 * 864e5).toLocaleDateString('sv-SE')}`)
+      .order('start_ts', {ascending: true, nullsFirst: true}).limit(1000),
     db.from('day_load').select('*').gte('date', today).order('date').limit(3),
     db.rpc('lifeos_score', {d: today}),
     db.rpc('lifeos_week_health'),
