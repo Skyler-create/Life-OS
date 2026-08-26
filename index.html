@@ -1203,7 +1203,7 @@ function render(){
   if (oldTitle && S.sheet) S.sheet.title = oldTitle.value;
   const oldSheetEl = document.querySelector('#sheetroot .sheet');
   const sheetScroll = oldSheetEl ? oldSheetEl.scrollTop : 0;
-  document.getElementById('sheetroot').innerHTML = S.dropAsk ? dropAskHTML() : S.evSheet ? evSheetHTML() : sheetHTML();
+  document.getElementById('sheetroot').innerHTML = S.dropAsk ? dropAskHTML() : S.pbSheet ? pbSheetHTML() : S.evSheet ? evSheetHTML() : sheetHTML();
   const newSheetEl = document.querySelector('#sheetroot .sheet');
   if (newSheetEl && sheetScroll) newSheetEl.scrollTop = sheetScroll;
   // 24h grids open scrolled to 6 AM; keep the user's grid scroll across re-renders
@@ -3389,7 +3389,7 @@ document.addEventListener('pointerup', e => {
   const d = BD; BD = null;
   disarmDragTouch();
   document.body.style.userSelect = '';
-  if (!d.active) return;
+  if (!d.active) { S.pbSheet = d.id; render(); return; }   // quick tap = open block details
   d.ghost.remove(); d.el.style.opacity = '';
   const kill = ev => { ev.stopPropagation(); ev.preventDefault(); };
   document.addEventListener('click', kill, {capture: true, once: true});
@@ -3425,6 +3425,38 @@ function dropAskHTML(){
     <button class="btn" style="width:100%;margin-bottom:8px" onclick="applyDrop('soft')">💡 Just a suggestion — AI may shift it if things change</button>
     <button class="btn" style="width:100%;color:var(--dim)" onclick="S.dropAsk=null;render()">Cancel move</button>
   </div></div>`;
+}
+/* tap a 💡/📌 plan block on the calendar = see what it is + act on it */
+function pbSheetHTML(){
+  const b = (S.planBlocks || []).find(x => x.id === S.pbSheet);
+  if (!b) { S.pbSheet = null; return ''; }
+  const en = ENERGY[b.energy] || {};
+  const dur = b.end_min - b.start_min;
+  const t = b.task_id ? (S.tasks || []).find(x => x.id === b.task_id) : null;
+  const kindLine = b.locked ? '📌 Locked by you — the AI won\'t move it'
+    : b.kind === 'call' ? '📞 Call window'
+    : '💡 AI-planned block — auto-repacks as the day changes';
+  return `<div class="overlay" onclick="if(event.target===this){S.pbSheet=null;render()}">
+  <div class="sheet">
+    <h2 style="color:${en.hex || 'var(--accent)'}">${esc(b.title || '(untitled)')}</h2>
+    <div class="dim" style="font-size:13px;margin-bottom:4px">${b.date === todayISO() ? 'Today' : esc(b.date)} · ${fmt12(b.start_min)}–${fmt12(b.end_min)} · ${dur}m${b.energy ? ` · <span style="color:${en.hex}">${esc(b.energy)}</span>` : ''}</div>
+    <div class="dim" style="font-size:12px;margin-bottom:12px">${kindLine}</div>
+    ${t ? `<div style="font-size:12px;margin-bottom:12px;padding:8px;background:rgba(255,255,255,.04);border-radius:8px">
+      Task: ${esc(t.project || '—')} · ${esc(t.priority || 'med')} · est ${t.est_minutes || '?'}m · ${esc(t.status || '')}${t.notes ? `<div class="dim" style="margin-top:4px;white-space:pre-wrap">${esc(t.notes.slice(0, 200))}</div>` : ''}</div>` : ''}
+    ${t ? `<button class="btn" style="width:100%;margin-bottom:8px" onclick="S.pbSheet=null;S.view='tasks';S.editMode=true;S.editing='${t.id}';render();setTimeout(()=>document.getElementById('t-${t.id}')?.scrollIntoView({block:'center'}),60)">✎ Open task</button>` : ''}
+    ${b.kind !== 'call' ? `<button class="btn" style="width:100%;margin-bottom:8px" onclick="pbToggleLock('${b.id}')">${b.locked ? '💡 Unlock — let the AI move it again' : '📌 Lock it — keep it exactly here'}</button>` : ''}
+    <button class="btn" style="width:100%;color:var(--dim)" onclick="S.pbSheet=null;render()">Close</button>
+  </div></div>`;
+}
+async function pbToggleLock(id){
+  const b = (S.planBlocks || []).find(x => x.id === id); if (!b) return;
+  const patch = b.locked ? {locked: false, source: 'soft'} : {locked: true, source: 'user'};
+  Object.assign(b, patch);
+  S.lastWrite = Date.now();
+  render();
+  const {error} = await db.from('plan_blocks').update(patch).eq('id', id);
+  if (error) { toast('Save failed — ' + error.message); loadAll(); return; }
+  toast(patch.locked ? '📌 Locked' : '💡 Unlocked — AI may replan it');
 }
 async function applyDrop(kind){
   const d = S.dropAsk; S.dropAsk = null;
