@@ -905,11 +905,13 @@ function pickGoal(i){
   else { S.sheet.parentId = window._goalList[i].id; S.sheet.newGoal = null; }
   render();
 }
-function newGoalForSheet(){
-  const g = prompt('New goal name (the task you\'re creating becomes its first subtask):');
-  if (g && g.trim()) { S.sheet.newGoal = g.trim(); S.sheet.parentId = null; render(); }
-}
-function newProject(){ const p = prompt('New project name:'); if (p && p.trim()) { S.sheet.project = p.trim(); render(); } }
+/* "+ new" project / goal: inline inputs instead of window.prompt() —
+   prompt() is silently blocked in installed PWAs (standalone mode) and some
+   mobile browsers, which made these buttons look dead. */
+function newGoalForSheet(){ S.sheet.askGoal = true; S.sheet.askProject = false; render(); setTimeout(() => document.getElementById('sh-newgoal')?.focus(), 30); }
+function newProject(){ S.sheet.askProject = true; S.sheet.askGoal = false; render(); setTimeout(() => document.getElementById('sh-newproj')?.focus(), 30); }
+function commitNewProject(){ const v = (document.getElementById('sh-newproj')?.value || '').trim(); if (v) S.sheet.project = v; S.sheet.askProject = false; render(); }
+function commitNewGoal(){ const v = (document.getElementById('sh-newgoal')?.value || '').trim(); if (v) { S.sheet.newGoal = v; S.sheet.parentId = null; } S.sheet.askGoal = false; render(); }
 function calNav(d){ let m = S.sheet.calM + d, y = S.sheet.calY; if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; } S.sheet.calM = m; S.sheet.calY = y; render(); }
 function setDue(v){ S.sheet.due = v; render(); }
 function dueIn(days){ const d = new Date(); d.setDate(d.getDate() + days); setDue(d.toLocaleDateString('sv-SE')); }
@@ -965,8 +967,9 @@ function sheetHTML(){
     <div class="chiprow wrap">
       <button class="schip ${!sh.project ? 'on' : ''}" onclick="pickProject(-1)">none</button>
       ${window._projList.map((p, i) => `<button class="schip ${sh.project === p ? 'on' : ''}" onclick="pickProject(${i})">${esc(p)}</button>`).join('')}
-      <button class="schip" onclick="newProject()">+ new</button>
+      <button class="schip ${sh.askProject ? 'on' : ''}" onclick="newProject()">+ new</button>
     </div>
+    ${sh.askProject ? `<div style="display:flex;gap:6px;margin-top:6px"><input id="sh-newproj" placeholder="New project name" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();commitNewProject()}"><button class="btn primary" onclick="commitNewProject()">OK</button></div>` : ''}
     ${(() => {
       if (!sh.project) return '';
       window._goalList = S.tasks.filter(t => !t.parent_id && t.status !== 'done' && t.project === sh.project);
@@ -974,8 +977,9 @@ function sheetHTML(){
       <div class="chiprow wrap">
         <button class="schip ${!sh.parentId && !sh.newGoal ? 'on' : ''}" onclick="pickGoal(-1)">standalone</button>
         ${window._goalList.map((t, i) => `<button class="schip ${sh.parentId === t.id ? 'on' : ''}" onclick="pickGoal(${i})">${((S._kids || {})[t.id] || []).length ? '🎯 ' : ''}${esc(t.title)}</button>`).join('')}
-        <button class="schip ${sh.newGoal ? 'on' : ''}" onclick="newGoalForSheet()">${sh.newGoal ? '🎯 ' + esc(sh.newGoal) : '+ new goal'}</button>
-      </div>`;
+        <button class="schip ${sh.newGoal || sh.askGoal ? 'on' : ''}" onclick="newGoalForSheet()">${sh.newGoal ? '🎯 ' + esc(sh.newGoal) : '+ new goal'}</button>
+      </div>
+      ${sh.askGoal ? `<div style="display:flex;gap:6px;margin-top:6px"><input id="sh-newgoal" placeholder="New goal name (this task becomes its first subtask)" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();commitNewGoal()}"><button class="btn primary" onclick="commitNewGoal()">OK</button></div>` : ''}`;
     })()}
     <label>Due ${sh.due ? '— ' + sh.due : ''}</label>
     <div class="chiprow">
@@ -1373,6 +1377,8 @@ function taskRowHTML(t){
       : t.place_context === 'weekday' ? `<span>Mon–Fri</span>`
       : t.place_context === 'weekend' ? `<span>weekend</span>` : '',
     t.prepared_at ? `<span style="color:var(--focus)">✨ prepped — tap ✎ to review</span>` : '',
+    // ℹ why: tasks the AI pulled from email/calendar carry their source in notes — expose it inline
+    t.notes ? `<span style="color:var(--dim);cursor:pointer" onclick="event.stopPropagation();S.noteOpen = S.noteOpen || new Set();S.noteOpen.has('${t.id}') ? S.noteOpen.delete('${t.id}') : S.noteOpen.add('${t.id}');render()">ℹ ${(S.noteOpen && S.noteOpen.has(t.id)) ? 'hide' : 'why'}</span>` : '',
     t.energy ? `<span style="color:${en.color}">${t.energy}</span>` : '',
     t.est_minutes ? `<span>${t.est_minutes}m</span>` : '',
     dueTag(t),
@@ -1393,6 +1399,7 @@ function taskRowHTML(t){
     <div class="tbody" ${S.editMode ? `onclick="S.editing = S.editing === '${t.id}' ? null : '${t.id}'; render()"` : ''}>
       <div class="tname">${esc(t.title)}</div>
       <div class="tmeta">${meta}</div>
+      ${(S.noteOpen && S.noteOpen.has(t.id) && !editor) ? `<div style="font-size:12px;line-height:1.5;white-space:pre-wrap;margin-top:6px;padding:8px;background:rgba(255,255,255,.04);border-radius:8px;color:var(--text)">${esc(t.notes)}</div>` : ''}
       ${editor}
     </div>
     ${startBtn}
@@ -1462,9 +1469,13 @@ function skipGoalConfirm(id){
    (so you pick existing projects from the list instead of retyping and duplicating) */
 function onProjPick(sel){
   if (sel.value !== '__new__') return;
-  const n = (prompt('New project name:') || '').trim();
-  if (n) { const o = document.createElement('option'); o.value = n; o.text = n; o.selected = true; sel.add(o, sel.options.length - 1); }
-  else { sel.selectedIndex = 0; }
+  let n = '';
+  try { n = (prompt('New project name:') || '').trim(); } catch(e) { n = ''; }
+  if (!n) {  // prompt() blocked (installed PWA) -> swap the select for a text input
+    const inp = document.createElement('input'); inp.placeholder = 'New project name'; inp.name = sel.name; inp.id = sel.id; inp.style.cssText = sel.style.cssText;
+    sel.replaceWith(inp); inp.focus(); return;
+  }
+  const o = document.createElement('option'); o.value = n; o.text = n; o.selected = true; sel.add(o, sel.options.length - 1);
 }
 function editorHTML(t){
   const opt = (list, cur) => list.map(([v, l]) => `<option value="${v}" ${v === (cur ?? '') ? 'selected' : ''}>${l}</option>`).join('');
@@ -1695,11 +1706,58 @@ function rToday(){
     });
     return rows.length ? `<div class="pname">FROM TODAY'S PLAN</div>` + rows.map(taskRowHTML).join('') : '';
   })();
-  return wakeChallengeHTML() + goalConfirmsHTML() + shCard + meter + capacityWarnHTML() + callPrepHTML() + planBlocksHTML() + replanCardHTML() + creditsCardHTML() + waitingOnHTML() + evCard +
+  return wakeChallengeHTML() + goalConfirmsHTML() + shCard + meter + capacityWarnHTML() + callPrepHTML() + planBlocksHTML() + replanCardHTML() + creditsCardHTML() + preppedCardHTML() + waitingOnHTML() + evCard +
     (bar ? `<div class="card"><h2>Today's energy</h2>${bar}</div>` : '') +
     chipsHTML() +
     (sorted.length ? sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — add a task below or check TASKS.</div>`) +
     planSection;
+}
+/* ✨ Prepped for you — one card that lists everything the overnight worker prepped,
+   with the findings inline (tap to expand) and one-tap Done. Faster than
+   opening each task's editor. */
+function preppedCardHTML(){
+  const rows = S.tasks.filter(t => t.prepared_at && t.status !== 'done');
+  if (!rows.length) return '';
+  S.prepOpen = S.prepOpen || new Set();
+  return `<div class="card" style="border-color:var(--focus)"><h2>✨ Prepped for you <span class="dim" style="font-weight:400;text-transform:none;letter-spacing:0">· ${rows.length} to review</span></h2>
+    ${rows.map(t => {
+      const open = S.prepOpen.has(t.id);
+      let body = '';
+      if (open) {
+        let dec = null;
+        try { const j = JSON.parse(t.prep_output || ''); if (j && Array.isArray(j.decompose)) dec = j.decompose; } catch(e){}
+        body = dec
+          ? `<div style="font-size:13px;line-height:1.7;margin-top:6px">${dec.map((s, i) => `${i + 1}. ${esc(s.title || '')} <span class="dim mono" style="font-size:10px">${s.est || 30}m ${esc(s.energy || '')}</span>`).join('<br>')}</div>
+             <button class="btn primary" style="width:100%;margin-top:6px" onclick="applyDecomposition('${t.id}')">Accept breakdown — ${dec.length} subtasks</button>`
+          : `<div style="font-size:13px;line-height:1.5;white-space:pre-wrap;max-height:45vh;overflow-y:auto;margin-top:6px;padding:8px;background:rgba(255,255,255,.03);border-radius:8px">${esc(t.prep_output || '(no output — see prep note)')}</div>`;
+      }
+      return `<div style="padding:8px 0;border-top:1px solid var(--line)">
+        <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="S.prepOpen.has('${t.id}') ? S.prepOpen.delete('${t.id}') : S.prepOpen.add('${t.id}'); render()">
+          <div style="flex:1;min-width:0"><div style="font-weight:600">${esc(t.title)}</div>
+            <div class="dim" style="font-size:11px">${esc(t.prep_note || 'prepped')}${t.est_minutes ? ' · ' + t.est_minutes + 'm' : ''}${t.due ? ' · due ' + t.due : ''}</div></div>
+          <span class="dim">${open ? '▾' : '▸'}</span>
+        </div>
+        ${body}
+        ${open ? `<div style="display:flex;gap:6px;margin-top:8px">
+          <button class="btn primary" style="flex:1" onclick="prepDone('${t.id}')">✓ Done (+5cr)</button>
+          <button class="btn" onclick="startTask('${t.id}')">▶ Start</button>
+          <button class="btn" onclick="prepClear('${t.id}')" title="Keep the task, drop the prepped flag">Unprep</button>
+        </div>` : ''}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+async function prepDone(id){
+  S.lastWrite = Date.now();
+  const {error} = await db.from('tasks').update({status: 'done', completed_at: new Date().toISOString(), partial_date: null}).eq('id', id);
+  if (error) { toast('Save failed: ' + error.message); return; }
+  toast('Done — +5 credits'); loadAll();
+}
+async function prepClear(id){
+  S.lastWrite = Date.now();
+  const {error} = await db.from('tasks').update({prepared_at: null}).eq('id', id);
+  if (error) { toast('Save failed: ' + error.message); return; }
+  S.prepOpen?.delete(id); loadAll();
 }
 /* overplanning brake: plan minutes vs actual free minutes before 23:30 */
 function capacityWarnHTML(){
@@ -1775,20 +1833,40 @@ function creditsCardHTML(){
         'after the bonus window — no wake bonus (cap 90)'}</div>`
     : '';
   const starterLine = !c.start_here ? '' : c.starter_done
-    ? `<div class="dim" style="font-family:var(--mono);font-size:11px;margin-bottom:8px">🔓 starter done — ${c.starter_min}m on “${esc(c.start_here)}”</div>`
+    ? `<div class="dim" style="font-family:var(--mono);font-size:11px;margin-bottom:8px">🔓 ${c.start_here_done ? 'START HERE done' : 'starter done — ' + c.starter_min + 'm'} on “${esc(c.start_here)}”</div>`
     : `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;border:1px solid var(--focus);border-radius:10px;background:rgba(251,191,36,.06)">
         <span style="font-size:12px;color:var(--focus);min-width:0">🔒 10 free credits locked — ${Math.max(10 - (c.starter_min || 0), 0)} more min on <b>${esc(c.start_here)}</b></span>
         <button class="btn primary" style="margin-left:auto;flex:0 0 auto" onclick="startStartHere()">▶ Start</button></div>`;
-  return `<div class="card"><h2>Screen-time credits</h2>
+  // class attendance (2026-08-24): +N min per class you actually show up to.
+  // Server enforces the window (15 min before start .. 90 min after end).
+  const classes = c.classes || [];
+  const classLine = !classes.length ? '' :
+    `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+      <span class="dim" style="font-size:11px;font-family:var(--mono)">🎓 class</span>
+      ${classes.map(k => k.attended
+        ? `<span class="schip on" style="font-size:11px;padding:5px 8px">✓ ${esc(k.title)} +${k.minutes}</span>`
+        : k.open
+          ? `<button class="schip" style="font-size:11px;padding:5px 8px;border-color:var(--done);color:var(--done)" onclick="attendClass('${esc(k.title).replace(/'/g, "\\'")}','${k.start_time}')">📍 ${esc(k.title)} ${k.start_time} — I'm here (+${k.minutes})</button>`
+          : `<span class="schip" style="font-size:11px;padding:5px 8px;opacity:.5">${k.past ? '✗' : '⏳'} ${esc(k.title)} ${k.start_time}</span>`).join('')}
+    </div>`;
+  return `<div class="card"><h2>Screen-time credits${c.vacation ? ' <span style="font-size:12px;font-weight:400">🌴 vacation</span>' : ''}</h2>
     <div style="display:flex;gap:8px;margin-bottom:8px">
       ${stat(c.balance, 'MIN LEFT', c.balance > 0 ? 'var(--done)' : 'var(--accent)')}
       ${stat(spent, 'SPENT')}
       ${stat(c.gross, 'EARNED')}
     </div>
     <div class="ebar" style="margin-bottom:6px"><div style="width:${pct}%;background:${pct >= 85 ? '#E1251B' : pct >= 60 ? '#FBBF24' : '#4ADE80'}"></div></div>
-    <div class="dim" style="font-size:11px;margin-bottom:10px">earned = ${c.free} free + ${c.timer} clocked + ${c.bonus} completions${c.wake_bonus ? ` + ${c.wake_bonus} wake` : ''}${c.reflect_bonus ? ` + ${c.reflect_bonus} reflected` : ''} · daily cap ${c.cap}${c.gross >= c.cap ? ' — HIT' : ''}</div>
-    ${starterLine}${timer}${scroll}${wakeLine}${sleepHTML()}
+    <div class="dim" style="font-size:11px;margin-bottom:10px">earned = ${c.free} free + ${c.timer} clocked + ${c.bonus} completions${c.wake_bonus ? ` + ${c.wake_bonus} wake` : ''}${c.reflect_bonus ? ` + ${c.reflect_bonus} reflected` : ''}${c.class_bonus ? ` + ${c.class_bonus} class` : ''} · daily cap ${c.cap}${c.gross >= c.cap ? ' — HIT' : ''}</div>
+    ${classLine}${starterLine}${timer}${scroll}${wakeLine}${sleepHTML()}
   </div>`;
+}
+/* "I'm here" for a class -> +N credits (server checks the time window) */
+async function attendClass(title, start){
+  S.lastWrite = Date.now();
+  const {data, error} = await db.rpc('lifeos_attend_class', {p_title: title, p_start: start});
+  if (error) { toast('Check-in failed: ' + error.message); return; }
+  toast(data?.message || 'ok');
+  const cr = await db.rpc('lifeos_credits'); S.credits = cr.data || S.credits; render();
 }
 /* general clock-in: untethered, time credits only */
 async function clockIn(energy){
@@ -1801,7 +1879,11 @@ async function clockIn(energy){
 function startStartHere(){
   const sh = (S.credits?.start_here || S.brief?.start_here_task || '').trim().toLowerCase();
   const t = S.tasks.find(x => (x.title || '').trim().toLowerCase() === sh && x.status !== 'done');
-  if (!t) { toast('START HERE task not found — check TASKS'); return; }
+  if (!t) {
+    const done = S.tasks.find(x => (x.title || '').trim().toLowerCase() === sh && x.status === 'done');
+    toast(done ? 'START HERE is already done ✓ — free credits unlocked' : 'START HERE task not found — check TASKS');
+    return;
+  }
   startTask(t.id);
 }
 
@@ -4266,6 +4348,7 @@ async function jobArchive(id){
 
 function rSettings(){
   const gate = (S.settings && S.settings.wake_gate) === 'on';
+  const vac = (S.settings && S.settings.vacation_mode) === 'on';
   const pushOn = pushSupported() && Notification.permission === 'granted';
   const toggleRow = (icon, title, desc, on, onclick) => `
     <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
@@ -4280,6 +4363,12 @@ function rSettings(){
     ${tzPickerHTML()}
     ${wakeTargetsHTML()}
     ${toggleRow('🌅', 'Wake gate', 'Block the first IG/YT scroll of the day until the brief has been opened.', gate, `saveWakeGate('${gate ? 'off' : 'on'}')`)}
+  </div>
+  <div class="card"><h2>Vacation</h2>
+    ${toggleRow('🌴', 'Vacation mode', vac
+      ? 'ON — light plans (~2h/day), 60 free scroll minutes up front, streak can grow but not break.'
+      : 'Light plans + 60 free scroll minutes + streak protection. Only toggles ON inside an approved vacation window.',
+      vac, `toggleVacation(${vac ? 'false' : 'true'})`)}
   </div>
   <div class="card"><h2>Notifications</h2>
     <div class="dim" style="font-size:11px;margin-bottom:8px">Brief-ready, reality-check, streak-risk + reflection nudges. iOS: install to Home Screen first, then enable from the installed app.</div>
@@ -4405,6 +4494,14 @@ async function mtDelete(id){
   loadAll();
 }
 function toggleBionic(){ S.bionic = !S.bionic; localStorage.setItem('bionic', S.bionic ? '1' : '0'); render(); }
+async function toggleVacation(on){
+  const {data, error} = await db.rpc('lifeos_set_vacation', {p_on: on});
+  if (error) { toast('Toggle failed: ' + error.message); return; }
+  if (data && data.ok === false) { toast(data.message || 'Toggle refused'); return; }
+  (S.settings = S.settings || {}).vacation_mode = on ? 'on' : 'off';
+  toast(data && data.message ? data.message : ('Vacation mode → ' + (on ? 'ON' : 'OFF')));
+  loadAll();
+}
 async function saveWakeGate(v){
   const {error} = await db.from('lifeos_settings').upsert({key: 'wake_gate', value: v});
   if (error) { toast('Save failed: ' + error.message); return; }
