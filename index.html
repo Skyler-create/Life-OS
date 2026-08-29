@@ -289,6 +289,9 @@ details.bsec>.ginner{padding:0 10px 10px}
   border:1px solid rgba(225,37,27,.45);border-left:3px solid var(--accent);border-radius:8px;
   padding:2px 8px;font-size:12px;overflow:hidden;z-index:1;
   box-shadow:0 2px 8px rgba(0,0,0,.25)}
+.doneblk{position:absolute;right:2px;width:44%;background:rgba(74,222,128,.10);border-left:3px solid var(--done);border-radius:6px;padding:2px 6px;font-size:10px;line-height:1.3;color:var(--done);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;pointer-events:none;z-index:3}
+.doneblk b{font-family:var(--mono);font-size:9px;font-weight:600;margin-right:3px;opacity:.8}
+.wk-done{position:absolute;right:1px;left:auto;max-width:94%;background:rgba(74,222,128,.14);border-left:2px solid var(--done);border-radius:4px;padding:1px 3px;font-size:8px;color:var(--done);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;pointer-events:none;z-index:3}
 .evblk:active{filter:brightness(1.25)}
 .evblk b{font-family:var(--mono);font-size:10px;font-weight:600;color:#FF9B94;display:block}
 .nowline{position:absolute;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--accent-hi),var(--accent) 60%,transparent);z-index:2}
@@ -1399,7 +1402,7 @@ function taskRowHTML(t){
     t.place_context === 'at_work' ? `<span>🏢 at work</span>`
       : t.place_context === 'weekday' ? `<span>Mon–Fri</span>`
       : t.place_context === 'weekend' ? `<span>weekend</span>` : '',
-    t.prepared_at ? `<span style="color:var(--focus)">✨ prepped — tap ✎ to review</span>` : '',
+    t.prepared_at ? `<span style="color:var(--focus);cursor:pointer;font-weight:600" onclick="event.stopPropagation();S.prepOpen = S.prepOpen || new Set();S.prepOpen.has('${t.id}') ? S.prepOpen.delete('${t.id}') : S.prepOpen.add('${t.id}');render()">✨ ${(S.prepOpen && S.prepOpen.has(t.id)) ? 'hide' : 'prepped — tap'}</span>` : '',
     // ℹ why: tasks the AI pulled from email/calendar carry their source in notes — expose it inline
     t.notes ? `<span style="color:var(--dim);cursor:pointer" onclick="event.stopPropagation();S.noteOpen = S.noteOpen || new Set();S.noteOpen.has('${t.id}') ? S.noteOpen.delete('${t.id}') : S.noteOpen.add('${t.id}');render()">ℹ ${(S.noteOpen && S.noteOpen.has(t.id)) ? 'hide' : 'why'}</span>` : '',
     t.energy ? `<span style="color:${en.color}">${t.energy}</span>` : '',
@@ -1423,6 +1426,7 @@ function taskRowHTML(t){
       <div class="tname">${esc(t.title)}</div>
       <div class="tmeta">${meta}</div>
       ${(S.noteOpen && S.noteOpen.has(t.id) && !editor) ? `<div style="font-size:12px;line-height:1.5;white-space:pre-wrap;margin-top:6px;padding:8px;background:rgba(255,255,255,.04);border-radius:8px;color:var(--text)">${esc(t.notes)}</div>` : ''}
+      ${(t.prepared_at && S.prepOpen && S.prepOpen.has(t.id) && !editor) ? prepPanelHTML(t) : ''}
       ${editor}
     </div>
     ${startBtn}
@@ -1729,7 +1733,7 @@ function rToday(){
     });
     return rows.length ? `<div class="pname">FROM TODAY'S PLAN</div>` + rows.map(taskRowHTML).join('') : '';
   })();
-  return wakeChallengeHTML() + goalConfirmsHTML() + shCard + meter + capacityWarnHTML() + callPrepHTML() + planBlocksHTML() + replanCardHTML() + creditsCardHTML() + preppedCardHTML() + waitingOnHTML() + evCard +
+  return wakeChallengeHTML() + goalConfirmsHTML() + shCard + meter + capacityWarnHTML() + callPrepHTML() + planBlocksHTML() + replanCardHTML() + creditsCardHTML() + waitingOnHTML() + evCard +
     (bar ? `<div class="card"><h2>Today's energy</h2>${bar}</div>` : '') +
     chipsHTML() +
     (sorted.length ? sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — add a task below or check TASKS.</div>`) +
@@ -1738,6 +1742,23 @@ function rToday(){
 /* ✨ Prepped for you — one card that lists everything the overnight worker prepped,
    with the findings inline (tap to expand) and one-tap Done. Faster than
    opening each task's editor. */
+/* inline prep panel — one tap on ✨ in the row shows exactly what was prepped */
+function prepPanelHTML(t){
+  let dec = null;
+  try { const j = JSON.parse(t.prep_output || ''); if (j && Array.isArray(j.decompose)) dec = j.decompose; } catch(e){}
+  const body = dec
+    ? `<div style="font-size:13px;line-height:1.7">${dec.map((x, i) => `${i + 1}. ${esc(x.title || '')} <span class="dim mono" style="font-size:10px">${x.est || 30}m ${esc(x.energy || '')}</span>`).join('<br>')}</div>
+       <button class="btn primary" style="width:100%;margin-top:6px" onclick="event.stopPropagation();applyDecomposition('${t.id}')">Accept breakdown — ${dec.length} subtasks</button>`
+    : `<div style="font-size:13px;line-height:1.5;white-space:pre-wrap;max-height:45vh;overflow-y:auto">${esc(t.prep_output || t.prep_note || '(no output)')}</div>`;
+  return `<div style="margin-top:6px;padding:8px;background:rgba(251,191,36,.06);border:1px solid var(--focus);border-radius:8px" onclick="event.stopPropagation()">
+    <div class="dim" style="font-size:11px;margin-bottom:4px">✨ ${esc(t.prep_note || 'prepped overnight')}</div>
+    ${body}
+    <div style="display:flex;gap:6px;margin-top:8px">
+      <button class="btn primary" style="flex:1" onclick="prepDone('${t.id}')">✓ Done (+5cr)</button>
+      <button class="btn" onclick="startTask('${t.id}')">▶ Start</button>
+      <button class="btn" onclick="prepClear('${t.id}')" title="Keep the task, drop the prepped flag">Unprep</button>
+    </div></div>`;
+}
 function preppedCardHTML(){
   const rows = S.tasks.filter(t => t.prepared_at && t.status !== 'done');
   if (!rows.length) return '';
@@ -3672,15 +3693,24 @@ async function syncEventsTable(evts, lo, hi){
 }
 
 function calMaps(){
-  const byDay = {}, evByDay = {};
+  const byDay = {}, evByDay = {}, doneBy = {};
   S.tasks.forEach(t => { if (t.due && t.bucket === 'active' && t.status !== 'done') (byDay[t.due] = byDay[t.due] || []).push(t); });
   allEvents().forEach((e, i) => { e._i = i; (evByDay[e.date] = evByDay[e.date] || []).push(e); });
-  return {byDay, evByDay};
+  // ✓ completion markers: every done task pinned at its wall-clock finish time
+  S.tasks.forEach(t => {
+    if (t.status !== 'done' || !t.completed_at) return;
+    const d = new Date(t.completed_at);
+    const iso = d.toLocaleDateString('sv-SE');
+    (doneBy[iso] = doneBy[iso] || []).push({t, min: d.getHours() * 60 + d.getMinutes(),
+      hhmm: String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')});
+  });
+  Object.values(doneBy).forEach(a => a.sort((x, y) => x.min - y.min));
+  return {byDay, evByDay, doneBy};
 }
 function rCal(){
   if (S.calY == null) { const n = new Date(); S.calY = n.getFullYear(); S.calM = n.getMonth(); }
   if (!S.calSel) S.calSel = calTodayISO();
-  const {byDay, evByDay} = calMaps();
+  const {byDay, evByDay, doneBy} = calMaps();
   const sel = fromISO(S.calSel);
   let label;
   if (S.calView === 'month') label = new Date(S.calY, S.calM, 1).toLocaleString('en-US', {month: 'long', year: 'numeric'});
@@ -3706,12 +3736,12 @@ function rCal(){
       ? `<button class="schip" style="color:${S.gcalLive ? 'var(--done)' : 'var(--dim)'}" onclick="gcalDisconnect()">● ${S.gcalLive ? 'live' : '…'}</button><button class="schip" onclick="openEv(null)">+ event</button>`
       : `<button class="schip" onclick="gcalConnect(false)">connect Google</button>`) : ''}</div>`;
   loadGcal(`${S.calY}-${String(S.calM + 1).padStart(2, '0')}-15`);
-  const body = S.calView === 'day' ? calDayHTML(S.calSel, byDay, evByDay)
-             : S.calView === 'week' ? calWeekHTML(byDay, evByDay)
-             : calMonthHTML(byDay, evByDay);
+  const body = S.calView === 'day' ? calDayHTML(S.calSel, byDay, evByDay, doneBy)
+             : S.calView === 'week' ? calWeekHTML(byDay, evByDay, doneBy)
+             : calMonthHTML(byDay, evByDay, doneBy);
   return header + body;
 }
-function calMonthHTML(byDay, evByDay){
+function calMonthHTML(byDay, evByDay, doneBy){
   const y = S.calY, m = S.calM;
   const startDow = (new Date(y, m, 1).getDay() + 6) % 7;
   const days = new Date(y, m + 1, 0).getDate();
@@ -3724,6 +3754,7 @@ function calMonthHTML(byDay, evByDay){
     const items = [
       ...evs.map(e => ({c: 'var(--deep)', t: e.title})),
       ...ts.map(t => ({c: (ENERGY[t.energy] || {}).hex || '#666', t: t.title})),
+      ...(doneBy[iso] || []).map(d => ({c: 'var(--done)', t: '✓ ' + d.t.title})),
     ];
     const shown = items.slice(0, 3).map(it => `<div class="mo-chip" style="border-color:${it.c}">${esc(it.t)}</div>`).join('');
     const more = items.length > 3 ? `<div class="mo-more">+${items.length - 3}</div>` : '';
@@ -3732,10 +3763,10 @@ function calMonthHTML(byDay, evByDay){
   }
   return `<div class="card">
     <div class="cal-g">${['M','T','W','T','F','S','S'].map(d => `<span class="dow">${d}</span>`).join('')}${cells}</div>
-    <div class="elegend" style="margin-top:8px">${Object.keys(ENERGY).map(e => `<span><i style="background:${ENERGY[e].hex}"></i>${e}</span>`).join('')}<span><i style="background:#818CF8"></i>event</span><span style="margin-left:auto" class="dim">tap a day</span></div>
+    <div class="elegend" style="margin-top:8px">${Object.keys(ENERGY).map(e => `<span><i style="background:${ENERGY[e].hex}"></i>${e}</span>`).join('')}<span><i style="background:#818CF8"></i>event</span><span><i style="background:var(--done)"></i>✓ done</span><span style="margin-left:auto" class="dim">tap a day</span></div>
   </div>`;
 }
-function calWeekHTML(byDay, evByDay){
+function calWeekHTML(byDay, evByDay, doneBy){
   const anchor = fromISO(S.calSel);
   const mon = new Date(anchor); mon.setDate(anchor.getDate() - ((anchor.getDay() + 6) % 7));
   const H0 = 0, H1 = 24, PPH = 44;   // full 24h; wrapper opens scrolled to 6 AM
@@ -3761,18 +3792,20 @@ function calWeekHTML(byDay, evByDay){
       const h = Math.max(18, dur * (PPH / 60));
       return `<div class="wk-ev${e.source === 'work' ? ' work' : ''}" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px;cursor:pointer" onclick="event.stopPropagation();openEv(${e._i})">${esc(e.title)}</div>`;
     }).join('');
+    const dones = (doneBy[iso] || []).map(d =>
+      `<div class="wk-done" style="top:${Math.max(0, d.min * PPH / 60 - 8).toFixed(0)}px">✓ ${esc(d.t.title)}</div>`).join('');
     const nowline = iso === calTodayISO() ? (() => {
       const n = new Date(); const mins = (n.getHours() - H0) * 60 + n.getMinutes();
       return (mins > 0 && mins < (H1 - H0) * 60) ? `<div class="nowline" style="top:${(mins * PPH / 60).toFixed(0)}px"></div>` : '';
     })() : '';
-    return `<div class="wk-col ${iso === calTodayISO() ? 'now' : ''} ${fromISO(iso).getDay() % 6 === 0 ? 'wknd' : ''}" data-iso="${iso}" style="position:relative" onclick="weekGridTap(event, '${iso}')" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${blocks}${planBlockDivs(iso, H0, PPH, 'week')}${nowline}</div>`;
+    return `<div class="wk-col ${iso === calTodayISO() ? 'now' : ''} ${fromISO(iso).getDay() % 6 === 0 ? 'wknd' : ''}" data-iso="${iso}" style="position:relative" onclick="weekGridTap(event, '${iso}')" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${blocks}${planBlockDivs(iso, H0, PPH, 'week')}${dones}${nowline}</div>`;
   }).join('');
   return head + adRow + `<div class="gridwrap" id="gridScroll" data-h6="${6 * PPH}" onscroll="S._gsPos=this.scrollTop;S._gsAt=Date.now()">
     <div class="wk-grid" style="height:${(H1 - H0) * PPH}px"><div class="wk-rail">${rail}</div>${cols}</div></div>
   <div class="dim mono" style="font-size:10px;margin-top:6px">tap day header = day view · tap slot = new event · hold & drag 💡 blocks to replan (across days too) · 📌 = locked</div>`;
 }
 const hourLabel = h => h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 PM' : (h - 12) + ' PM';
-function calDayHTML(iso, byDay, evByDay){
+function calDayHTML(iso, byDay, evByDay, doneBy){
   const evs = (evByDay[iso] || []).slice().sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
   const allday = evs.filter(e => !e.start_time);
   const timed = evs.filter(e => e.start_time);
@@ -3796,9 +3829,9 @@ function calDayHTML(iso, byDay, evByDay){
   ${due.length || doneDay.length ? `<div class="pname">due — ${due.length} open${doneDay.length ? ' · ' + doneDay.length + ' done' : ''}</div>` : ''}
   ${due.map(taskRowHTML).join('')}
   <div class="gridwrap" id="gridScroll" data-h6="${6 * PPH}" onscroll="S._gsPos=this.scrollTop;S._gsAt=Date.now()">
-    <div class="daygrid" style="height:${(H1 - H0) * PPH}px;position:relative" onclick="dayGridTap(event, '${iso}', ${PPH})" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${rail}${blocks}${planBlockDivs(iso, H0, PPH, 'day')}${nowLine}</div>
+    <div class="daygrid" style="height:${(H1 - H0) * PPH}px;position:relative" onclick="dayGridTap(event, '${iso}', ${PPH})" onpointerdown="gridPressStart(event, '${iso}', ${PPH}, ${H0})">${rail}${blocks}${planBlockDivs(iso, H0, PPH, 'day')}${(doneBy[iso] || []).map(d => `<div class="doneblk" style="top:${Math.max(0, d.min * PPH / 60 - 10).toFixed(0)}px"><b>${d.hhmm}</b> ✓ ${esc(d.t.title)}</div>`).join('')}${nowLine}</div>
   </div>
-  <div class="dim mono" style="font-size:10px;margin-top:4px">solid = calendar · dashed 💡 = plan (hold & drag to move) · 📌 = locked</div>
+  <div class="dim mono" style="font-size:10px;margin-top:4px">solid = calendar · dashed 💡 = plan (hold & drag to move) · 📌 = locked · <span style="color:var(--done)">✓ = completed then</span></div>
   <button class="btn" style="width:100%;margin-top:8px" onclick="addForDay()">+ add task due ${iso}</button>
   <div style="height:10px"></div>`;
 }
