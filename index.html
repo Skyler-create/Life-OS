@@ -826,16 +826,35 @@ async function cycleTask(id){
   else if (isPartialToday(t))         patch = {status:'not_started', completed_at:null, partial_date:null};
   else                                patch = {status:'done', completed_at:new Date().toISOString(), partial_date:null};
   Object.assign(t, patch);
-  // patch just this row in place — no full re-render, no flicker.
-  // Children re-render fully so the goal's n/m progress + confirm card update
-  // (render() preserves scroll, so no jump).
-  const node = document.getElementById('t-' + id);
-  if (t.parent_id) render();
-  else if (node) { const tmp = document.createElement('div'); tmp.innerHTML = taskRowHTML(t); node.replaceWith(tmp.firstElementChild); }
-  else render();
+  // Full optimistic re-render (scroll is preserved): the START HERE card
+  // advances to the next task IMMEDIATELY, the list row checks off, the
+  // energy bar / goal cards / chips all update in the same frame. (The old
+  // patch-one-node shortcut hit the WRONG node when the task appeared in
+  // both the START HERE card and the list — the card never advanced.)
+  render();
   S.lastWrite = Date.now();
   const {error} = await db.from('tasks').update(patch).eq('id', id);
-  if (error) { toast('Save failed: ' + error.message); loadAll(); }
+  if (error) { toast('Save failed: ' + error.message); loadAll(); return; }
+  // reconcile the cheap server-derived bits (credits +5, weekly-goal chip
+  // from the goal_logs trigger) without the heavy full loadAll
+  refreshLight();
+}
+
+/* light reconcile after a write: credits + today's goal logs only (fast). */
+let _rlTimer = null;
+function refreshLight(){
+  clearTimeout(_rlTimer);
+  _rlTimer = setTimeout(async () => {
+    try {
+      const [cr, gl] = await Promise.all([
+        db.rpc('lifeos_credits'),
+        db.from('goal_logs').select('*').eq('date', todayISO()),
+      ]);
+      if (cr.data) S.credits = cr.data;
+      if (gl.data) S.goalLogsToday = gl.data;
+      if (!S.editing && !S.sheet && !S.wakeChallenge && !S.planEditMode) render();
+    } catch (e) { /* next loadAll catches up */ }
+  }, 350);
 }
 
 /* quick-add parsing: #project !prio 90m/1.5h due:tom hard */
@@ -894,7 +913,9 @@ async function saveSheet(){
   if (parentId) row.parent_id = parentId;
   const {data, error} = await db.from('tasks').insert(row).select().single();
   if (error) { toast('Add failed: ' + error.message); return; }
-  S.sheet = null; toast(parentId ? 'Added under goal' : 'Added'); loadAll();  // refetch so any auto-chunk split shows immediately
+  S.sheet = null; if (data) S.tasks.push(data);
+  render(); toast(parentId ? 'Added under goal' : 'Added');  // instant appearance
+  loadAll();  // background refetch so any auto-chunk split shows
 }
 function projectRegistry(){ try { return JSON.parse((S.settings && S.settings.projects) || '[]'); } catch(e){ return []; } }
 function distinctProjects(){ return [...new Set([...S.tasks.filter(t => t.status !== 'done').map(t => t.project).filter(Boolean), ...projectRegistry()])].sort(); }
@@ -1684,7 +1705,7 @@ function rToday(){
       `<span><i style="background:${(ENERGY[e] || {}).hex}"></i>${e} ${Math.round(m/60*10)/10}h</span>`).join('') +
       `<span style="margin-left:auto">${Math.round(total/60*10)/10}h open</span></div>` : '';
   const shn = startHereNow(todays);
-  const shCard = shn ? `<div class="card starthere"><h2>Start here <span class="dim" style="font-weight:400;text-transform:none;letter-spacing:0">· ${shn.why}</span></h2>${taskRowHTML(shn.t)}</div>` : '';
+  const shCard = shn ? `<div class="card starthere"><h2>Start here <span class="dim" style="font-weight:400;text-transform:none;letter-spacing:0">· ${shn.why}</span></h2>${taskRowHTML(shn.t).replace('id="t-', 'id="sht-')}</div>` : '';
   const meter = rMeter();
   allEvents().forEach((e, i) => e._i = i);
   const todaysEv = allEvents().filter(e => e.date === today).sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
@@ -1750,16 +1771,22 @@ function preppedCardHTML(){
   </div>`;
 }
 async function prepDone(id){
+  const t = S.tasks.find(x => x.id === id); if (!t) return;
+  const patch = {status: 'done', completed_at: new Date().toISOString(), partial_date: null};
+  Object.assign(t, patch); S.prepOpen?.delete(id);
+  render(); toast('Done — +5 credits');            // instant; card row disappears now
   S.lastWrite = Date.now();
-  const {error} = await db.from('tasks').update({status: 'done', completed_at: new Date().toISOString(), partial_date: null}).eq('id', id);
-  if (error) { toast('Save failed: ' + error.message); return; }
-  toast('Done — +5 credits'); loadAll();
+  const {error} = await db.from('tasks').update(patch).eq('id', id);
+  if (error) { toast('Save failed: ' + error.message); loadAll(); return; }
+  refreshLight();
 }
 async function prepClear(id){
+  const t = S.tasks.find(x => x.id === id);
+  if (t) t.prepared_at = null;
+  S.prepOpen?.delete(id); render();                 // instant
   S.lastWrite = Date.now();
   const {error} = await db.from('tasks').update({prepared_at: null}).eq('id', id);
-  if (error) { toast('Save failed: ' + error.message); return; }
-  S.prepOpen?.delete(id); loadAll();
+  if (error) { toast('Save failed: ' + error.message); loadAll(); }
 }
 /* overplanning brake: plan minutes vs actual free minutes before 23:30 */
 function capacityWarnHTML(){
@@ -1988,13 +2015,16 @@ async function startTask(id){
     await clockOut();
   }
   const energy = CREDIT_RATE[t.energy] ? t.energy : 'LIGHT';
+  const wasStatus = t.status;
+  if (!t.status || t.status === 'not_started') t.status = 'in_progress';
+  toast('▶ ' + t.title);
+  setView('today');   // land on TODAY immediately; the timer chip appears when the insert returns
   S.lastWrite = Date.now();
   const {data, error} = await db.from('focus_sessions').insert({energy, task_id: id}).select().single();
-  if (error) { toast('Start failed: ' + error.message); return; }
+  if (error) { t.status = wasStatus; render(); toast('Start failed: ' + error.message); return; }
   S.focusOpen = data;
-  if (!t.status || t.status === 'not_started') { t.status = 'in_progress'; db.from('tasks').update({status: 'in_progress'}).eq('id', id).then(() => {}); }
-  toast('▶ ' + t.title);
-  setView('today');   // land on TODAY with the running timer
+  if (wasStatus !== t.status) db.from('tasks').update({status: 'in_progress'}).eq('id', id).then(() => {});
+  render();           // timer chip now live
 }
 async function clockOut(){
   if (!S.focusOpen) return;
@@ -2019,7 +2049,7 @@ async function clockOut(){
     const mins = Math.floor((Date.now() - new Date(fo.started_at).getTime()) / 60000);
     toast(`Clocked out — ${mins} min → ~${Math.floor(mins / CREDIT_RATE[fo.energy] * (+fo.credit_rate || 1))} credits${(+fo.credit_rate || 1) < 1 ? ' (⅓ rate)' : ''}`);
   }
-  S.focusOpen = null; loadAll();
+  S.focusOpen = null; render(); loadAll();   // timer disappears instantly; reload reconciles
 }
 async function spendCredits(m){
   if (!confirm(`Spend ${m} credits for ${m} minutes of scroll time?`)) return;
