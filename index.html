@@ -1860,7 +1860,8 @@ function creditsCardHTML(){
   if (!c) return '';
   const fo = S.focusOpen;
   const spent = c.spent ?? ((c.windows || 0) + (c.metered || 0));
-  const pct = Math.min(100, Math.round(spent / Math.max(c.gross, 1) * 100));
+  const debt = c.debt || 0;   // v9 ledger: yesterday's overspend, paid off before balance goes positive
+  const pct = Math.min(100, Math.round((spent + debt) / Math.max(c.gross, 1) * 100));
   const stat = (v, label, color) => `<div style="flex:1;text-align:center">
       <div class="mono" style="font-size:24px;font-weight:700;${color ? 'color:' + color : ''}">${v}</div>
       <div class="dim" style="font-size:10px;letter-spacing:.08em;font-family:var(--mono)">${label}</div></div>`;
@@ -1878,8 +1879,14 @@ function creditsCardHTML(){
     <div class="dim" style="font-size:10px;font-family:var(--mono);margin-top:4px">general clock-in = ⅓ rate · hit ▶ on a plan task for full rate (${['DEEP','FOCUS','LIGHT'].map(e => CREDIT_RATE[e] + 'm').join('/')})</div>`;
   }
   const scroll = c.scroll_open
-    ? `<div style="color:var(--accent);font-family:var(--mono);font-size:11px;margin-top:6px">📱 ${esc(c.scroll_open)} meter RUNNING — 1 credit/min, auto-cuts at 10m without a close</div>`
+    ? `<div style="color:var(--accent);font-family:var(--mono);font-size:11px;margin-top:6px">📱 ${esc(c.scroll_open)} meter RUNNING — 1 credit/min${/\(blocked\)/.test(c.scroll_open) ? ' · sneak-back trap, chains to 90m/day' : ', auto-cuts at 30m without a close'}</div>`
     : `<div class="dim" style="font-family:var(--mono);font-size:11px;margin-top:6px">📱 scrolled ${c.metered || 0}m today${c.windows ? ` · ${c.windows}m prepaid` : ''}</div>`;
+  const debtLine = !debt ? '' :
+    `<div style="color:var(--accent);font-family:var(--mono);font-size:11px;margin-top:6px">⛓ −${debt} debt carried from yesterday — balance stays 0 until earned credits cover it</div>`;
+  const gateLine = !c.gated ? '' :
+    `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding:8px 10px;border:1px solid var(--accent);border-radius:10px;background:rgba(225,37,27,.06)">
+      <span style="font-size:12px;color:var(--accent)">📖 IG locked until you open today's brief — every open before that runs the trap meter</span>
+      <button class="btn primary" style="margin-left:auto;flex:0 0 auto" onclick="setView('brief')">Open brief</button></div>`;
   const wt = c.wake_tier;
   const wakeLine = (wt && wt !== 'none')
     ? `<div class="dim" style="font-size:11px;margin-top:6px">⏰ woke ${c.wake ? esc(String(c.wake).slice(0,5)) : '—'} · ${
@@ -1913,7 +1920,7 @@ function creditsCardHTML(){
     </div>
     <div class="ebar" style="margin-bottom:6px"><div style="width:${pct}%;background:${pct >= 85 ? '#E1251B' : pct >= 60 ? '#FBBF24' : '#4ADE80'}"></div></div>
     <div class="dim" style="font-size:11px;margin-bottom:10px">earned = ${c.free} free + ${c.timer} clocked + ${c.bonus} completions${c.wake_bonus ? ` + ${c.wake_bonus} wake` : ''}${c.reflect_bonus ? ` + ${c.reflect_bonus} reflected` : ''}${c.class_bonus ? ` + ${c.class_bonus} class` : ''} · daily cap ${c.cap}${c.gross >= c.cap ? ' — HIT' : ''}</div>
-    ${classLine}${starterLine}${timer}${scroll}${wakeLine}${sleepHTML()}
+    ${gateLine}${classLine}${starterLine}${timer}${scroll}${debtLine}${wakeLine}${sleepHTML()}
   </div>`;
 }
 /* "I'm here" for a class -> +N credits (server checks the time window) */
