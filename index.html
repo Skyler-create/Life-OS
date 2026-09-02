@@ -638,7 +638,7 @@ document.getElementById('a-email').value = OWNER;
 /* ================= data ================= */
 async function loadAll(){
   const today = todayISO();
-  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, jp, flog] = await Promise.all([
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, jp, flog, jpn, jm] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
@@ -675,8 +675,10 @@ async function loadAll(){
       .order('posted', {ascending: false}).limit(250),
     db.from('fin_recurring').select('*').eq('active', true).eq('ignored', false).order('avg_amount', {ascending: false}),
     db.rpc('lifeos_stocks_context'),
-    db.from('job_postings').select('*').neq('status','archived').order('found_at', {ascending:false}).limit(200),
+    db.from('job_postings').select('*').neq('status','archived').neq('status','new').order('status_changed_at', {ascending:false}).limit(200),
     db.from('focus_sessions').select('id,task_id,energy,started_at,ended_at').gte('started_at', new Date(Date.now() - 60 * 864e5).toISOString()).order('started_at').limit(2000),
+    db.from('job_postings').select('*').eq('status','new').order('rank_score', {ascending:false}).limit(60),
+    db.from('job_materials').select('posting_id,status,track,tailored,answers,cover_note,error,updated_at'),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   S.cards = cd.data || []; S.events = ev.data || []; S.freezes = fz.data || [];
@@ -703,7 +705,8 @@ async function loadAll(){
   S.finAccounts = fa.data || [];
   S.finTx = ft.data || [];
   S.finRecurring = fr.data || [];
-  S.jobs = jp.data || [];          // Slipstream job pipeline (spec 06)
+  S.jobs = (jp.data || []).concat(jpn.data || []);   // Slipstream v2: tracked postings + top-60 new by rank
+  S.kits = {}; (jm.data || []).forEach(m => S.kits[m.posting_id] = m);   // apply kits (slip-prep)
   S.focusLog = flog.data || [];    // clocked-in history → blue work spans on CAL
   S.stocks = stx.data || null;     // stocks agent: quotes + indicators + latest report
   S.expStats = {}; S.expArms = {};
@@ -1409,6 +1412,8 @@ function taskRowHTML(t){
       : t.place_context === 'weekday' ? `<span>Mon–Fri</span>`
       : t.place_context === 'weekend' ? `<span>weekend</span>` : '',
     t.prepared_at ? `<span style="color:var(--focus);cursor:pointer;font-weight:600" onclick="event.stopPropagation();S.prepOpen = S.prepOpen || new Set();S.prepOpen.has('${t.id}') ? S.prepOpen.delete('${t.id}') : S.prepOpen.add('${t.id}');render()">✨ ${(S.prepOpen && S.prepOpen.has(t.id)) ? 'hide' : 'prepped — tap'}</span>` : '',
+    // 🧰 Slipstream apply kit (tailored resume + answers) lives on the posting; tap to open
+    t.job_id && t.status !== 'done' ? `<span style="color:${kitColor(t.job_id)};cursor:pointer;font-weight:600" onclick="event.stopPropagation();S.kitOpen = S.kitOpen || new Set();S.kitOpen.has('${t.id}') ? S.kitOpen.delete('${t.id}') : S.kitOpen.add('${t.id}');render()">🧰 ${kitLabel(t.job_id)}</span>` : '',
     // ℹ why: tasks the AI pulled from email/calendar carry their source in notes — expose it inline
     t.notes ? `<span style="color:var(--dim);cursor:pointer" onclick="event.stopPropagation();S.noteOpen = S.noteOpen || new Set();S.noteOpen.has('${t.id}') ? S.noteOpen.delete('${t.id}') : S.noteOpen.add('${t.id}');render()">ℹ ${(S.noteOpen && S.noteOpen.has(t.id)) ? 'hide' : 'why'}</span>` : '',
     t.energy ? `<span style="color:${en.color}">${t.energy}</span>` : '',
@@ -1433,6 +1438,7 @@ function taskRowHTML(t){
       <div class="tmeta">${meta}</div>
       ${(S.noteOpen && S.noteOpen.has(t.id) && !editor) ? `<div style="font-size:12px;line-height:1.5;white-space:pre-wrap;margin-top:6px;padding:8px;background:rgba(255,255,255,.04);border-radius:8px;color:var(--text)">${esc(t.notes)}</div>` : ''}
       ${(t.prepared_at && S.prepOpen && S.prepOpen.has(t.id) && !editor) ? prepPanelHTML(t) : ''}
+      ${(t.job_id && S.kitOpen && S.kitOpen.has(t.id) && !editor) ? applyKitHTML(t) : ''}
       ${editor}
     </div>
     ${startBtn}
@@ -1765,6 +1771,80 @@ function prepPanelHTML(t){
       <button class="btn" onclick="prepClear('${t.id}')" title="Keep the task, drop the prepped flag">Unprep</button>
     </div></div>`;
 }
+/* ================= Slipstream v2 — apply kit (2026-09-02) =================
+   slip-prep (edge fn) builds job_materials per posting: tailored resume HTML,
+   drafted answers, cover note, fit + honest gaps. The task row shows it inline;
+   the resume opens in a new tab print-ready (Save as PDF). */
+function kitLabel(pid){ const m = S.kits && S.kits[pid]; if (!m) return 'kit — prep'; if (m.status === 'ready') return 'kit ' + ((m.tailored || {}).fit || 'ready'); if (m.status === 'error') return 'kit error'; return 'kit building…'; }
+function kitColor(pid){ const m = S.kits && S.kits[pid]; const f = m && m.tailored && m.tailored.fit; return !m ? 'var(--dim)' : m.status === 'error' ? 'var(--accent)' : f === 'strong' ? 'var(--done)' : f === 'good' ? 'var(--focus)' : m.status === 'ready' ? 'var(--dim)' : 'var(--dim)'; }
+function copyText(txt, btn){ navigator.clipboard.writeText(txt).then(() => { if (btn) { const o = btn.textContent; btn.textContent = '✓ copied'; setTimeout(() => btn.textContent = o, 1200); } else toast('copied'); }).catch(() => toast('copy failed')); }
+function applyKitHTML(t){
+  const j = S.jobs.find(x => x.id === t.job_id) || {};
+  const m = S.kits && S.kits[t.job_id];
+  const url = j.url || (t.notes || '').split('\n')[0];
+  const head = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+      ${url ? `<a class="btn" href="${esc(url)}" target="_blank" rel="noopener" style="text-decoration:none">↗ Posting</a>` : ''}
+      ${m && m.status === 'ready' ? `<button class="btn primary" onclick="event.stopPropagation();openResume('${esc(t.job_id)}')">📄 Resume → PDF</button>` : ''}
+      <button class="btn" onclick="event.stopPropagation();prepKit('${esc(t.job_id)}')">${m ? '↻ Rebuild kit' : '✨ Build kit'}</button>
+      <button class="btn" style="margin-left:auto;border-color:var(--done);color:var(--done)" onclick="event.stopPropagation();markApplied('${t.id}','${esc(t.job_id)}')">✓ Applied</button>
+    </div>`;
+  if (!m) return `<div style="margin-top:6px;padding:8px;background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:8px" onclick="event.stopPropagation()">${head}<div class="dim" style="font-size:12px">No kit yet — build one (≈1 min): tailored resume, drafted answers, cover note, honest fit.</div></div>`;
+  if (m.status !== 'ready') return `<div style="margin-top:6px;padding:8px;background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:8px" onclick="event.stopPropagation()">${head}<div class="dim" style="font-size:12px">${m.status === 'error' ? '⚠ ' + esc(m.error || 'failed') : '⏳ building… (refresh in a minute)'}</div></div>`;
+  const tl = m.tailored || {};
+  const fitColor = tl.fit === 'strong' ? 'var(--done)' : tl.fit === 'good' ? 'var(--focus)' : 'var(--accent)';
+  const kw = (tl.keywords || []).slice(0, 12).map(k => `<span class="schip" style="font-size:10px;padding:2px 6px">${esc(k)}</span>`).join(' ');
+  const miss = (tl.keywords_missing || []).length ? `<div style="font-size:11px;margin-top:4px"><span class="dim">gaps:</span> ${tl.keywords_missing.map(esc).join(' · ')}</div>` : '';
+  const rew = Object.entries(tl.bullet_overrides || {});
+  const dropped = Object.entries(tl.dropped_overrides || {});
+  const rewrites = rew.length ? `<details style="margin-top:8px"><summary class="dim" style="font-size:11px;cursor:pointer">✎ ${rew.length} bullet rewrite${rew.length > 1 ? 's' : ''} — check they're true</summary>
+      ${rew.map(([k, v]) => `<div style="font-size:11px;margin:6px 0;padding:6px;background:rgba(255,255,255,.03);border-radius:6px"><div class="dim" style="text-decoration:line-through">${esc(k)}</div><div>${esc(v)}</div></div>`).join('')}
+      ${dropped.map(([k, v]) => `<div style="font-size:11px;margin:6px 0;padding:6px;border:1px dashed var(--accent);border-radius:6px"><div class="dim">rejected rewrite (named something not in your profile):</div><div>${esc(v)}</div></div>`).join('')}
+    </details>` : '';
+  const answers = (m.answers || []).map((a, i) => `<div style="margin-top:8px"><div style="display:flex;align-items:center;gap:6px"><div style="font-size:11px;font-weight:600;flex:1">${esc(a.q)}</div><button class="btn" style="font-size:10px;padding:2px 8px" onclick="event.stopPropagation();copyText(${JSON.stringify(a.a).replace(/"/g, '&quot;')}, this)">copy</button></div><div style="font-size:12px;line-height:1.45;white-space:pre-wrap;color:${/\[FILL\]/.test(a.a) ? 'var(--focus)' : 'var(--text)'}">${esc(a.a)}</div></div>`).join('');
+  return `<div style="margin-top:6px;padding:8px;background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:8px" onclick="event.stopPropagation()">
+    ${head}
+    <div style="font-size:12px"><b style="color:${fitColor}">${esc(tl.fit || '?')} fit</b> <span class="dim">· ${esc(m.track || 'all')} resume · ${esc(m.model || '')}</span><br><span style="font-size:11px">${esc(tl.fit_note || '')}</span></div>
+    ${miss}
+    <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">${kw}</div>
+    ${rewrites}
+    ${m.cover_note ? `<div style="margin-top:8px"><div style="display:flex;align-items:center;gap:6px"><div style="font-size:11px;font-weight:600;flex:1">Cover note</div><button class="btn" style="font-size:10px;padding:2px 8px" onclick="event.stopPropagation();copyText(${JSON.stringify(m.cover_note).replace(/"/g, '&quot;')}, this)">copy</button></div><div style="font-size:12px;line-height:1.45;white-space:pre-wrap">${esc(m.cover_note)}</div></div>` : ''}
+    ${answers}
+  </div>`;
+}
+async function openResume(pid){
+  const w = window.open('', '_blank');
+  const { data, error } = await db.from('job_materials').select('resume_html').eq('posting_id', pid).single();
+  if (error || !data || !data.resume_html) { if (w) w.close(); toast('no resume html: ' + (error ? error.message : 'empty')); return; }
+  const bar = `<div id="pbar" style="position:fixed;top:0;left:0;right:0;padding:8px 12px;background:#111;color:#fff;font:13px system-ui;display:flex;gap:10px;align-items:center;z-index:9"><b>Tailored resume</b><span style="opacity:.7">Print → Save as PDF (Letter, no headers/footers)</span><button onclick="window.print()" style="margin-left:auto;padding:6px 12px">Print / Save PDF</button></div><style>@media print{#pbar{display:none}} @media screen{body{padding-top:44px!important}}</style>`;
+  w.document.open(); w.document.write(data.resume_html.replace('</body>', bar + '</body>')); w.document.close();
+}
+async function prepKit(pid){
+  toast('building kit… ~1 min');
+  S.kits = S.kits || {}; S.kits[pid] = Object.assign({}, S.kits[pid] || {}, {posting_id: pid, status: 'pending'}); render();
+  try {
+    const { data: { session } } = await db.auth.getSession();
+    const r = await fetch(SB_URL + '/functions/v1/slip-prep', {method: 'POST', headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (session && session.access_token), 'apikey': SB_KEY}, body: JSON.stringify({posting_id: pid})});
+    const d = await r.json();
+    if (d.error) { toast('kit failed: ' + d.error); }
+    else toast('kit ready — ' + d.fit + ' fit');
+  } catch (e) { toast('kit failed: ' + e.message); }
+  const { data } = await db.from('job_materials').select('posting_id,status,track,tailored,answers,cover_note,error,updated_at,model').eq('posting_id', pid).maybeSingle();
+  if (data) S.kits[pid] = data;
+  render();
+}
+async function markApplied(taskId, pid){
+  S.lastWrite = Date.now();
+  const now = new Date().toISOString();
+  const [a, b] = await Promise.all([
+    db.from('tasks').update({status: 'done', completed_at: now, partial_date: null}).eq('id', taskId),
+    db.from('job_postings').update({status: 'applied', status_changed_at: now}).eq('id', pid),
+  ]);
+  if (a.error || b.error) { toast('failed: ' + ((a.error || b.error).message)); return; }
+  const t = S.tasks.find(x => x.id === taskId); if (t) { t.status = 'done'; t.completed_at = now; }
+  const j = S.jobs.find(x => x.id === pid); if (j) { j.status = 'applied'; j.status_changed_at = now; }
+  toast('📨 applied — +5cr');
+  render();
+}
 function preppedCardHTML(){
   const rows = S.tasks.filter(t => t.prepared_at && t.status !== 'done');
   if (!rows.length) return '';
@@ -1901,7 +1981,7 @@ function creditsCardHTML(){
         <span style="font-size:12px;color:var(--focus);min-width:0">🔒 10 free credits locked — ${Math.max(10 - (c.starter_min || 0), 0)} more min on <b>${esc(c.start_here)}</b></span>
         <button class="btn primary" style="margin-left:auto;flex:0 0 auto" onclick="startStartHere()">▶ Start</button></div>`;
   // class attendance (2026-08-24): +N min per class you actually show up to.
-  // Server enforces the window (15 min before start .. 90 min after end).
+  // 2026-09-01: no time window — any class on today's calendar can be marked any time today.
   const classes = c.classes || [];
   const classLine = !classes.length ? '' :
     `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
@@ -1909,7 +1989,7 @@ function creditsCardHTML(){
       ${classes.map(k => k.attended
         ? `<span class="schip on" style="font-size:11px;padding:5px 8px">✓ ${esc(k.title)} +${k.minutes}</span>`
         : k.open
-          ? `<button class="schip" style="font-size:11px;padding:5px 8px;border-color:var(--done);color:var(--done)" onclick="attendClass('${esc(k.title).replace(/'/g, "\\'")}','${k.start_time}')">📍 ${esc(k.title)} ${k.start_time} — I'm here (+${k.minutes})</button>`
+          ? `<button class="schip" style="font-size:11px;padding:5px 8px;border-color:var(--done);color:var(--done)" onclick="attendClass('${esc(k.title).replace(/'/g, "\\'")}','${k.start_time}')">${k.past ? '☐' : '📍'} ${esc(k.title)} ${k.start_time} — went (+${k.minutes})</button>`
           : `<span class="schip" style="font-size:11px;padding:5px 8px;opacity:.5">${k.past ? '✗' : '⏳'} ${esc(k.title)} ${k.start_time}</span>`).join('')}
     </div>`;
   return `<div class="card"><h2>Screen-time credits${c.vacation ? ' <span style="font-size:12px;font-weight:400">🌴 vacation</span>' : ''}</h2>
@@ -4406,29 +4486,37 @@ function jobRowHTML(j){
   const dl = j.deadline ? (j.deadline <= soon.toLocaleDateString('sv-SE')
       ? `<span style="color:var(--accent-hi);font-weight:700">⏳ ${j.deadline.slice(5).replace('-','/')}</span>`
       : `<span class="dim">${j.deadline.slice(5).replace('-','/')}</span>`) : '';
-  const fit = j.fit_score != null ? `<span class="mono dim">${Math.round(j.fit_score * 100)}%</span>` : '';
+  const fit = j.rank_score != null ? `<span class="mono dim" title="rank score">${Math.round(j.rank_score)}</span>` : (j.fit_score != null ? `<span class="mono dim">${Math.round(j.fit_score * 100)}%</span>` : '');
   const adv = JOB_NEXT[j.status];
+  const m = S.kits && S.kits[j.id];
+  const kit = j.status === 'new' || j.status === 'interested'
+    ? (m && m.status === 'ready'
+        ? `<span style="font-size:10px;color:${kitColor(j.id)}">🧰 ${esc((m.tailored || {}).fit || 'ready')}</span>`
+        : `<button class="btn" style="flex:0 0 auto;font-size:10px;padding:3px 8px" onclick="event.stopPropagation();${j.status === 'new' ? `jobPick('${esc(j.id)}')` : `prepKit('${esc(j.id)}')`}">${m && m.status === 'pending' ? '⏳' : (j.status === 'new' ? '+ task & kit' : '🧰 kit')}</button>`)
+    : '';
   return `<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:12px">
     <div style="flex:1;min-width:0">
       <div style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${j.url ? `<a href="${esc(j.url)}" target="_blank" rel="noopener" style="color:inherit">${esc(j.title)}</a>` : esc(j.title)}${j.company ? ` <span class="dim">@ ${esc(j.company)}</span>` : ''}</div>
       <div class="dim" style="font-size:10px">${[j.company_tier ? 'tier ' + esc(j.company_tier) : '', j.source ? esc(j.source) : '', j.location ? esc(j.location) : ''].filter(Boolean).join(' · ')}</div>
     </div>
-    ${fit} ${dl}
-    ${adv ? `<button class="btn" style="flex:0 0 auto;font-size:10px;padding:3px 8px" onclick="jobMove('${esc(j.id)}','${adv}')">→ ${adv}</button>` : ''}
+    ${fit} ${dl} ${kit}
+    ${adv && j.status !== 'new' ? `<button class="btn" style="flex:0 0 auto;font-size:10px;padding:3px 8px" onclick="jobMove('${esc(j.id)}','${adv}')">→ ${adv}</button>` : ''}
     <button class="btn" style="flex:0 0 auto;font-size:10px;padding:3px 7px" onclick="jobArchive('${esc(j.id)}')">✕</button>
   </div>`;
 }
 
 function jobsPipelineHTML(){
   const groups = [
-    ['ACTIVE (new + interested)', S.jobs.filter(j => j.status === 'new' || j.status === 'interested')],
+    ['INTERESTED (task + kit)', S.jobs.filter(j => j.status === 'interested')],
+    ['NEW · top picks by rank', S.jobs.filter(j => j.status === 'new').sort((a, b) => (b.rank_score || 0) - (a.rank_score || 0)).slice(0, S.jobsMore ? 60 : 15)],
     ['APPLIED',      S.jobs.filter(j => j.status === 'applied')],
     ['INTERVIEWING', S.jobs.filter(j => j.status === 'interviewing')],
     ['OFFER',        S.jobs.filter(j => j.status === 'offer')],
     ['REJECTED',     S.jobs.filter(j => j.status === 'rejected')],
   ];
+  const more = `<button class="btn" style="width:100%;margin-top:6px;font-size:11px" onclick="S.jobsMore=!S.jobsMore;render()">${S.jobsMore ? 'show fewer' : 'show more (top 60)'}</button>`;
   return groups.filter(([, rows]) => rows.length).map(([label, rows]) =>
-    `<div class="card"><div class="dim" style="font-size:10px;letter-spacing:.08em;margin-bottom:4px">${JOB_ICON[label.split(' ')[0].toLowerCase()] || ''} ${label} · ${rows.length}</div>${rows.map(jobRowHTML).join('')}</div>`).join('');
+    `<div class="card"><div class="dim" style="font-size:10px;letter-spacing:.08em;margin-bottom:4px">${JOB_ICON[label.split(' ')[0].toLowerCase()] || ''} ${label} · ${rows.length}</div>${rows.map(jobRowHTML).join('')}${label.startsWith('NEW') ? more : ''}</div>`).join('');
 }
 
 function jobsStatsHTML(){
@@ -4459,6 +4547,21 @@ function jobsStatsHTML(){
     </div>`;
 }
 
+/* pick a NEW posting by hand: mark interested, mint the Apply task, build the kit */
+async function jobPick(id){
+  S.lastWrite = Date.now();
+  const j = S.jobs.find(x => x.id === id); if (!j) return;
+  const title = 'Apply: ' + j.title + (j.company ? ' @ ' + j.company : '');
+  const { error } = await db.from('tasks').insert({title, project: 'Rat Race', status: 'not_started', bucket: 'active', est_minutes: 25, energy: 'LIGHT', priority: 'low', notes: (j.url || '') + (j.location ? '\n📍 ' + j.location : ''), job_id: id});
+  if (error) { toast('failed: ' + error.message); return; }
+  await db.from('job_postings').update({status: 'interested', status_changed_at: new Date().toISOString()}).eq('id', id);
+  j.status = 'interested';
+  const { data: t } = await db.from('tasks').select('*').eq('job_id', id).neq('status', 'done').order('created_at', {ascending: false}).limit(1);
+  if (t && t[0]) S.tasks.unshift(t[0]);
+  toast('task added — building kit');
+  render();
+  prepKit(id);
+}
 async function jobMove(id, next){
   S.lastWrite = Date.now();
   const { error } = await db.from('job_postings')
