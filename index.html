@@ -732,8 +732,11 @@ async function loadAll(){
   captureWake();
   updatePushBtn();
   refreshPushSub();
-  // previously-connected Google Calendar: refresh the token silently
-  if (localStorage.getItem('gconn') === '1' && !gcalToken()) setTimeout(() => gcalConnect(true), 800);
+  // Google Calendar: NO automatic re-auth on load. The GIS token client always
+  // opens a popup (there is no truly silent refresh in the implicit flow), and on
+  // iOS it shows the account chooser every time. Live mode lasts one token (~1h);
+  // after that the CAL tab quietly falls back to the mirrored `events` table and
+  // shows a "reconnect Google" chip. Tap it only when you want live editing.
 }
 
 /* auto-capture wake time: first app open of the day, morning window only */
@@ -3369,7 +3372,7 @@ function gcalConnect(silent){
         S.gcalRange = null; render();
       }
     },
-    error_callback: () => { if (!silent) toast('Google connect cancelled'); },
+    error_callback: () => { toast('Google connect cancelled'); },
   });
   gTokClient.requestAccessToken({prompt: silent ? '' : undefined});
 }
@@ -3378,12 +3381,10 @@ function gcalDisconnect(){
   localStorage.removeItem('gtok'); localStorage.removeItem('gconn');
   S.gcalLive = false; S.gcalRange = null; S.gcalEvents = []; S.gcalCals = null; render();
 }
-/* keep Google silently connected: refresh the token ~2 min before it lapses,
-   so it never drops mid-session and never needs a manual re-click */
+/* token watchdog: when the Google token lapses, drop to cached events without
+   opening any popup (re-auth happens ONLY from the CAL-tab chip, i.e. a real tap) */
 setInterval(() => {
-  if (!GCAL_CLIENT_ID || localStorage.getItem('gconn') !== '1' || !window.google?.accounts?.oauth2) return;
-  const t = JSON.parse(localStorage.getItem('gtok') || 'null');
-  if (!t || t.exp < Date.now() + 120000) gcalConnect(true);
+  if (S.gcalLive && !gcalToken()) { S.gcalLive = false; S.gcalRange = null; render(); }
 }, 60000);
 function allEvents(){
   // hide the Google mirrors of our own locked plan blocks (they render as blocks, not events)
@@ -3733,7 +3734,7 @@ async function loadGcal(anchorISO){
     if (!S.gcalCals) {
       const cl = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=50', {headers: {Authorization: 'Bearer ' + tok}});
       if (cl.status === 401) { localStorage.removeItem('gtok'); S.gcalCals = null; S.gcalLive = false; S.gcalLoading = false;
-        if (localStorage.getItem('gconn') === '1') gcalConnect(true); else render();   // silent re-auth instead of dropping
+        render();   // token dead: fall back to cached events, no popup (chip shows "reconnect Google")
         return; }
       const cld = cl.ok ? await cl.json() : {};
       S.gcalCals = (cld.items || []).filter(c => c.selected !== false)
@@ -3848,7 +3849,7 @@ function rCal(){
       `<button class="${S.calView === v ? 'on' : ''}" onclick="setCalView('${v}')">${v.toUpperCase()}</button>`).join('')}</div>
     ${GCAL_CLIENT_ID ? (gcalToken()
       ? `<button class="schip" style="color:${S.gcalLive ? 'var(--done)' : 'var(--dim)'}" onclick="gcalDisconnect()">● ${S.gcalLive ? 'live' : '…'}</button><button class="schip" onclick="openEv(null)">+ event</button>`
-      : `<button class="schip" onclick="gcalConnect(false)">connect Google</button>`) : ''}</div>`;
+      : `<button class="schip" onclick="gcalConnect(false)">${localStorage.getItem('gconn') === '1' ? 'reconnect Google' : 'connect Google'}</button>`) : ''}</div>`;
   loadGcal(`${S.calY}-${String(S.calM + 1).padStart(2, '0')}-15`);
   const body = S.calView === 'day' ? calDayHTML(S.calSel, byDay, evByDay, doneBy, workBy)
              : S.calView === 'week' ? calWeekHTML(byDay, evByDay, doneBy, workBy)
