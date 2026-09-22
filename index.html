@@ -4803,66 +4803,101 @@ function caffCurveSVG(h, big){
     ${big && bedX <= W ? `<text x="${bedX - 3}" y="${padT + 9}" fill="${over ? '#E1251B' : '#FBBF24'}" font-size="10" font-family="var(--mono)" text-anchor="end">bed ${c.bed_clock}</text>` : ''}
     ${dots}${ticks}</svg>`;
 }
-/* quick-log chips: [bag] + one per preset */
+/* quick-log row: [↺ again: last drink] + one chip per method → opens the picker sheet.
+   Picker = one sheet, sections reveal top-down: method → variant → size → bag → when → sip window.
+   Every section is preselected from the last log of that method, so the common case is
+   method-tap + Log (2 taps); "↺ again" is 1 tap. */
+const CAFF_METHOD_LABEL = {espresso: 'Espresso', cold_brew: 'Cold brew', drip: 'Drip', japanese_iced: 'Japanese iced', phin: 'Phin', other: 'Other'};
+const CAFF_F = {arabica: 11, robusta: 22, half_caf: 5.5, decaf: 0.33};
+/* mirrors lifeos_log_caffeine: preset mg is authoritative; a bag scales it by bean type.
+   half-caf presets = half of THIS bag + half decaf; decaf presets stay decaf whatever the bag. */
+function caffMg(p, bag, scale){
+  let mg = +p.mg;
+  if (bag) {
+    if (p.bean === 'half_caf') mg = mg * CAFF_F[bag.bean_type] / CAFF_F.arabica;
+    else if (p.bean !== 'decaf') mg = mg * CAFF_F[bag.bean_type] / CAFF_F[p.bean];
+  }
+  return Math.round(mg * (scale || 1) * 10) / 10;
+}
+function caffMethods(){ const seen = []; (S.caff?.presets || []).forEach(p => { if (!seen.includes(p.method)) seen.push(p.method); }); return seen; }
 function caffChipsHTML(){
   const c = S.caff; if (!c) return '';
-  const bag = caffBag(caffCurBag());
-  const bagChip = `<button class="schip" style="border-color:#C4B5FD;color:#C4B5FD" onclick="S.caffPick='bag';render()">🫘 ${bag ? esc(bag.label.length > 18 ? bag.label.slice(0, 17) + '…' : bag.label) : 'bag'}</button>`;
-  return `<div class="chiprow" style="margin-top:8px">${bagChip}${(c.presets || []).map(p =>
-    `<button class="schip" data-slug="${p.slug}" style="touch-action:pan-y"
-       onpointerdown="caffPressStart(event,'${p.slug}')" onpointerup="caffPressEnd(event,'${p.slug}')" onpointercancel="caffPressCancel()" onpointerleave="caffPressCancel()"
-       oncontextmenu="event.preventDefault()">${esc(p.label.replace(/ \(.*\)$/, ''))} · ${Math.round(p.mg * caffScale(p, bag))}</button>`).join('')}</div>`;
+  const ll = c.last_log;
+  const again = ll && ll.slug ? `<button class="schip" style="border-color:#C4B5FD;color:#C4B5FD" onclick="logCaffAgain()">↺ ${esc(ll.label.replace(/ \(.*\)$/, ''))}${ll.bag ? ' · ' + esc(ll.bag.split(' ')[0]) : ''} · ${Math.round(ll.mg)}</button>` : '';
+  return `<div class="chiprow" style="margin-top:8px">${again}${caffMethods().map(m =>
+    `<button class="schip" onclick="openCaffPicker('${m}')">${CAFF_METHOD_LABEL[m] || m}</button>`).join('')}</div>`;
 }
-/* bag of another bean_type scales the preset by factor ratio (server does the same in lifeos_log_caffeine) */
-const CAFF_F = {arabica: 11, robusta: 22, half_caf: 5.5, decaf: 0.33};
-function caffScale(p, bag){ return bag ? CAFF_F[bag.bean_type] / CAFF_F[p.bean] : 1; }
-let _caffLP = null;
-function caffPressStart(e, slug){ caffPressCancel(); _caffLP = {slug, fired: false, t: setTimeout(() => { _caffLP.fired = true; S.caffPick = {slug}; render(); }, CAFF_LP_MS)}; }
-function caffPressEnd(e, slug){ if (!_caffLP) return; const f = _caffLP.fired; clearTimeout(_caffLP.t); _caffLP = null; if (!f) logCaff(slug, 0); }
-function caffPressCancel(){ if (_caffLP) { clearTimeout(_caffLP.t); if (!_caffLP.fired) _caffLP = null; } }
-async function logCaff(slug, minsAgo, bagId){
-  const ts = new Date(Date.now() - (minsAgo || 0) * 60000).toISOString();
-  const bag = bagId === undefined ? caffCurBag() : bagId;
+function openCaffPicker(method){
+  const c = S.caff; const last = (c.last_by_method || {})[method] || {};
+  const presets = c.presets.filter(p => p.method === method);
+  const p = presets.find(x => x.slug === last.slug) || presets[0];
+  const bagId = last.bean_id || c.last_bag_id || null;
+  S.caffPick = {method, slug: p.slug, bag: bagId, oz: p.serving_oz, startMin: 0, sipMin: 0, custom: null};
+  render();
+}
+function caffPickSet(k, v){ S.caffPick[k] = v; if (k === 'slug') { const p = S.caff.presets.find(x => x.slug === v); S.caffPick.oz = p.serving_oz; } render(); }
+function caffPickTime(){   // custom start from the time input
+  const v = document.getElementById('cp-time')?.value; if (!v) return;
+  const now = new Date(); const [h, m] = v.split(':').map(Number);
+  const d = new Date(now); d.setHours(h, m, 0, 0); if (d > now) d.setDate(d.getDate() - 1);
+  S.caffPick.custom = d.toISOString(); S.caffPick.startMin = null; render();
+}
+function caffPickStart(){ const pk = S.caffPick; return pk.custom ? new Date(pk.custom) : new Date(Date.now() - (pk.startMin || 0) * 60000); }
+function caffSheetHTML(){
+  const pk = S.caffPick; if (!pk) return '';
+  const c = S.caff;
+  const close = `onclick="if(event.target===this){S.caffPick=null;render()}"`;
+  const presets = c.presets.filter(p => p.method === pk.method);
+  const p = presets.find(x => x.slug === pk.slug) || presets[0];
+  const bag = caffBag(pk.bag);
+  const scale = p.serving_oz && pk.oz ? pk.oz / p.serving_oz : 1;
+  const mg = caffMg(p, bag, scale);
+  const t0 = caffPickStart(); const t1 = pk.sipMin ? new Date(+t0 + pk.sipMin * 60000) : null;
+  const fmt = d => d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+  const chip = (on, act, label, style) => `<button class="schip ${on ? 'on' : ''}" style="${style || ''}" onclick="${act}">${label}</button>`;
+  const sec = (label, body) => `<label>${label}</label><div class="chiprow wrap">${body}</div>`;
+  const shortLabel = x => x.label.replace(/^Pixapresso /, '').replace(/ \(.*\)$/, '').replace(/^Cold brew /, '').replace(/^Decaf cold brew.*/, 'decaf');
+  const variants = presets.length > 1 ? sec('Which', presets.map(x => chip(x.slug === p.slug, `caffPickSet('slug','${x.slug}')`, shortLabel(x))).join('')) : '';
+  const sizes = p.serving_oz ? sec('Size', [4, 6, 8, 10, 12, 16, 20].map(oz => chip(pk.oz === oz, `caffPickSet('oz',${oz})`, oz + ' oz')).join('')
+      + `<input id="cp-oz" type="number" inputmode="decimal" placeholder="oz" value="${[4,6,8,10,12,16,20].includes(pk.oz) ? '' : (pk.oz || '')}" style="width:70px;padding:6px 8px;font-size:14px" onchange="caffPickSet('oz', +this.value || ${p.serving_oz})">`) : '';
+  const bagChips = sec('Bag', chip(!pk.bag, `caffPickSet('bag',null)`, 'preset default') +
+    c.bags.map(b => chip(pk.bag === b.id, `caffPickSet('bag','${b.id}')`,
+      `${esc(b.label)} <span style="opacity:.7">· ${b.bean_type.replace('_', '-')}${b.days_post_roast != null ? ' · ' + b.days_post_roast + 'd' : ''}</span>`)).join(''));
+  const starts = sec('Started', [0, 15, 30, 45, 60, 90, 120, 180].map(m => chip(!pk.custom && pk.startMin === m, `caffPickSet('custom',null);caffPickSet('startMin',${m})`, m ? '−' + (m >= 60 ? (m / 60) + 'h' : m + 'm') : 'now')).join('')
+    + `<input id="cp-time" type="time" value="${pk.custom ? new Date(pk.custom).toTimeString().slice(0, 5) : ''}" style="width:auto;padding:6px 8px;font-size:14px" onchange="caffPickTime()">`);
+  const sips = sec('Sipped over', [0, 10, 20, 30, 45, 60, 90, 120].map(m => chip(pk.sipMin === m, `caffPickSet('sipMin',${m})`, m ? m + ' min' : 'at once')).join(''));
+  return `<div class="overlay" ${close}><div class="sheet">
+    <h2>${CAFF_METHOD_LABEL[pk.method] || pk.method} <span class="dim" style="text-transform:none;letter-spacing:0">· ${mg} mg${bag ? ' · ' + esc(bag.label) : ''}</span></h2>
+    ${sec('Method', caffMethods().map(m => chip(m === pk.method, `openCaffPicker('${m}')`, CAFF_METHOD_LABEL[m] || m)).join(''))}
+    ${variants}${sizes}${bagChips}${starts}${sips}
+    <button class="btn primary" style="width:100%;margin-top:14px;padding:12px;white-space:nowrap" onclick="logCaffPick()">Log ${mg} mg · ${fmt(t0)}${t1 ? '–' + fmt(t1) : ''}</button>
+  </div></div>`;
+}
+async function logCaffPick(){
+  const pk = S.caffPick; const p = S.caff.presets.find(x => x.slug === pk.slug);
+  const t0 = caffPickStart(); const t1 = pk.sipMin ? new Date(+t0 + pk.sipMin * 60000) : null;
+  const scale = p.serving_oz && pk.oz ? pk.oz / p.serving_oz : 1;
+  await logCaff(pk.slug, t0.toISOString(), pk.bag, t1 ? t1.toISOString() : null, scale);
+}
+async function logCaffAgain(){
+  const ll = S.caff.last_log; if (!ll) return;
+  const t0 = new Date(); const t1 = ll.sip_min ? new Date(+t0 + ll.sip_min * 60000) : null;
+  await logCaff(ll.slug, t0.toISOString(), ll.bean_id, t1 ? t1.toISOString() : null, ll.scale || 1);
+}
+async function logCaff(slug, tsISO, bagId, tsEndISO, scale){
   S.caffPick = null;
-  const {data, error} = await db.rpc('lifeos_log_caffeine', {p_preset: slug, p_ts: ts, p_bean: bag || null});
+  const {data, error} = await db.rpc('lifeos_log_caffeine', {p_preset: slug, p_ts: tsISO, p_bean: bagId || null, p_ts_end: tsEndISO || null, p_scale: scale || 1});
   if (error || !data?.ok) { toast('❌ ' + (error?.message || data?.error || 'log failed')); return; }
   S.caffUndo = data.id;
   const over = +data.bed_level > +data.threshold;
-  toast(`☕ ${data.mg} mg${minsAgo ? ' @ ' + new Date(ts).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : ''} · ~${Math.round(data.bed_level)} mg at ${data.bed_clock}${over ? ' ⚠' : ''}`);
+  const fmt = d => new Date(d).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+  toast(`☕ ${data.mg} mg · ${fmt(data.ts)}${data.ts_end ? '–' + fmt(data.ts_end) : ''} · ~${Math.round(data.bed_level)} mg at ${data.bed_clock}${over ? ' ⚠' : ''}`);
   await refreshCaff();
 }
 async function undoCaff(id){
   const {error} = await db.from('caffeine_log').delete().eq('id', id);
   if (error) { toast('❌ ' + error.message); return; }
   S.caffUndo = null; toast('undone'); await refreshCaff();
-}
-/* long-press sheet (time shift) and bag picker share one overlay */
-function caffSheetHTML(){
-  const pk = S.caffPick; if (!pk) return '';
-  const close = `onclick="if(event.target===this){S.caffPick=null;render()}"`;
-  if (pk === 'bag') {
-    const cur = caffCurBag();
-    return `<div class="overlay" ${close}><div class="sheet"><h2>Which bag?</h2>
-      <div class="chiprow wrap">
-        <button class="schip ${!cur ? 'on' : ''}" onclick="S.caffBag=null;S.caffPick=null;render()">preset default</button>
-        ${(S.caff.bags || []).map(b => `<button class="schip ${cur === b.id ? 'on' : ''}" onclick="S.caffBag='${b.id}';S.caffPick=null;render()">${esc(b.label)} <span style="opacity:.7">· ${b.bean_type.replace('_', '-')}${b.days_post_roast != null ? ' · ' + b.days_post_roast + 'd' : ''}</span></button>`).join('')}
-      </div>
-      <div class="dim" style="font-family:var(--mono);font-size:10px;margin-top:10px">defaults to the last bag you logged · robusta doubles the preset, half-caf halves it</div>
-    </div></div>`;
-  }
-  const p = (S.caff.presets || []).find(x => x.slug === pk.slug); if (!p) return '';
-  const bag = caffBag(caffCurBag());
-  return `<div class="overlay" ${close}><div class="sheet"><h2>${esc(p.label)} · ${Math.round(p.mg * caffScale(p, bag))} mg${bag ? ' · ' + esc(bag.label) : ''}</h2>
-    <label>When did you drink it?</label>
-    <div class="chiprow wrap">
-      ${[0, 15, 30, 60, 90, 120].map(m => `<button class="schip ${!m ? 'on' : ''}" onclick="logCaff('${p.slug}', ${m})">${m ? '−' + m + ' min' : 'now'}</button>`).join('')}
-    </div>
-    <label>Bag</label>
-    <div class="chiprow wrap">
-      <button class="schip ${!bag ? 'on' : ''}" onclick="S.caffBag=null;render()">preset default</button>
-      ${(S.caff.bags || []).map(b => `<button class="schip ${bag && bag.id === b.id ? 'on' : ''}" onclick="S.caffBag='${b.id}';render()">${esc(b.label)}</button>`).join('')}
-    </div>
-  </div></div>`;
 }
 /* ---- home card ---- */
 function caffeineCardHTML(){
@@ -4880,7 +4915,7 @@ function caffeineCardHTML(){
     </div>
     <div onclick="setView('coffee')" style="cursor:pointer">${caffCurveSVG(44, false)}</div>
     ${caffChipsHTML()}
-    <div class="dim" style="font-family:var(--mono);font-size:10px;margin-top:6px">tap = log now · hold = pick time · ${c.week_count}/${c.days_target} days this week${c.streak_days >= c.streak_warn ? ` · <span style="color:var(--focus)">${c.streak_days} days straight</span>` : ''}</div>
+    <div class="dim" style="font-family:var(--mono);font-size:10px;margin-top:6px">↺ = same again · tap a method to log · ${c.week_count}/${c.days_target} days this week${c.streak_days >= c.streak_warn ? ` · <span style="color:var(--focus)">${c.streak_days} days straight</span>` : ''}</div>
   </div>`;
 }
 /* ---- COFFEE tab ---- */
@@ -4909,7 +4944,7 @@ function rCoffee(){
     <div class="ebar" style="margin-top:8px"><div style="width:${pct}%;background:${pct >= 100 ? '#E1251B' : pct >= 75 ? '#FBBF24' : '#C4B5FD'}"></div></div>
     <div class="dim" style="font-size:11px;font-family:var(--mono)">${Math.round(c.today_mg)} / ${c.ceiling} mg today${c.yesterday_mg ? ` · ${Math.round(c.yesterday_mg)} yesterday` : ''}</div>
     ${caffChipsHTML()}
-    ${(c.logs || []).length ? `<div style="margin-top:10px">${c.logs.map(l => `<div class="dim" style="font-family:var(--mono);font-size:11px;display:flex;gap:8px"><span>${l.clock}</span><span style="color:var(--text)">${esc(l.label)}</span><span style="margin-left:auto">${l.mg} mg</span><button class="btn" style="padding:1px 7px;font-size:10px" onclick="undoCaff('${l.id}')">✕</button></div>`).join('')}</div>` : ''}
+    ${(c.logs || []).length ? `<div style="margin-top:10px">${c.logs.map(l => `<div class="dim" style="font-family:var(--mono);font-size:11px;display:flex;gap:8px"><span>${l.clock}${l.clock_end ? '–' + l.clock_end : ''}</span><span style="color:var(--text)">${esc(l.label)}${l.bag ? ' <span class="dim">· ' + esc(l.bag) + '</span>' : ''}</span><span style="margin-left:auto">${l.mg} mg</span><button class="btn" style="padding:1px 7px;font-size:10px" onclick="undoCaff('${l.id}')">✕</button></div>`).join('')}</div>` : ''}
   </div>`;
   const safe = `<div class="card"><h2>Last safe cup <span class="dim" style="font-weight:400;text-transform:none;letter-spacing:0">· ≤ ${c.threshold} mg at ${c.bed_clock}</span></h2>
     ${(c.last_safe || []).map(s => `<div style="display:flex;gap:8px;font-family:var(--mono);font-size:12px;padding:4px 0;border-bottom:1px solid var(--line)">
