@@ -638,7 +638,7 @@ document.getElementById('a-email').value = OWNER;
 /* ================= data ================= */
 async function loadAll(){
   const today = todayISO();
-  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, jp, flog, jpn, jm, caf] = await Promise.all([
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, jp, flog, jpn, jm, caf, sn] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
@@ -680,6 +680,7 @@ async function loadAll(){
     db.from('job_postings').select('*').eq('status','new').order('rank_score', {ascending:false}).limit(60),
     db.from('job_materials').select('posting_id,status,track,tailored,answers,cover_note,error,updated_at'),
     db.rpc('lifeos_caffeine_context'),
+    db.rpc('lifeos_sleep_nights', {p_days: 14}),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   S.cards = cd.data || []; S.events = ev.data || []; S.freezes = fz.data || [];
@@ -711,6 +712,7 @@ async function loadAll(){
   S.focusLog = flog.data || [];    // clocked-in history → blue work spans on CAL
   S.stocks = stx.data || null;     // stocks agent: quotes + indicators + latest report
   S.caff = caf.data || null;       // caffeine module: level/curve/bags/last-safe (server-computed)
+  S.sleepNights = sn.data || [];   // sleep card: 14 nights, bed = last app close, wake = ranked confirmation
   S.expStats = {}; S.expArms = {};
   try {
     const actives = S.experiments.filter(e => e.status === 'active').slice(0, 4);
@@ -1751,7 +1753,7 @@ function rToday(){
     });
     return rows.length ? `<div class="pname">FROM TODAY'S PLAN</div>` + rows.map(taskRowHTML).join('') : '';
   })();
-  return wakeChallengeHTML() + goalConfirmsHTML() + shCard + meter + capacityWarnHTML() + callPrepHTML() + planBlocksHTML() + replanCardHTML() + creditsCardHTML() + caffeineCardHTML() + waitingOnHTML() + evCard +
+  return wakeChallengeHTML() + goalConfirmsHTML() + shCard + meter + capacityWarnHTML() + callPrepHTML() + planBlocksHTML() + replanCardHTML() + creditsCardHTML() + caffeineCardHTML() + sleepNightsCardHTML() + waitingOnHTML() + evCard +
     (bar ? `<div class="card"><h2>Today's energy</h2>${bar}</div>` : '') +
     chipsHTML() +
     (sorted.length ? sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — add a task below or check TASKS.</div>`) +
@@ -1978,7 +1980,7 @@ function creditsCardHTML(){
     ? `<div class="dim" style="font-size:11px;margin-top:6px">⏰ woke ${c.wake ? esc(String(c.wake).slice(0,5)) : '—'} · ${
         wt==='full' ? `early bird — +10cr, cap 100` :
         wt==='partial' ? `wake bonus +${c.wake_bonus || 0}cr — cap ${c.cap}` :
-        wt==='override' ? 'override — no free credits today' :
+        wt==='override' ? 'skipped quiz — no +10 quiz credits' :
         'after the bonus window — no wake bonus (cap 90)'}</div>`
     : '';
   const starterLine = !c.start_here ? '' : c.starter_done
@@ -2537,7 +2539,7 @@ async function confirmWake(method){
   toast(method === 'challenge' ? 'Wake confirmed — credits unlocked' : 'Marked awake — no bonus today');
   loadAll();
 }
-function overrideWake(){ if (confirm('Skip the challenge? No free wake credits today.')) confirmWake('override'); }
+function overrideWake(){ if (confirm('Skip the challenge? You lose the +10 quiz credits; the early-bird bonus still counts from now.')) confirmWake('override'); }
 
 /* live "what do I need tonight" meter */
 function rMeter(){
@@ -5086,7 +5088,7 @@ function brewFormHTML(){
         ${noK6 ? `<span class="dim" style="font-family:var(--mono);font-size:10px;align-self:center">flavored → no K6</span>` : ''}</div>`;
   return `<div style="background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:10px;margin-bottom:10px">
     <label class="dim" style="font-family:var(--mono);font-size:10px;text-transform:uppercase">Method</label>
-    ${chips('method', ['espresso', 'cold_brew', 'drip', 'japanese_iced'], x => x.replace('_', ' '))}
+    ${chips('method', ['espresso', 'cold_brew', 'drip'], x => x.replace('_', ' '))}
     <label class="dim" style="font-family:var(--mono);font-size:10px;text-transform:uppercase;display:block;margin-top:8px">Bag</label>
     <div class="chiprow">${(S.caff.bags || []).map(g => `<button class="schip ${b.bean_id === g.id ? 'on' : ''}" onclick="S.brewEdit.bean_id='${g.id}';S.brewEdit.beans='';render()">${esc(g.label)}</button>`).join('')}
       <button class="schip ${!b.bean_id ? 'on' : ''}" onclick="S.brewEdit.bean_id=null;render()">other…</button></div>
@@ -5133,6 +5135,48 @@ function caffReflectLine(){
   const c = S.caff; if (!c) return '';
   const over = +c.bed_level > +c.threshold;
   return `<div class="full" style="font-family:var(--mono);font-size:11px;${over ? 'color:var(--accent)' : 'color:var(--dim)'}">☕ Caffeine at bedtime (${c.bed_clock}): ~${Math.round(c.bed_level)} mg${over ? ' — over your ' + c.threshold + ' mg threshold' : ''} · ${Math.round(c.today_mg)} mg today</div>`;
+}
+
+/* ================= SLEEP (2026-09-22) =================
+   Bed = the phone's last app-close of the night (Shortcut → lifeos_log_sleep), wake = the
+   ranked confirmation (up > app > challenge > alarm > override). lifeos_sleep_nights() does
+   the pairing; this only draws. */
+function sleepNightsCardHTML(){
+  const nights = S.sleepNights || []; const st = S.sleepStats || {};
+  const need = +st.need_min || 480;
+  const last = nights[nights.length - 1] || null;
+  const withDur = nights.filter(n => n.dur_min);
+  const fmtH = m => m == null ? '—' : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}`;
+  const stat = (v, label, color) => `<div style="flex:1;text-align:center">
+      <div class="mono" style="font-size:22px;font-weight:700;${color ? 'color:' + color : ''}">${v}</div>
+      <div class="dim" style="font-size:10px;letter-spacing:.08em;font-family:var(--mono)">${label}</div></div>`;
+  const durColor = m => m == null ? 'var(--card2)' : m >= need - 30 ? '#4ADE80' : m >= need - 90 ? '#FBBF24' : '#E1251B';
+  const W = 600, H = 70, maxM = Math.max(need + 60, ...withDur.map(n => n.dur_min));
+  const bw = W / Math.max(nights.length, 1);
+  const bars = nights.map((n, i) => {
+    const h = n.dur_min ? (n.dur_min / maxM) * (H - 14) : 3;
+    const d = new Date(n.date + 'T12:00:00');
+    return `<rect x="${(i * bw + 3).toFixed(1)}" y="${(H - 12 - h).toFixed(1)}" width="${(bw - 6).toFixed(1)}" height="${h.toFixed(1)}" rx="3" fill="${durColor(n.dur_min)}" opacity="${n.dur_min ? .9 : .5}"><title>${n.date}: ${n.bed || '?'} → ${n.wake || '?'} ${n.dur_min ? '· ' + fmtH(n.dur_min) : '· no bedtime logged'}</title></rect>
+      <text x="${(i * bw + bw / 2).toFixed(1)}" y="${H - 2}" fill="var(--dim)" font-size="9" font-family="var(--mono)" text-anchor="middle">${'SMTWTFS'[d.getDay()]}</text>`;
+  }).join('');
+  const needY = H - 12 - (need / maxM) * (H - 14);
+  const svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:${H}px;display:block;margin:6px 0 2px">
+    <line x1="0" x2="${W}" y1="${needY.toFixed(1)}" y2="${needY.toFixed(1)}" stroke="var(--dim)" stroke-dasharray="4 4" opacity=".6"/>
+    ${bars}</svg>`;
+  const tier = S.credits?.sleep_tier;
+  const tierLine = !withDur.length
+    ? `<div class="dim" style="font-family:var(--mono);font-size:11px">no bedtimes logged yet — set up the "LifeOS Sleep" automation (bed = last app close of the night)</div>`
+    : `<div class="dim" style="font-family:var(--mono);font-size:11px">${st.baseline_n >= 3 ? `usual: bed ${st.baseline_bed_clock} · up ${st.baseline_wake_clock} · ${fmtH(st.baseline_dur_min)}` : `${withDur.length} night${withDur.length > 1 ? 's' : ''} logged — baseline after 3`}${tier && tier !== 'none' ? ` · sleep bonus ${tier === 'full' ? '+6' : tier === 'partial' ? '+3' : '+0'}` : ''}${st.debt_min > 30 ? ` · <span style="color:var(--focus)">${st.debt_min}m short</span>` : ''}</div>`;
+  const methodLabel = {up: 'up (steps)', app: 'app open', challenge: 'quiz', override: 'skipped quiz', alarm: 'alarm', shortcut: 'shortcut'};
+  return `<div class="card"><h2>😴 Sleep</h2>
+    <div style="display:flex;gap:8px;margin-bottom:4px">
+      ${stat(last?.bed || '—', 'BED')}
+      ${stat(last?.wake || '—', 'UP' + (last?.method ? ' · ' + (methodLabel[last.method] || last.method) : ''))}
+      ${stat(fmtH(last?.dur_min), 'LAST NIGHT', last?.dur_min ? durColor(last.dur_min) : undefined)}
+    </div>
+    ${svg}
+    ${tierLine}
+  </div>`;
 }
 
 </script>
