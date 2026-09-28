@@ -1425,6 +1425,8 @@ function taskRowHTML(t){
     // ℹ why: tasks the AI pulled from email/calendar carry their source in notes — expose it inline
     t.notes ? `<span style="color:var(--dim);cursor:pointer" onclick="event.stopPropagation();S.noteOpen = S.noteOpen || new Set();S.noteOpen.has('${t.id}') ? S.noteOpen.delete('${t.id}') : S.noteOpen.add('${t.id}');render()">ℹ ${(S.noteOpen && S.noteOpen.has(t.id)) ? 'hide' : 'why'}</span>` : '',
     t.energy ? `<span style="color:${en.color}">${t.energy}</span>` : '',
+    // ✕ not doing (2026-09-22): the third outcome. Deletes the open row; email-sourced tasks feed the triage's ignore list.
+    t.status !== 'done' && !((S._kids || {})[t.id] || []).length ? `<span style="color:var(--dim);cursor:pointer" title="Not doing" onclick="event.stopPropagation();dismissTask('${t.id}')">✕</span>` : '',
     t.est_minutes ? `<span>${t.est_minutes}m</span>` : '',
     dueTag(t),
     t.deadline_type === 'hard' ? `<span class="hard">HARD</span>` : '',
@@ -2152,6 +2154,8 @@ async function clockOut(){
   if (!S.focusOpen) return;
   S.lastWrite = Date.now();
   const fo = S.focusOpen;
+  // Read DNS state BEFORE the session ends (the end trigger flips it): were the feeds locked for this timer?
+  const dnsBefore = await db.rpc('lifeos_dns_status').then(r => r.data || null, () => null);
   if (fo.task_id) {
     // server does the 90%-of-est logic: done + reward, or shrink est and stay open
     const {data, error} = await db.rpc('lifeos_task_clockout', {p_session: fo.id});
@@ -2172,6 +2176,26 @@ async function clockOut(){
     toast(`Clocked out — ${mins} min → ~${Math.floor(mins / CREDIT_RATE[fo.energy] * (+fo.credit_rate || 1))} credits${(+fo.credit_rate || 1) < 1 ? ' (⅓ rate)' : ''}`);
   }
   S.focusOpen = null; render(); loadAll();   // timer disappears instantly; reload reconciles
+  flushPhoneDns(dnsBefore);
+}
+/* Feeds stayed dead for minutes after clock-out even though the server cleared the NextDNS denylist
+   within a second: NextDNS answers a blocked domain with 0.0.0.0 and TTL 300, and iOS caches that for
+   up to 5 min after the LAST lookup — and Instagram polls constantly while blocked, so the cache is
+   always fresh. iOS has no DNS flush; an Airplane-mode toggle is the one thing that drops it, and a
+   Shortcut can do that. Deep-link "LifeOS Unlock" (Airplane on → wait 2 s → Airplane off); x-success
+   brings us back. Only when the feeds were actually DNS-locked by THIS timer (reason=focus) — if he is
+   broke, clocking out unlocks nothing and there is nothing to flush. Opt out: localStorage
+   lifeos_unlock_shortcut=off. */
+function flushPhoneDns(st){
+  if (!st || !st.enabled || !st.blocked || st.reason !== 'focus') return;
+  if (!/iPhone|iPad|iPod/.test(navigator.userAgent)) return;
+  try { if (localStorage.getItem('lifeos_unlock_shortcut') === 'off') return; } catch (_e) {}
+  const back = encodeURIComponent(location.origin + location.pathname);
+  toast('📶 flushing DNS cache so feeds unlock now…');
+  setTimeout(() => {
+    location.href = 'shortcuts://x-callback-url/run-shortcut?name=' + encodeURIComponent('LifeOS Unlock')
+      + '&x-success=' + back + '&x-error=' + back + '&x-cancel=' + back;
+  }, 400);
 }
 async function spendCredits(m){
   if (!confirm(`Spend ${m} credits for ${m} minutes of scroll time?`)) return;
@@ -5177,6 +5201,20 @@ function sleepNightsCardHTML(){
     ${svg}
     ${tierLine}
   </div>`;
+}
+
+
+/* "not doing": delete an open task; if it came from email, log the dismissal so inbox-triage learns */
+async function dismissTask(id){
+  const t = S.tasks.find(x => x.id === id); if (!t) return;
+  const fromMail = /\[from email/.test(t.notes || '');
+  if (!confirm(`Not doing “${t.title}”?\nIt'll be removed${fromMail ? ' and the email triage will stop making tasks like it' : ''}.`)) return;
+  S.lastWrite = Date.now();
+  const {data, error} = await db.rpc('lifeos_dismiss_task', {p_id: id});
+  if (error || !data?.ok) { toast('❌ ' + (error?.message || data?.error || 'failed')); return; }
+  S.tasks = S.tasks.filter(x => x.id !== id && x.parent_id !== id);
+  toast(data.learned ? '✕ dropped — triage will learn from it' : '✕ dropped');
+  render();
 }
 
 </script>
