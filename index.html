@@ -3398,20 +3398,47 @@ function addForDay(){
 }
 /* --- live Google Calendar (OAuth, optional) --- */
 let gTokClient = null;
+const GCAL_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events';
 function gcalToken(){ const t = JSON.parse(localStorage.getItem('gtok') || 'null'); return (t && t.exp > Date.now()) ? t.token : null; }
+function gcalStore(token, expiresIn){
+  localStorage.setItem('gtok', JSON.stringify({token, exp: Date.now() + (Math.max(60, +expiresIn || 3600) - 60) * 1000}));
+  localStorage.setItem('gconn', '1');
+}
+/* Home-screen PWA (iOS standalone) has no popups: the GIS token popup either fails to
+   open or opens Safari and never calls back. Use the plain OAuth redirect flow there
+   (2026-09-29). Requires https://skyler-create.github.io/Life-OS/ in the OAuth client's
+   Authorized redirect URIs. */
+function gcalStandalone(){ return window.navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches); }
+function gcalRedirectAuth(){
+  const state = Math.random().toString(36).slice(2);
+  localStorage.setItem('gauth_state', state);
+  const q = new URLSearchParams({client_id: GCAL_CLIENT_ID, redirect_uri: location.origin + location.pathname, response_type: 'token',
+    scope: GCAL_SCOPE, include_granted_scopes: 'true', state});
+  location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + q.toString();
+}
+/* token coming back from the redirect flow lands in the URL hash */
+(function(){
+  if (!/access_token=/.test(location.hash)) return;
+  const p = new URLSearchParams(location.hash.slice(1));
+  if (p.get('state') && p.get('state') === localStorage.getItem('gauth_state')) gcalStore(p.get('access_token'), p.get('expires_in'));
+  localStorage.removeItem('gauth_state');
+  history.replaceState(null, '', location.pathname + location.search);
+})();
 function gcalConnect(silent){
-  if (!GCAL_CLIENT_ID || !window.google?.accounts?.oauth2) { if (!silent) toast('Google auth not loaded yet — try again'); return; }
+  if (!GCAL_CLIENT_ID) return;
+  if (gcalStandalone() || !window.google?.accounts?.oauth2) { if (!silent) gcalRedirectAuth(); return; }
   gTokClient = gTokClient || google.accounts.oauth2.initTokenClient({
     client_id: GCAL_CLIENT_ID,
-    scope: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events',
+    scope: GCAL_SCOPE,
     callback: r => {
-      if (r.access_token) {
-        localStorage.setItem('gtok', JSON.stringify({token: r.access_token, exp: Date.now() + (r.expires_in - 60) * 1000}));
-        localStorage.setItem('gconn', '1');
-        S.gcalRange = null; render();
-      }
+      if (r.access_token) { gcalStore(r.access_token, r.expires_in); S.gcalRange = null; render(); }
+      else if (r.error) toast('Google: ' + r.error + (r.error_description ? ' — ' + r.error_description : ''));
     },
-    error_callback: () => { toast('Google connect cancelled'); },
+    error_callback: e => {
+      const t = (e && e.type) || 'failed';
+      if (t === 'popup_failed_to_open') { gcalRedirectAuth(); return; }   // popup blocked → full-page redirect works everywhere
+      toast(t === 'popup_closed' ? 'Google connect cancelled' : 'Google connect failed: ' + t + (e && e.message ? ' — ' + e.message : ''));
+    },
   });
   gTokClient.requestAccessToken({prompt: silent ? '' : undefined});
 }
@@ -5101,8 +5128,10 @@ function brewLogHTML(){
 function openBrewForm(id){
   const src = id ? (S.brews || []).find(r => r.id === id) : (S.brews || [])[0];
   const base = src ? {method: src.method, bean_id: src.bean_id, beans: src.bean_id ? '' : src.beans, dose_g: src.dose_g, grind_clicks: src.grind_clicks, grinder: src.grinder,
-      temp_c: src.temp_c, water_ml: src.water_ml, preinfusion: src.preinfusion, caramel_g: src.caramel_g, milk_g: src.milk_g, ice_n: src.ice_n}
+      temp_c: src.temp_c, water_ml: src.water_ml, preinfusion: src.preinfusion}
     : {method: 'espresso', bean_id: caffCurBag(), dose_g: 16, grinder: 'k6', temp_c: 92, water_ml: 65};
+  // additions always start from the house defaults (2026-09-29): 5 g sugar · 5 g caramel · 100 ml milk · 2 ice
+  Object.assign(base, {sugar_g: 5, caramel_g: 5, milk_g: 100, ice_n: 2});
   S.brewEdit = id ? Object.assign({}, src, {id}) : Object.assign(base, {output_g: null, time_s: null, plain_taste: null, rating: null, notes: '', logged_caffeine: false});
   render();
   setTimeout(() => document.getElementById('bf-dose')?.scrollIntoView({block: 'center', behavior: 'smooth'}), 50);
@@ -5136,8 +5165,8 @@ function brewFormHTML(){
       ${num('output_g', 'Output g', 0.1)}${num('time_s', 'Time s')}
     </div>
     <label class="dim" style="font-family:var(--mono);font-size:10px;text-transform:uppercase;display:block;margin-top:8px">Additions</label>
-    <div class="metric-grid" style="grid-template-columns:1fr 1fr 1fr">
-      ${num('caramel_g', 'Caramel g', 0.5)}${num('milk_g', 'Milk g', 1)}${num('ice_n', 'Ice cubes', 1)}
+    <div class="metric-grid" style="grid-template-columns:1fr 1fr 1fr 1fr">
+      ${num('sugar_g', 'Sugar g', 0.5)}${num('caramel_g', 'Caramel g', 0.5)}${num('milk_g', 'Milk ml', 5)}${num('ice_n', 'Ice', 1)}
       <div class="full"><label>Notes</label><input id="bf-notes" value="${esc(b.notes || '')}" oninput="S.brewEdit.notes=this.value"></div>
     </div>
     <label class="dim" style="font-family:var(--mono);font-size:10px;text-transform:uppercase;display:block;margin-top:8px">Plain taste (before milk/sugar)</label>
@@ -5162,9 +5191,9 @@ async function saveBrew(){
     dose_g: n('dose_g'), grind_clicks: n('grind_clicks'), grinder: b.grinder || null, temp_c: n('temp_c'),
     water_ml: b.method === 'cold_brew' ? n('water_ml') : (b.water_ml ?? null),
     output_g: n('output_g'), time_s: n('time_s'), preinfusion: b.preinfusion ?? null, plain_taste: b.plain_taste || null,
-    caramel_g: n('caramel_g'), milk_g: n('milk_g'), ice_n: n('ice_n'),
+    sugar_g: n('sugar_g'), caramel_g: n('caramel_g'), milk_g: n('milk_g'), ice_n: n('ice_n'),
     rating: b.rating || null, notes: g('notes').trim() || null, logged_caffeine: !!b.logged_caffeine};
-  row.additions = [row.caramel_g ? row.caramel_g + 'g caramel' : '', row.milk_g ? row.milk_g + 'g milk' : '', row.ice_n ? row.ice_n + ' ice' : ''].filter(Boolean).join(', ') || null;
+  row.additions = [row.sugar_g ? row.sugar_g + 'g sugar' : '', row.caramel_g ? row.caramel_g + 'g caramel' : '', row.milk_g ? row.milk_g + 'ml milk' : '', row.ice_n ? row.ice_n + ' ice' : ''].filter(Boolean).join(', ') || null;
   if (!row.dose_g) { toast('dose?'); return; }
   if (!row.bean_id && !row.beans) { toast('pick a bag or name the beans'); return; }
   const q = b.id ? db.from('brew_log').update(row).eq('id', b.id) : db.from('brew_log').insert(row);
