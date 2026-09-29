@@ -229,6 +229,7 @@ details.bsec>.ginner{padding:0 10px 10px}
   z-index:50;display:flex;align-items:flex-end;justify-content:center}
 .sheet{background:linear-gradient(180deg,#1A1E29,#12141C);border:1px solid rgba(255,255,255,.08);
   border-radius:22px 22px 0 0;padding:12px 16px 16px;width:100%;max-width:600px;max-height:88vh;overflow-y:auto;
+  -webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;
   box-shadow:0 -12px 40px rgba(0,0,0,.5)}
 .sheet::before{content:'';display:block;width:36px;height:4px;border-radius:2px;background:var(--line);margin:0 auto 12px}
 .sheet h2{font-family:var(--mono);font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px}
@@ -807,6 +808,10 @@ async function refreshPushSub(){
 
 /* ================= live sync ================= */
 let rtChannel = null, rtTimer = null;
+/* any open editor/sheet: background re-renders must not rebuild the DOM under the
+   user's thumb (kills iOS momentum scroll, wipes half-typed inputs) */
+function uiBusy(){ return !!(S.editing || S.sending || S.sheet || S.wakeChallenge || S.planEditMode || S.brewEdit || S.caffPick || S.bagEdit || S.pbSheet || S.evSheet || S.dropAsk); }
+function uiScrolling(){ return Date.now() - Math.max(S._gsAt || 0, S._msAt || 0) < 1200; }
 function subscribeRealtime(){
   if (rtChannel) return;
   rtChannel = db.channel('lifeos-sync')
@@ -815,8 +820,8 @@ function subscribeRealtime(){
       if (Date.now() - (S.lastWrite || 0) < 2500) return;
       clearTimeout(rtTimer);
       rtTimer = setTimeout(() => {
-        if (S.editing || S.sending || S.sheet || S.wakeChallenge || S.planEditMode) return;
-        if (Date.now() - (S._gsAt || 0) < 1200) { clearTimeout(rtTimer); rtTimer = setTimeout(() => { if (!S.editing && !S.sheet && !S.planEditMode) loadAll(); }, 1200); return; } // don't rebuild the calendar mid-scroll
+        if (uiBusy()) return;
+        if (uiScrolling()) { clearTimeout(rtTimer); rtTimer = setTimeout(() => { if (!uiBusy() && !uiScrolling()) loadAll(); }, 1200); return; } // don't rebuild mid-scroll
         loadAll();
       }, 600);
     })
@@ -871,7 +876,7 @@ function refreshLight(){
       ]);
       if (cr.data) S.credits = cr.data;
       if (gl.data) S.goalLogsToday = gl.data;
-      if (!S.editing && !S.sheet && !S.wakeChallenge && !S.planEditMode) render();
+      if (!uiBusy() && !uiScrolling()) render();
     } catch (e) { /* next loadAll catches up */ }
   }, 350);
 }
@@ -1004,7 +1009,10 @@ function sheetHTML(){
       `<button class="schip ${sh.energy === e ? 'on' : ''}" style="${sh.energy === e ? 'background:' + ENERGY[e].hex + ';border-color:' + ENERGY[e].hex + ';color:#17181A' : ''}" onclick="S.sheet.energy='${e}';render()">${e}</button>`).join('')}</div>
     <label>Est. time — ${chunkHint}</label>
     <div class="chiprow">${ests.map(v =>
-      `<button class="schip ${sh.est === v ? 'on' : ''}" onclick="S.sheet.est=${v};render()">${v}m</button>`).join('')}</div>
+      `<button class="schip ${sh.est === v ? 'on' : ''}" onclick="S.sheet.est=${v};render()">${v}m</button>`).join('')}
+      <input id="sh-est" type="number" inputmode="numeric" min="1" step="5" placeholder="min" value="${sh.est && !ests.includes(sh.est) ? sh.est : ''}"
+        style="width:74px;flex:0 0 auto;padding:6px 8px;font-size:13px;font-family:var(--mono)" onchange="S.sheet.est=+this.value||null;render()"></div>
+    ${sh.est ? `<div class="dim" style="font-family:var(--mono);font-size:11px;margin-top:4px">${sh.est >= 60 ? Math.floor(sh.est / 60) + 'h ' + (sh.est % 60 ? sh.est % 60 + 'm' : '') : sh.est + 'm'}</div>` : ''}
     <label>Project</label>
     <div class="chiprow wrap">
       <button class="schip ${!sh.project ? 'on' : ''}" onclick="pickProject(-1)">none</button>
@@ -1260,12 +1268,13 @@ function render(){
 /* swipe left/right (touch OR mouse drag) to switch tabs — page follows the finger */
 (() => {
   const mainEl = document.getElementById('main');
+  mainEl.addEventListener('scroll', () => { S._msAt = Date.now(); }, {passive: true});
   let sw = null;
-  const excluded = t => t && t.closest && t.closest('nav,#addbar,#sheetroot,#auth,input,textarea,select,.chips,.chiprow,.prow,.pdrag');
+  const excluded = t => t && t.closest && t.closest('nav,#addbar,#sheetroot,#auth,input,textarea,select,.chips,.chiprow,.prow,.pdrag,.noswipe,.metric-grid');
   document.addEventListener('pointerdown', e => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (excluded(e.target)) return;
-    if (S.sheet || S.editing) return;
+    if (uiBusy()) return;
     sw = {x: e.clientX, y: e.clientY, t: Date.now(), active: false, tgt: e.target};
   }, {passive: true});
   document.addEventListener('pointermove', e => {
@@ -1331,7 +1340,7 @@ function render(){
       mainEl.style.transition = 'transform .18s cubic-bezier(.2,.8,.3,1), opacity .18s';
       mainEl.style.transform = ''; mainEl.style.opacity = '';
     };
-    if (!wasActive || S.sheet || S.editing) { snapBack(); return; }
+    if (!wasActive || uiBusy()) { snapBack(); return; }
     // a real drag shouldn't also count as a click on whatever's under the finger
     const kill = ev => { ev.stopPropagation(); ev.preventDefault(); };
     document.addEventListener('click', kill, {capture: true, once: true});
@@ -2207,7 +2216,7 @@ async function spendCredits(m){
   loadAll();
 }
 /* tick the running timer display */
-setInterval(() => { if (S.focusOpen && S.view === 'today' && !S.editing && !S.sheet && !S.evSheet && !S.wakeChallenge && !S.planEditMode && document.activeElement?.id !== 'replanText') render(); }, 30000);
+setInterval(() => { if (S.focusOpen && S.view === 'today' && !uiBusy() && !uiScrolling() && document.activeElement?.id !== 'replanText') render(); }, 30000);
 
 /* auto-complete a task-clocked session once it reaches the task's estimate,
    then DETACH so the clock keeps running as general time (still earning). */
@@ -5092,8 +5101,8 @@ function brewLogHTML(){
 function openBrewForm(id){
   const src = id ? (S.brews || []).find(r => r.id === id) : (S.brews || [])[0];
   const base = src ? {method: src.method, bean_id: src.bean_id, beans: src.bean_id ? '' : src.beans, dose_g: src.dose_g, grind_clicks: src.grind_clicks, grinder: src.grinder,
-      temp_c: src.temp_c, water_ml: src.water_ml, preinfusion: src.preinfusion, additions: src.additions}
-    : {method: 'espresso', bean_id: caffCurBag(), dose_g: 16, grinder: 'k6', temp_c: 92};
+      temp_c: src.temp_c, water_ml: src.water_ml, preinfusion: src.preinfusion, caramel_g: src.caramel_g, milk_g: src.milk_g, ice_n: src.ice_n}
+    : {method: 'espresso', bean_id: caffCurBag(), dose_g: 16, grinder: 'k6', temp_c: 92, water_ml: 65};
   S.brewEdit = id ? Object.assign({}, src, {id}) : Object.assign(base, {output_g: null, time_s: null, plain_taste: null, rating: null, notes: '', logged_caffeine: false});
   render();
   setTimeout(() => document.getElementById('bf-dose')?.scrollIntoView({block: 'center', behavior: 'smooth'}), 50);
@@ -5103,27 +5112,33 @@ function brewFormHTML(){
   const noGrinder = bag && bag.pre_ground, noK6 = bag && bag.flavored;
   if (noGrinder && b.grinder) b.grinder = null; if (noK6 && b.grinder === 'k6') b.grinder = 'oxo';
   const chips = (k, opts, fmt) => `<div class="chiprow">${opts.map(o => `<button class="schip ${b[k] === o ? 'on' : ''}" onclick="S.brewEdit.${k}=${o === null ? 'null' : "'" + o + "'"};render()">${(fmt || (x => x))(o)}</button>`).join('')}</div>`;
-  const num = (k, label, step) => `<div><label>${label}</label><input id="bf-${k}" type="number" inputmode="decimal" step="${step || 1}" value="${b[k] ?? ''}"></div>`;
+  const num = (k, label, step) => `<div><label>${label}</label><input id="bf-${k}" type="number" inputmode="decimal" step="${step || 1}" value="${b[k] ?? ''}" oninput="S.brewEdit.${k}=this.value===''?null:+this.value"></div>`;
+  // Pixa line: only two marks get used — a two-way toggle beats a number box
+  const pixa = b.method === 'cold_brew' ? num('water_ml', 'Water ml')
+    : `<div><label>Pixa line ml</label><div class="chiprow">${[65, 80].map(v => `<button class="schip ${+b.water_ml === v ? 'on' : ''}" onclick="S.brewEdit.water_ml=${v};render()">${v}</button>`).join('')}</div></div>`;
   const grinderRow = noGrinder
     ? `<div class="dim" style="font-family:var(--mono);font-size:11px;color:var(--accent)">🚫 ${esc(bag.label)} is pre-ground — no grinder</div>`
     : `<div class="chiprow">${['k6', 'oxo'].map(g => noK6 && g === 'k6'
         ? `<button class="schip" style="opacity:.4;text-decoration:line-through" onclick="toast('${esc(bag.label)} is flavored — K6 stays clean')">k6</button>`
         : `<button class="schip ${b.grinder === g ? 'on' : ''}" onclick="S.brewEdit.grinder='${g}';render()">${g}</button>`).join('')}
         ${noK6 ? `<span class="dim" style="font-family:var(--mono);font-size:10px;align-self:center">flavored → no K6</span>` : ''}</div>`;
-  return `<div style="background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:10px;margin-bottom:10px">
+  return `<div class="noswipe" style="background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:10px;margin-bottom:10px">
     <label class="dim" style="font-family:var(--mono);font-size:10px;text-transform:uppercase">Method</label>
     ${chips('method', ['espresso', 'cold_brew', 'drip'], x => x.replace('_', ' '))}
     <label class="dim" style="font-family:var(--mono);font-size:10px;text-transform:uppercase;display:block;margin-top:8px">Bag</label>
     <div class="chiprow">${(S.caff.bags || []).map(g => `<button class="schip ${b.bean_id === g.id ? 'on' : ''}" onclick="S.brewEdit.bean_id='${g.id}';S.brewEdit.beans='';render()">${esc(g.label)}</button>`).join('')}
       <button class="schip ${!b.bean_id ? 'on' : ''}" onclick="S.brewEdit.bean_id=null;render()">other…</button></div>
-    ${!b.bean_id ? `<input id="bf-beans" placeholder="bean name (one-off)" value="${esc(b.beans || '')}" style="margin-top:6px">` : ''}
+    ${!b.bean_id ? `<input id="bf-beans" placeholder="bean name (one-off)" value="${esc(b.beans || '')}" style="margin-top:6px" oninput="S.brewEdit.beans=this.value">` : ''}
     <label class="dim" style="font-family:var(--mono);font-size:10px;text-transform:uppercase;display:block;margin-top:8px">Grinder</label>
     ${grinderRow}
     <div class="metric-grid" style="margin-top:8px">
-      ${num('dose_g', 'Dose g', 0.1)}${noGrinder ? '' : num('grind_clicks', 'Clicks')}${num('temp_c', '°C')}${num('water_ml', b.method === 'cold_brew' ? 'Water ml' : 'Pixa line ml')}
+      ${num('dose_g', 'Dose g', 0.1)}${noGrinder ? '' : num('grind_clicks', 'Clicks')}${num('temp_c', '°C')}${pixa}
       ${num('output_g', 'Output g', 0.1)}${num('time_s', 'Time s')}
-      <div class="full"><label>Additions</label><input id="bf-additions" placeholder="10g caramel, 35g milk, 4 ice" value="${esc(b.additions || '')}"></div>
-      <div class="full"><label>Notes</label><input id="bf-notes" value="${esc(b.notes || '')}"></div>
+    </div>
+    <label class="dim" style="font-family:var(--mono);font-size:10px;text-transform:uppercase;display:block;margin-top:8px">Additions</label>
+    <div class="metric-grid" style="grid-template-columns:1fr 1fr 1fr">
+      ${num('caramel_g', 'Caramel g', 0.5)}${num('milk_g', 'Milk g', 1)}${num('ice_n', 'Ice cubes', 1)}
+      <div class="full"><label>Notes</label><input id="bf-notes" value="${esc(b.notes || '')}" oninput="S.brewEdit.notes=this.value"></div>
     </div>
     <label class="dim" style="font-family:var(--mono);font-size:10px;text-transform:uppercase;display:block;margin-top:8px">Plain taste (before milk/sugar)</label>
     ${chips('plain_taste', ['sour', 'balanced', 'bitter', 'flat', null], x => x || '—')}
@@ -5144,9 +5159,12 @@ async function saveBrew(){
   const b = S.brewEdit; const g = k => document.getElementById('bf-' + k)?.value ?? '';
   const n = k => g(k) === '' ? null : +g(k);
   const row = {method: b.method, bean_id: b.bean_id || null, beans: b.bean_id ? null : (g('beans').trim() || null),
-    dose_g: n('dose_g'), grind_clicks: n('grind_clicks'), grinder: b.grinder || null, temp_c: n('temp_c'), water_ml: n('water_ml'),
+    dose_g: n('dose_g'), grind_clicks: n('grind_clicks'), grinder: b.grinder || null, temp_c: n('temp_c'),
+    water_ml: b.method === 'cold_brew' ? n('water_ml') : (b.water_ml ?? null),
     output_g: n('output_g'), time_s: n('time_s'), preinfusion: b.preinfusion ?? null, plain_taste: b.plain_taste || null,
-    additions: g('additions').trim() || null, rating: b.rating || null, notes: g('notes').trim() || null, logged_caffeine: !!b.logged_caffeine};
+    caramel_g: n('caramel_g'), milk_g: n('milk_g'), ice_n: n('ice_n'),
+    rating: b.rating || null, notes: g('notes').trim() || null, logged_caffeine: !!b.logged_caffeine};
+  row.additions = [row.caramel_g ? row.caramel_g + 'g caramel' : '', row.milk_g ? row.milk_g + 'g milk' : '', row.ice_n ? row.ice_n + ' ice' : ''].filter(Boolean).join(', ') || null;
   if (!row.dose_g) { toast('dose?'); return; }
   if (!row.bean_id && !row.beans) { toast('pick a bag or name the beans'); return; }
   const q = b.id ? db.from('brew_log').update(row).eq('id', b.id) : db.from('brew_log').insert(row);
