@@ -5306,17 +5306,29 @@ function sleepNightsCardHTML(){
       <div class="mono" style="font-size:22px;font-weight:700;${color ? 'color:' + color : ''}">${v}</div>
       <div class="dim" style="font-size:10px;letter-spacing:.08em;font-family:var(--mono)">${label}</div></div>`;
   const durColor = m => m == null ? 'var(--card2)' : m >= need - 30 ? '#4ADE80' : m >= need - 90 ? '#FBBF24' : '#E1251B';
-  const W = 600, H = 70, maxM = Math.max(need + 60, ...withDur.map(n => n.dur_min));
-  const bw = W / Math.max(nights.length, 1);
+  // Chart: hours on the Y axis (gridline every 2 h), the duration written on top of every bar, dashed "need" line.
+  // Uniform scaling (no preserveAspectRatio=none) so the text isn't stretched on wide screens.
+  const W = 360, H = 104, L = 24, TOP = 12, BOT = 12;
+  const plotH = H - TOP - BOT, plotW = W - L;
+  const maxM = Math.ceil(Math.max(need + 60, ...withDur.map(n => n.dur_min)) / 120) * 120;   // top of axis = next even hour
+  const yOf = m => TOP + plotH - (m / maxM) * plotH;
+  const bw = plotW / Math.max(nights.length, 1);
+  const grid = [];
+  for (let m = 120; m <= maxM; m += 120) grid.push(`<line x1="${L}" x2="${W}" y1="${yOf(m).toFixed(1)}" y2="${yOf(m).toFixed(1)}" stroke="var(--line)" opacity=".5"/>
+    <text x="${L - 4}" y="${(yOf(m) + 3).toFixed(1)}" fill="${Math.abs(m - need) < 60 ? 'var(--focus)' : 'var(--dim)'}" font-size="8" font-family="var(--mono)" text-anchor="end">${m / 60}h</text>`);
   const bars = nights.map((n, i) => {
-    const h = n.dur_min ? (n.dur_min / maxM) * (H - 14) : 3;
+    const h = n.dur_min ? (n.dur_min / maxM) * plotH : 2;
+    const x = L + i * bw, y = TOP + plotH - h;
     const d = new Date(n.date + 'T12:00:00');
-    return `<rect x="${(i * bw + 3).toFixed(1)}" y="${(H - 12 - h).toFixed(1)}" width="${(bw - 6).toFixed(1)}" height="${h.toFixed(1)}" rx="3" fill="${durColor(n.dur_min)}" opacity="${n.dur_min ? .9 : .5}"><title>${n.date}: ${n.bed || '?'} → ${n.wake || '?'} ${n.dur_min ? '· ' + fmtH(n.dur_min) : '· no bedtime logged'}</title></rect>
-      <text x="${(i * bw + bw / 2).toFixed(1)}" y="${H - 2}" fill="var(--dim)" font-size="9" font-family="var(--mono)" text-anchor="middle">${'SMTWTFS'[d.getDay()]}</text>`;
+    const lbl = n.dur_min ? (bw >= 22 ? fmtH(n.dur_min) : (n.dur_min / 60).toFixed(1)) : '';
+    return `<rect x="${(x + 2).toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - 4).toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="${durColor(n.dur_min)}" opacity="${n.dur_min ? .9 : .5}"><title>${n.date}: ${n.bed || '?'} → ${n.wake || '?'} ${n.dur_min ? '· ' + fmtH(n.dur_min) : '· no bedtime logged'}</title></rect>
+      ${lbl ? `<text x="${(x + bw / 2).toFixed(1)}" y="${(y - 2).toFixed(1)}" fill="var(--text)" font-size="7.5" font-family="var(--mono)" text-anchor="middle">${lbl}</text>` : ''}
+      <text x="${(x + bw / 2).toFixed(1)}" y="${H - 2}" fill="var(--dim)" font-size="8" font-family="var(--mono)" text-anchor="middle">${'SMTWTFS'[d.getDay()]}</text>`;
   }).join('');
-  const needY = H - 12 - (need / maxM) * (H - 14);
-  const svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:${H}px;display:block;margin:6px 0 2px">
-    <line x1="0" x2="${W}" y1="${needY.toFixed(1)}" y2="${needY.toFixed(1)}" stroke="var(--dim)" stroke-dasharray="4 4" opacity=".6"/>
+  const needY = yOf(need);
+  const svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;margin:6px 0 2px">
+    ${grid.join('')}
+    <line x1="${L}" x2="${W}" y1="${needY.toFixed(1)}" y2="${needY.toFixed(1)}" stroke="var(--focus)" stroke-dasharray="4 4" opacity=".7"/>
     ${bars}</svg>`;
   const tier = S.credits?.sleep_tier;
   const tierLine = !withDur.length
