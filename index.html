@@ -13,7 +13,6 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 :root{
   --bg:#0B0C10; --card:#161923; --card2:#1E222E; --line:#272C39;
@@ -2000,8 +1999,8 @@ function creditsCardHTML(){
       <button class="btn primary" style="margin-left:auto;flex:0 0 auto" onclick="clockOut()">Clock out</button></div>`;
   } else {
     timer = `<div style="display:flex;align-items:center;gap:6px">
-      ${['DEEP','FOCUS','LIGHT'].map(e => `<button class="schip" style="flex:1;white-space:nowrap;font-size:11px;padding:7px 6px;text-align:center;touch-action:pan-y;border-color:${ENERGY[e].hex};color:${ENERGY[e].hex}" onclick="clockIn('${e}')">${e} · ${CREDIT_RATE[e] * 3}m/cr</button>`).join('')}</div>
-    <div class="dim" style="font-size:10px;font-family:var(--mono);margin-top:4px">general clock-in = ⅓ rate · hit ▶ on a plan task for full rate (${['DEEP','FOCUS','LIGHT'].map(e => CREDIT_RATE[e] + 'm').join('/')})</div>`;
+      ${['DEEP','FOCUS','LIGHT'].map(e => `<button class="schip" style="flex:1;white-space:nowrap;font-size:11px;padding:7px 6px;text-align:center;touch-action:pan-y;border-color:${ENERGY[e].hex};color:${ENERGY[e].hex}" onclick="clockIn('${e}')">${e} · ${CREDIT_RATE[e] * (c.urgent_mode ? 3 : 1)}m/cr</button>`).join('')}</div>
+    <div class="dim" style="font-size:10px;font-family:var(--mono);margin-top:4px">${c.urgent_mode ? 'deadline week: untethered clock-in = ⅓ rate · hit ▶ on any task for full rate (' + ['DEEP','FOCUS','LIGHT'].map(e => CREDIT_RATE[e] + 'm').join('/') + ')' : 'any task or general clock-in: ' + ['DEEP','FOCUS','LIGHT'].map(e => CREDIT_RATE[e] + 'm').join('/') + ' per credit'}</div>`;
   }
   const scroll = c.scroll_open
     ? `<div style="color:var(--accent);font-family:var(--mono);font-size:11px;margin-top:6px">📱 ${esc(c.scroll_open)} meter RUNNING — 1 credit/min${/\(blocked\)/.test(c.scroll_open) ? ' · sneak-back trap, chains to 90m/day' : ', auto-cuts at 30m without a close'}</div>`
@@ -2064,7 +2063,9 @@ async function clockIn(energy){
   S.lastWrite = Date.now();
   const {data, error} = await db.from('focus_sessions').insert({energy}).select().single();
   if (error) { toast('Clock-in failed: ' + error.message); return; }
-  S.focusOpen = data; render(); toast('Clocked in — ' + energy + ' general = ⅓ rate (1cr per ' + CREDIT_RATE[energy] * 3 + 'm) · plan tasks earn full');
+  S.focusOpen = data; render();
+  const third = (+data.credit_rate || 1) < 1;
+  toast('Clocked in — ' + energy + (third ? ' general = ⅓ rate this week (1cr per ' + CREDIT_RATE[energy] * 3 + 'm) · ▶ on a task earns full' : ' general · 1cr per ' + CREDIT_RATE[energy] + 'm'));
 }
 /* one-tap clock-in on today's START HERE task — unlocks the 10 free credits */
 function startStartHere(){
@@ -2229,18 +2230,30 @@ async function clockOut(opts){
   await loadAll();   // reconcile (awaited so a task started right after can't be overwritten by this reload)
   if (!(opts && opts.noFlush)) flushPhoneDns(dnsBefore);
 }
-/* Feeds stayed dead for minutes after clock-out even though the server cleared the NextDNS denylist
-   within a second: NextDNS answers a blocked domain with 0.0.0.0 and TTL 300, and iOS caches that for
-   up to 5 min after the LAST lookup — and Instagram polls constantly while blocked, so the cache is
-   always fresh. iOS has no DNS flush; an Airplane-mode toggle is the one thing that drops it, and a
-   Shortcut can do that. Deep-link "LifeOS Unlock" (Airplane on → wait 2 s → Airplane off); x-success
-   brings us back. Only when the feeds were actually DNS-locked by THIS timer (reason=focus) — if he is
-   broke, clocking out unlocks nothing and there is nothing to flush. Opt out: localStorage
-   lifeos_unlock_shortcut=off. */
-function flushPhoneDns(st){
-  if (!st || !st.enabled || !st.blocked || st.reason !== 'focus') return;
+/* Feeds stayed dead for minutes after clock-out even though the server cleared NextDNS within seconds:
+   NextDNS answers a blocked domain with 0.0.0.0 and iOS caches that for up to 5 min after the LAST
+   lookup — and Instagram polls constantly while blocked, so the cache is always fresh. iOS has no DNS
+   flush; an Airplane-mode toggle is the one thing that drops it, and a Shortcut can do that. Deep-link
+   "LifeOS Unlock" (Airplane on → wait 2 s → Airplane off); x-success brings us back.
+   2026-10-05: wait until the server has VERIFIED NextDNS is open (dns-apply reports in_sync and not
+   blocked) before toggling — flushing while NextDNS still says 0.0.0.0 just re-caches the block.
+   If the new state is still "blocked" (broke / gated), there is nothing to unlock. Opt out:
+   localStorage lifeos_unlock_shortcut=off. */
+async function flushPhoneDns(st){
+  if (!st || !st.enabled || !st.blocked) return;
   if (!/iPhone|iPad|iPod/.test(navigator.userAgent)) return;
   try { if (localStorage.getItem('lifeos_unlock_shortcut') === 'off') return; } catch (_e) {}
+  const t0 = Date.now();
+  for (let i = 0; i < 20; i++) {                       // up to ~40 s
+    const r = await db.rpc('lifeos_dns_status').then(x => x.data || null, () => null);
+    if (r && r.wanted) return;                         // still meant to be blocked → nothing to flush
+    if (r && !r.blocked && r.in_sync) break;           // NextDNS verified open → safe to flush
+    toast('📶 waiting for NextDNS to open… ' + Math.round((Date.now() - t0) / 1000) + 's');
+    await new Promise(res => setTimeout(res, 2000));
+  }
+  runUnlockShortcut();
+}
+function runUnlockShortcut(){
   const back = encodeURIComponent(location.origin + location.pathname);
   toast('📶 flushing DNS cache so feeds unlock now…');
   setTimeout(() => {
@@ -2248,6 +2261,13 @@ function flushPhoneDns(st){
       + '&x-success=' + back + '&x-error=' + back + '&x-cancel=' + back;
   }, 400);
 }
+/* opened from the "✅ Feeds unblocked" push (url ./?unlock=1): the server already flipped NextDNS, the
+   phone just has stale 0.0.0.0 answers — flush them */
+window.addEventListener('load', () => {
+  if (!/[?&]unlock=1/.test(location.search)) return;
+  history.replaceState(null, '', location.pathname);
+  setTimeout(() => flushPhoneDns({enabled: true, blocked: true, reason: 'broke'}), 1500);
+});
 async function spendCredits(m){
   if (!confirm(`Spend ${m} credits for ${m} minutes of scroll time?`)) return;
   S.lastWrite = Date.now();
@@ -2758,7 +2778,7 @@ function briefDayCal(){
   const allday = evs.filter(e => !e.start_time), timed = evs.filter(e => e.start_time);
   const H0 = 0, H1 = 24, PPH = 26;   // full 24h; opens scrolled to 6 AM
   const pbs = (S.planBlocks || []).filter(b => b.date === iso && b.kind !== 'call');
-  if (!evs.length && !pbs.length) return `<div class="dim" style="font-size:12px;padding:4px 0">No events and nothing planned${S.gcalLive ? '' : ' (connect Google on CAL for live events)'} — open day.</div>`;
+  if (!evs.length && !pbs.length) return `<div class="dim" style="font-size:12px;padding:4px 0">No events and nothing planned${gcalConnected() ? '' : ' (connect Google on CAL to see your calendar)'} — open day.</div>`;
   const blocks = timed.map(e => {
     const [sh, sm] = e.start_time.split(':').map(Number);
     let dur = 60;
@@ -3445,62 +3465,68 @@ function addForDay(){
     priority: 'med', deadline_type: 'self_imposed', bucket: 'active', calY: n.getFullYear(), calM: n.getMonth()};
   render();
 }
-/* --- live Google Calendar (OAuth, optional) --- */
-let gTokClient = null;
+/* --- Google Calendar, server-side (2026-10-05) ---
+   The app never holds a Google token any more. A one-time consent (auth-code flow) hands a refresh
+   token to the gcal-sync edge function, which pulls every selected calendar into the events table
+   every 5 min and pushes app edits from gcal_outbox the moment they are queued. No hourly expiry,
+   no popups, no "reconnect". Requires https://skyler-create.github.io/Life-OS/ in the OAuth
+   client's Authorized redirect URIs and GOOGLE_CLIENT_SECRET in the vault. */
 const GCAL_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events';
-function gcalToken(){ const t = JSON.parse(localStorage.getItem('gtok') || 'null'); return (t && t.exp > Date.now()) ? t.token : null; }
-function gcalStore(token, expiresIn){
-  localStorage.setItem('gtok', JSON.stringify({token, exp: Date.now() + (Math.max(60, +expiresIn || 3600) - 60) * 1000}));
-  localStorage.setItem('gconn', '1');
-}
-/* Home-screen PWA (iOS standalone) has no popups: the GIS token popup either fails to
-   open or opens Safari and never calls back. Use the plain OAuth redirect flow there
-   (2026-09-29). Requires https://skyler-create.github.io/Life-OS/ in the OAuth client's
-   Authorized redirect URIs. */
-function gcalStandalone(){ return window.navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches); }
-function gcalRedirectAuth(){
+function gcalConnected(){ return !!(S.settings && S.settings.gcal_connected_at); }
+function gcalCalsList(){ try { return JSON.parse((S.settings && S.settings.gcal_calendars) || '[]'); } catch (_e) { return []; } }
+function gcalPrimaryCal(){ const cs = gcalCalsList(); return cs.find(c => c.primary) || cs.find(c => c.writable) || {id: 'primary', name: 'primary', writable: true}; }
+function gcalConnect(){
+  if (!GCAL_CLIENT_ID) return;
   const state = Math.random().toString(36).slice(2);
   localStorage.setItem('gauth_state', state);
-  const q = new URLSearchParams({client_id: GCAL_CLIENT_ID, redirect_uri: location.origin + location.pathname, response_type: 'token',
-    scope: GCAL_SCOPE, include_granted_scopes: 'true', state});
+  const q = new URLSearchParams({client_id: GCAL_CLIENT_ID, redirect_uri: location.origin + location.pathname, response_type: 'code',
+    scope: GCAL_SCOPE, access_type: 'offline', prompt: 'consent', include_granted_scopes: 'true', state});
   location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + q.toString();
 }
-/* token coming back from the redirect flow lands in the URL hash */
-(function(){
-  if (!/access_token=/.test(location.hash)) return;
-  const p = new URLSearchParams(location.hash.slice(1));
-  if (p.get('state') && p.get('state') === localStorage.getItem('gauth_state')) gcalStore(p.get('access_token'), p.get('expires_in'));
+/* Google sends ?code=…&state=… back here; hand the code to the server once the session is restored */
+async function gcalFinishAuth(){
+  const p = new URLSearchParams(location.search);
+  const code = p.get('code'), state = p.get('state');
+  if (!code) { if (p.get('error')) { toast('Google: ' + p.get('error')); history.replaceState(null, '', location.pathname); } return; }
+  history.replaceState(null, '', location.pathname);
+  if (!state || state !== localStorage.getItem('gauth_state')) { toast('Google connect: state mismatch — try again'); return; }
   localStorage.removeItem('gauth_state');
-  history.replaceState(null, '', location.pathname + location.search);
-})();
-function gcalConnect(silent){
-  if (!GCAL_CLIENT_ID) return;
-  if (gcalStandalone() || !window.google?.accounts?.oauth2) { if (!silent) gcalRedirectAuth(); return; }
-  gTokClient = gTokClient || google.accounts.oauth2.initTokenClient({
-    client_id: GCAL_CLIENT_ID,
-    scope: GCAL_SCOPE,
-    callback: r => {
-      if (r.access_token) { gcalStore(r.access_token, r.expires_in); S.gcalRange = null; render(); }
-      else if (r.error) toast('Google: ' + r.error + (r.error_description ? ' — ' + r.error_description : ''));
-    },
-    error_callback: e => {
-      const t = (e && e.type) || 'failed';
-      if (t === 'popup_failed_to_open') { gcalRedirectAuth(); return; }   // popup blocked → full-page redirect works everywhere
-      toast(t === 'popup_closed' ? 'Google connect cancelled' : 'Google connect failed: ' + t + (e && e.message ? ' — ' + e.message : ''));
-    },
-  });
-  gTokClient.requestAccessToken({prompt: silent ? '' : undefined});
+  toast('Connecting Google…');
+  for (let i = 0; i < 20; i++) { const {data} = await db.auth.getSession(); if (data && data.session) break; await new Promise(r => setTimeout(r, 500)); }
+  const {data, error} = await db.functions.invoke('gcal-sync', {body: {action: 'exchange', code, redirect_uri: location.origin + location.pathname}});
+  if (error || !data || !data.ok) { toast('Google connect failed: ' + (error?.message || data?.error || 'unknown')); return; }
+  toast(`Google connected — ${data.calendars} calendars, ${data.events} events synced`);
+  loadAll();
 }
-function gcalDisconnect(){
-  if (!confirm('Disconnect Google Calendar? (Falls back to daily routine sync)')) return;
-  localStorage.removeItem('gtok'); localStorage.removeItem('gconn');
-  S.gcalLive = false; S.gcalRange = null; S.gcalEvents = []; S.gcalCals = null; render();
+window.addEventListener('load', () => setTimeout(gcalFinishAuth, 300));
+async function gcalDisconnect(){
+  if (!confirm('Disconnect Google Calendar? The CAL tab keeps the last synced events.')) return;
+  const {data, error} = await db.functions.invoke('gcal-sync', {body: {action: 'disconnect'}});
+  if (error || !data?.ok) { toast('Disconnect failed: ' + (error?.message || data?.error || '')); return; }
+  toast('Google disconnected'); loadAll();
 }
-/* token watchdog: when the Google token lapses, drop to cached events without
-   opening any popup (re-auth happens ONLY from the CAL-tab chip, i.e. a real tap) */
-setInterval(() => {
-  if (S.gcalLive && !gcalToken()) { S.gcalLive = false; S.gcalRange = null; renderSoft(); }
-}, 60000);
+async function gcalSyncNow(){
+  if (!gcalConnected()) { gcalConnect(); return; }
+  if (S._gcalSyncing) return; S._gcalSyncing = true; toast('Syncing Google Calendar…'); renderSoft();
+  try {
+    const {data, error} = await db.functions.invoke('gcal-sync', {body: {action: 'sync'}});
+    if (error || !data?.ok) toast('Sync failed: ' + (error?.message || data?.error || ''));
+    else toast(`Synced — ${data.events} events${data.outbox && data.outbox.done ? ', ' + data.outbox.done + ' pushed' : ''}`);
+  } finally { S._gcalSyncing = false; }
+  await loadAll();
+}
+function gcalAgo(){
+  const t = S.settings && S.settings.gcal_last_sync; if (!t) return 'never';
+  const m = Math.round((Date.now() - new Date(t).getTime()) / 60000);
+  return m < 1 ? 'just now' : m < 60 ? m + 'm ago' : Math.round(m / 60) + 'h ago';
+}
+/* queue a write for the server to push to Google; the trigger kicks gcal-sync immediately */
+async function gcalQueue(row){
+  S.lastWrite = Date.now();
+  const {error} = await db.from('gcal_outbox').insert(row);
+  if (error) toast('Google queue failed: ' + error.message);
+  return !error;
+}
 function allEvents(){
   // hide the Google mirrors of our own locked plan blocks (they render as blocks, not events)
   const mirror = new Set((S.planBlocks || []).map(b => b.gcal_id).filter(Boolean));
@@ -3514,14 +3540,15 @@ function allEvents(){
 
 /* --- two-way event editing (Google Calendar) --- */
 function openEv(i){
-  if (!gcalToken()) { toast('Connect Google on the CAL tab first'); return; }
+  if (!gcalConnected()) { toast('Connect Google on the CAL tab first'); return; }
   if (i == null) {
-    const cal = (S.gcalCals || []).find(c => c.primary) || (S.gcalCals || [])[0] || {id: 'primary'};
+    const cal = gcalPrimaryCal();
     S.evSheet = {gid: null, calId: cal.id, writable: true, title: '', date: S.calSel || calTodayISO(), start: '', end: ''};
   } else {
     const e = allEvents()[i]; if (!e) return;
-    if (!e.gid) { toast('Cached event — tap connect Google for live editing'); return; }
-    S.evSheet = {gid: e.gid, calId: e.calId, writable: e.writable, cal: e.cal, title: e.title, date: e.date, start: e.start_time || '', end: e.end_time || ''};
+    if (!e.gid) { toast('Not a Google event — edit it where it came from (' + (e.source || 'lifeOS') + ')'); return; }
+    const cal = gcalCalsList().find(c => c.id === (e.cal_id || e.calId)) || {id: e.cal_id || e.calId || 'primary', writable: true};
+    S.evSheet = {gid: e.gid, calId: cal.id, writable: cal.writable !== false, cal: e.cal, title: e.title, date: e.date, start: e.start_time || '', end: e.end_time || '', rowId: e.id};
   }
   render();
 }
@@ -3538,8 +3565,8 @@ function evSheetHTML(){
       <input id="ev-start" type="time" value="${sh.start}" style="flex:1" ${ro ? 'disabled' : ''} onchange="S.evSheet.start=this.value">
       <input id="ev-end" type="time" value="${sh.end}" style="flex:1" ${ro ? 'disabled' : ''} onchange="S.evSheet.end=this.value">
     </div>
-    ${!sh.gid && (S.gcalCals || []).filter(c => c.writable).length > 1 ? `<label>Calendar</label>
-      <div class="chiprow wrap">${S.gcalCals.filter(c => c.writable).map(c =>
+    ${!sh.gid && gcalCalsList().filter(c => c.writable).length > 1 ? `<label>Calendar</label>
+      <div class="chiprow wrap">${gcalCalsList().filter(c => c.writable).map(c =>
         `<button class="schip ${sh.calId === c.id ? 'on' : ''}" onclick="S.evSheet.calId='${esc(c.id)}';render()">${esc(c.name)}</button>`).join('')}</div>` : ''}
     <div style="display:flex;gap:8px;margin-top:14px">
       ${sh.gid && !ro ? `<button class="btn danger" onclick="delEv()">Delete</button>` : ''}
@@ -3552,7 +3579,7 @@ function evSheetHTML(){
    set duration (30-min snaps), release to open the pre-filled event sheet. */
 let GD = null;
 function gridPressStart(ev, iso, pph, h0){
-  if (!gcalToken()) return;
+  if (!gcalConnected()) return;
   if (ev.pointerType === 'mouse' && ev.button !== 0) return;
   if (ev.target.closest && ev.target.closest('.evblk,.wk-ev')) return;   // press on an existing event = tap-to-edit, not create
   GD = {iso, pph, h0, el: ev.currentTarget, y0: ev.clientY, x0: ev.clientX, endY: ev.clientY,
@@ -3600,7 +3627,7 @@ document.addEventListener('pointerup', () => {
   document.addEventListener('click', kill, {capture: true, once: true});
   setTimeout(() => document.removeEventListener('click', kill, {capture: true}), 150);
   const fmt = h => { const abs = g.h0 + h; return abs >= 24 ? '23:59' : String(Math.floor(abs)).padStart(2, '0') + ':' + (abs % 1 ? '30' : '00'); };
-  const cal = (S.gcalCals || []).find(c => c.primary) || (S.gcalCals || [])[0] || {id: 'primary'};
+  const cal = gcalPrimaryCal();
   S.evSheet = {gid: null, calId: cal.id, writable: true, title: '', date: g.iso, start: fmt(g.startH), end: fmt(gridDragEndH(g))};
   render();
 });
@@ -3734,39 +3761,22 @@ async function applyDrop(kind){
   toast(kind === 'lock' ? '📌 Locked & synced' : '💡 Suggestion placed');
   loadAll();
 }
-/* write-back: locked blocks live on Google Calendar as real events */
+/* write-back: locked blocks live on Google Calendar as real events (queued; the server pushes within seconds) */
 async function gcalPushBlock(b){
-  const tok = gcalToken();
-  if (!tok) { toast('Connect Google on CAL — block locked here, not synced yet'); return; }
-  const cal = (S.gcalCals || []).find(c => c.primary) || {id: 'primary'};
+  if (!gcalConnected()) { toast('Connect Google on CAL — block locked here, not synced'); return; }
+  const cal = gcalPrimaryCal();
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const body = {summary: '🔒 ' + (b.title || 'LifeOS block'),
     start: {dateTime: b.date + 'T' + minToTime(b.start_min) + ':00', timeZone: tz},
     end:   {dateTime: b.date + 'T' + minToTime(Math.min(b.end_min, 1439)) + ':00', timeZone: tz},
     extendedProperties: {private: {lifeos: '1'}}};
-  const url = 'https://www.googleapis.com/calendar/v3/calendars/' + encodeURIComponent(cal.id) + '/events' + (b.gcal_id ? '/' + encodeURIComponent(b.gcal_id) : '');
-  try {
-    const r = await fetch(url, {method: b.gcal_id ? 'PATCH' : 'POST',
-      headers: {Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json'}, body: JSON.stringify(body)});
-    if (r.status === 401 || r.status === 403) { gcalAuthLost(); return; }
-    if (r.ok) {
-      const j = await r.json();
-      if (!b.gcal_id) { b.gcal_id = j.id; S.lastWrite = Date.now(); await db.from('plan_blocks').update({gcal_id: j.id}).eq('id', b.id); }
-      S.gcalRange = null;   // force refetch so the mirror stays hidden correctly
-    }
-  } catch (_e) { /* offline — stays local */ }
+  await gcalQueue({action: 'upsert', cal_id: cal.id, gid: b.gcal_id || null, body, ref_kind: 'plan_block', ref_id: b.id});
 }
 async function gcalDeleteBlock(b){
-  const tok = gcalToken(); if (!tok || !b.gcal_id) return;
-  const cal = (S.gcalCals || []).find(c => c.primary) || {id: 'primary'};
-  try {
-    await fetch('https://www.googleapis.com/calendar/v3/calendars/' + encodeURIComponent(cal.id) + '/events/' + encodeURIComponent(b.gcal_id),
-      {method: 'DELETE', headers: {Authorization: 'Bearer ' + tok}});
-  } catch (_e) {}
-  const gid = b.gcal_id; b.gcal_id = null;
-  S.lastWrite = Date.now();
-  await db.from('plan_blocks').update({gcal_id: null}).eq('id', b.id);
-  S.gcalRange = null;
+  if (!b.gcal_id) return;
+  const cal = gcalPrimaryCal();
+  await gcalQueue({action: 'delete', cal_id: cal.id, gid: b.gcal_id, ref_kind: 'plan_block', ref_id: b.id});
+  b.gcal_id = null;
 }
 /* shared renderer: plan blocks inside a day column (day view, week view, brief) */
 function planBlockDivs(iso, H0, PPH, mode){
@@ -3782,36 +3792,33 @@ function planBlockDivs(iso, H0, PPH, mode){
 
 /* GCal-style: tap an empty slot on the week grid = new event at that day+hour */
 function weekGridTap(ev, iso){
-  if (!gcalToken()) { selDay(iso); return; }   // no Google: keep old behavior (go to day view)
+  if (!gcalConnected()) { selDay(iso); return; }   // no Google: keep old behavior (go to day view)
   const r = ev.currentTarget.getBoundingClientRect();
   const hr = Math.min(23, Math.max(0, Math.floor((ev.clientY - r.top) / 44)));   // 24h grid starts at 12 AM
-  const cal = (S.gcalCals || []).find(c => c.primary) || (S.gcalCals || [])[0] || {id: 'primary'};
+  const cal = gcalPrimaryCal();
   S.evSheet = {gid: null, calId: cal.id, writable: true, title: '', date: iso, start: String(hr).padStart(2, '0') + ':00', end: ''};
   render();
 }
 /* GCal-style: tap an empty slot on the day grid = new event at that hour */
 function dayGridTap(ev, iso, pph){
-  if (!gcalToken()) { toast('Connect Google on the CAL tab first'); return; }
+  if (!gcalConnected()) { toast('Connect Google on the CAL tab first'); return; }
   const r = ev.currentTarget.getBoundingClientRect();
   const hr = Math.min(23, Math.max(0, Math.floor((ev.clientY - r.top) / (pph || 48))));   // 24h grid starts at 12 AM
-  const cal = (S.gcalCals || []).find(c => c.primary) || (S.gcalCals || [])[0] || {id: 'primary'};
+  const cal = gcalPrimaryCal();
   S.evSheet = {gid: null, calId: cal.id, writable: true, title: '', date: iso, start: String(hr).padStart(2, '0') + ':00', end: ''};
   render();
 }
-function gcalAuthLost(){
-  localStorage.removeItem('gtok'); S.gcalCals = null; S.evSheet = null;
-  toast('Google needs fresh consent for editing — tap connect Google'); render();
-}
+function gcalAuthLost(){ S.evSheet = null; toast('Google is not connected — tap connect Google on CAL'); render(); }
 async function saveEv(){
-  const sh = S.evSheet, tok = gcalToken();
-  if (!tok) { gcalAuthLost(); return; }
+  const sh = S.evSheet;
+  if (!gcalConnected()) { gcalAuthLost(); return; }
   const g = id => document.getElementById(id)?.value || '';
   const title = g('ev-title').trim() || '(untitled)';
   const date = g('ev-date') || calTodayISO(), st = g('ev-start'), en = g('ev-end');
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const body = {summary: title};
+  let endT = en;
   if (st) {
-    let endT = en;
     if (!endT || endT <= st) { const [h, m] = st.split(':').map(Number); endT = String((h + 1) % 24).padStart(2, '0') + ':' + String(m).padStart(2, '0'); }
     body.start = {dateTime: date + 'T' + st + ':00', timeZone: tz};
     body.end   = {dateTime: date + 'T' + endT + ':00', timeZone: tz};
@@ -3819,87 +3826,29 @@ async function saveEv(){
     const nd = fromISO(date); nd.setDate(nd.getDate() + 1);
     body.start = {date}; body.end = {date: nd.toLocaleDateString('sv-SE')};
   }
-  const url = 'https://www.googleapis.com/calendar/v3/calendars/' + encodeURIComponent(sh.calId) + '/events' + (sh.gid ? '/' + encodeURIComponent(sh.gid) : '');
-  const r = await fetch(url, {method: sh.gid ? 'PATCH' : 'POST',
-    headers: {Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json'}, body: JSON.stringify(body)});
-  if (r.status === 401 || r.status === 403) { gcalAuthLost(); return; }
-  if (!r.ok) { toast('Save failed: HTTP ' + r.status); return; }
-  S.evSheet = null; S.gcalRange = null; render(); toast(sh.gid ? 'Event updated' : 'Event added');
+  const calName = (gcalCalsList().find(c => c.id === sh.calId) || {}).name || null;
+  const ok = await gcalQueue({action: 'upsert', cal_id: sh.calId || 'primary', gid: sh.gid || null, body, ref_kind: 'event', ref_id: sh.rowId || null});
+  if (!ok) return;
+  // show it now; the server's pull replaces this row with Google's copy within seconds
+  S.lastWrite = Date.now();
+  const row = {date, start_time: st || null, end_time: st ? endT : null, title, source: 'gcal', gid: sh.gid || null, cal: calName, cal_id: sh.calId || 'primary'};
+  if (sh.rowId) { await db.from('events').update(row).eq('id', sh.rowId); const e = (S.events || []).find(x => x.id === sh.rowId); if (e) Object.assign(e, row); }
+  else { const ins = await db.from('events').insert(row).select().single(); if (ins.data) (S.events = S.events || []).push(ins.data); }
+  S.evSheet = null; render(); toast(sh.gid ? 'Event updated — syncing to Google' : 'Event added — syncing to Google');
+  setTimeout(loadAll, 6000);
 }
 async function delEv(){
-  const sh = S.evSheet, tok = gcalToken();
+  const sh = S.evSheet;
   if (!confirm('Delete this event from Google Calendar?')) return;
-  const r = await fetch('https://www.googleapis.com/calendar/v3/calendars/' + encodeURIComponent(sh.calId) + '/events/' + encodeURIComponent(sh.gid),
-    {method: 'DELETE', headers: {Authorization: 'Bearer ' + tok}});
-  if (r.status === 401 || r.status === 403) { gcalAuthLost(); return; }
-  if (!r.ok && r.status !== 410) { toast('Delete failed: HTTP ' + r.status); return; }
-  S.evSheet = null; S.gcalRange = null; render(); toast('Event deleted');
+  const ok = await gcalQueue({action: 'delete', cal_id: sh.calId || 'primary', gid: sh.gid, ref_kind: 'event', ref_id: sh.rowId || null});
+  if (!ok) return;
+  S.lastWrite = Date.now();
+  if (sh.rowId) { await db.from('events').delete().eq('id', sh.rowId); S.events = (S.events || []).filter(x => x.id !== sh.rowId); }
+  S.evSheet = null; render(); toast('Event deleted — syncing to Google');
+  setTimeout(loadAll, 6000);
 }
-async function loadGcal(anchorISO){
-  const tok = gcalToken();
-  if (!tok) { S.gcalLive = false; return; }
-  const a = fromISO(anchorISO);
-  const start = new Date(a); start.setDate(a.getDate() - 31);
-  const end = new Date(a); end.setDate(a.getDate() + 62);
-  const key = start.toISOString().slice(0, 10) + '_' + end.toISOString().slice(0, 10);
-  if (S.gcalRange === key || S.gcalLoading) return;
-  S.gcalLoading = true;
-  try {
-    // all calendars, not just primary (cached until disconnect/401)
-    if (!S.gcalCals) {
-      const cl = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=50', {headers: {Authorization: 'Bearer ' + tok}});
-      if (cl.status === 401) { localStorage.removeItem('gtok'); S.gcalCals = null; S.gcalLive = false; S.gcalLoading = false;
-        render();   // token dead: fall back to cached events, no popup (chip shows "reconnect Google")
-        return; }
-      const cld = cl.ok ? await cl.json() : {};
-      S.gcalCals = (cld.items || []).filter(c => c.selected !== false)
-        .map(c => ({id: c.id, name: c.summaryOverride || c.summary || c.id, primary: !!c.primary, writable: ['owner','writer'].includes(c.accessRole)}));
-      if (!S.gcalCals.length) S.gcalCals = [{id: 'primary', name: 'primary', primary: true, writable: true}];
-    }
-    const ds = await Promise.all(S.gcalCals.map(c =>
-      fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(c.id)}/events?singleEvents=true&orderBy=startTime&maxResults=250&timeMin=${start.toISOString()}&timeMax=${end.toISOString()}`,
-        {headers: {Authorization: 'Bearer ' + tok}}).then(r => r.ok ? r.json() : {items: []}).catch(() => ({items: []}))));
-    const pad = n => String(n).padStart(2, '0');
-    const out = [];
-    ds.forEach((d, ci) => {
-      const cal = S.gcalCals[ci];
-      (d.items || []).forEach(ev => {
-        if (ev.status === 'cancelled') return;
-        const title = ev.summary || '(untitled)';
-        const base = {title, gid: ev.id, calId: cal.id, cal: cal.name, writable: cal.writable};
-        if (ev.start?.dateTime) {
-          const sd = new Date(ev.start.dateTime), ed = ev.end?.dateTime ? new Date(ev.end.dateTime) : null;
-          out.push({...base, date: sd.toLocaleDateString('sv-SE'), start_time: pad(sd.getHours()) + ':' + pad(sd.getMinutes()),
-            end_time: ed ? pad(ed.getHours()) + ':' + pad(ed.getMinutes()) : null});
-        } else if (ev.start?.date) {
-          const d0 = fromISO(ev.start.date), d1 = fromISO(ev.end?.date || ev.start.date);
-          if (d0 >= d1) out.push({...base, date: ev.start.date, start_time: null, end_time: null});
-          else { const c = new Date(d0); while (c < d1) { out.push({...base, date: c.toLocaleDateString('sv-SE'), start_time: null, end_time: null}); c.setDate(c.getDate() + 1); } }
-        }
-      });
-    });
-    out.sort((a, b) => a.date.localeCompare(b.date) || (a.start_time || '').localeCompare(b.start_time || ''));
-    S.gcalEvents = out; S.gcalRange = key; S.gcalLive = true;
-    syncEventsTable(out, start.toLocaleDateString('sv-SE'), end.toLocaleDateString('sv-SE'));  // fire-and-forget pull sync
-  } catch (_e) { S.gcalRange = key; S.gcalFailAt = Date.now(); /* keep table fallback; don't re-fetch on every render */ }
-  S.gcalLoading = false;
-  renderSoft();
-}
-/* PULL SYNC: mirror live Google events into the events table so the server
-   packer sees real busy blocks. Keyed by window replace; triggers a repack. */
-async function syncEventsTable(evts, lo, hi){
-  try {
-    S.lastWrite = Date.now();
-    await db.from('events').delete().eq('source', 'gcal').gte('date', lo).lte('date', hi);
-    const rows = evts.map(e => ({date: e.date, start_time: e.start_time, end_time: e.end_time,
-      title: e.title, source: 'gcal', gid: e.gid, cal: e.cal}));
-    for (let i = 0; i < rows.length; i += 200) {
-      S.lastWrite = Date.now();
-      await db.from('events').insert(rows.slice(i, i + 200));
-    }
-    S.events = [...(S.events || []).filter(e => e.source !== 'gcal'), ...rows];   // keep non-gcal (work/TimeTree) rows
-  } catch (_e) { /* offline — next load */ }
-}
+/* events come from the table now (server pull every 5 min + on every app write); nothing to fetch here */
+function loadGcal(_anchorISO){ S.gcalLive = false; }
 
 function calMaps(){
   const byDay = {}, evByDay = {}, doneBy = {};
@@ -3962,9 +3911,9 @@ function rCal(){
   <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
     <div class="seg" style="flex:1">${['day','week','month'].map(v =>
       `<button class="${S.calView === v ? 'on' : ''}" onclick="setCalView('${v}')">${v.toUpperCase()}</button>`).join('')}</div>
-    ${GCAL_CLIENT_ID ? (gcalToken()
-      ? `<button class="schip" style="color:${S.gcalLive ? 'var(--done)' : 'var(--dim)'}" onclick="gcalDisconnect()">● ${S.gcalLive ? 'live' : '…'}</button><button class="schip" onclick="openEv(null)">+ event</button>`
-      : `<button class="schip" onclick="gcalConnect(false)">${localStorage.getItem('gconn') === '1' ? 'reconnect Google' : 'connect Google'}</button>`) : ''}</div>`;
+    ${GCAL_CLIENT_ID ? (gcalConnected()
+      ? `<button class="schip" style="color:var(--done)" title="tap: sync now · hold: disconnect" onclick="gcalSyncNow()" oncontextmenu="event.preventDefault();gcalDisconnect()">● ${S._gcalSyncing ? 'syncing…' : 'Google ' + gcalAgo()}</button><button class="schip" onclick="openEv(null)">+ event</button>`
+      : `<button class="schip" onclick="gcalConnect()">connect Google</button>`) : ''}</div>`;
   loadGcal(`${S.calY}-${String(S.calM + 1).padStart(2, '0')}-15`);
   const body = S.calView === 'day' ? calDayHTML(S.calSel, byDay, evByDay, doneBy, workBy)
              : S.calView === 'week' ? calWeekHTML(byDay, evByDay, doneBy, workBy)
@@ -4962,6 +4911,11 @@ function caffPickPatch(){
   const b = document.getElementById('cp-log'); if (b) b.textContent = `Log ${mg} mg · ${fmt(t0)}${t1 ? '–' + fmt(t1) : ''}`;
 }
 function caffPickOz(v, dflt){ if (!S.caffPick) return; S.caffPick.oz = +v || dflt; caffPickPatch(); }
+function caffPickSip(v){   // free-typed sip duration (chips max out at 120) — no rebuild while typing
+  if (!S.caffPick) return; S.caffPick.sipMin = Math.max(0, Math.round(+v || 0));
+  document.querySelectorAll('#sheetroot .cp-sip').forEach(el => el.classList.remove('on'));
+  caffPickPatch();
+}
 function caffPickTime(){   // custom start from the time input
   const v = document.getElementById('cp-time')?.value; if (!v || !S.caffPick) return;
   const now = new Date(); const [h, m] = v.split(':').map(Number);
@@ -5001,7 +4955,9 @@ function caffSheetHTML(){
       `${esc(b.label)} <span style="opacity:.7">· ${b.bean_type.replace('_', '-')}${b.days_post_roast != null ? ' · ' + b.days_post_roast + 'd' : ''}</span>`)).join(''));
   const starts = sec('Started', [0, 15, 30, 45, 60, 90, 120, 180].map(m => chip(!pk.custom && pk.startMin === m, `S.caffPick.custom=null;caffPickSet('startMin',${m})`, m ? '−' + (m >= 60 ? (m / 60) + 'h' : m + 'm') : 'now', '', 'cp-start')).join('')
     + `<input id="cp-time" type="time" value="${pk.custom ? new Date(pk.custom).toTimeString().slice(0, 5) : ''}" style="width:auto;padding:6px 8px;font-size:16px" oninput="caffPickTime()" onchange="caffPickTime()">`);
-  const sips = sec('Sipped over', [0, 10, 20, 30, 45, 60, 90, 120].map(m => chip(pk.sipMin === m, `caffPickSet('sipMin',${m})`, m ? m + ' min' : 'at once')).join(''));
+  const SIPS = [0, 10, 20, 30, 45, 60, 90, 120];
+  const sips = sec('Sipped over', SIPS.map(m => chip(pk.sipMin === m, `caffPickSet('sipMin',${m})`, m ? m + ' min' : 'at once', '', 'cp-sip')).join('')
+    + `<input id="cp-sip" type="number" inputmode="numeric" placeholder="min" value="${SIPS.includes(pk.sipMin) ? '' : (pk.sipMin || '')}" style="width:74px;padding:6px 8px;font-size:16px" oninput="caffPickSip(this.value)">`);
   return `<div class="overlay" ${close}><div class="sheet">
     <h2>${CAFF_METHOD_LABEL[pk.method] || pk.method} <span id="cp-mg" class="dim" style="text-transform:none;letter-spacing:0">· ${mg} mg${bag ? ' · ' + esc(bag.label) : ''}</span></h2>
     ${sec('Method', caffMethods().map(m => chip(m === pk.method, `caffPickMethod('${m}')`, CAFF_METHOD_LABEL[m] || m)).join(''))}
