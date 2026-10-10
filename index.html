@@ -648,7 +648,7 @@ document.getElementById('a-email').value = OWNER;
 async function loadAll(){
   const seq = loadAll._seq = (loadAll._seq || 0) + 1;
   const today = todayISO();
-  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, jp, flog, jpn, jm, caf, sn] = await Promise.all([
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, jp, flog, jpn, jm, caf, sn, hdays] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
@@ -691,6 +691,7 @@ async function loadAll(){
     db.from('job_materials').select('posting_id,status,track,tailored,answers,cover_note,error,updated_at'),
     db.rpc('lifeos_caffeine_context'),
     db.rpc('lifeos_sleep_nights', {p_days: 14}),
+    db.rpc('lifeos_health_days', {p_days: 14}),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   S.cards = cd.data || []; S.events = ev.data || []; S.freezes = fz.data || [];
@@ -724,7 +725,8 @@ async function loadAll(){
   if (seq !== loadAll._seq) return;   // a newer loadAll is in flight — this snapshot is stale, drop it
   if (Date.now() - (S.lastWrite || 0) < 1200) { setTimeout(loadAll, 1200); return; }   // predates the user's own write
   if (caf.data) S.caff = caf.data;    // caffeine module: level/curve/bags/last-safe (server-computed); keep old on a failed RPC
-  S.sleepNights = sn.data || [];   // sleep card: 14 nights, bed = last app close, wake = ranked confirmation
+  S.sleepNights = sn.data || [];   // sleep card: 14 nights — Fitbit session when one exists, else bed = last app close, wake = ranked confirmation
+  S.healthDays = hdays.data || []; // Fitbit vitals (resting HR, HRV, steps, SpO2, resp) via Apple Health → LifeOS Health shortcut
   S.expStats = {}; S.expArms = {};
   try {
     const actives = S.experiments.filter(e => e.status === 'active').slice(0, 4);
@@ -5277,7 +5279,8 @@ function sleepNightsCardHTML(){
     const x = L + i * bw, y = TOP + plotH - h;
     const d = new Date(n.date + 'T12:00:00');
     const lbl = n.dur_min ? (bw >= 22 ? fmtH(n.dur_min) : (n.dur_min / 60).toFixed(1)) : '';
-    return `<rect x="${(x + 2).toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - 4).toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="${durColor(n.dur_min)}" opacity="${n.dur_min ? .9 : .5}"><title>${n.date}: ${n.bed || '?'} → ${n.wake || '?'} ${n.dur_min ? '· ' + fmtH(n.dur_min) : '· no bedtime logged'}</title></rect>
+    const stg = n.source === 'fitbit' && n.deep != null ? ` · deep ${n.deep}m REM ${n.rem}m awake ${n.awake}m` : '';
+    return `<rect x="${(x + 2).toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - 4).toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="${durColor(n.dur_min)}" opacity="${n.dur_min ? .9 : .5}"${n.source === 'fitbit' ? ' stroke="var(--text)" stroke-opacity=".35" stroke-width=".8"' : ''}><title>${n.date}: ${n.bed || '?'} → ${n.wake || '?'} ${n.dur_min ? '· ' + fmtH(n.dur_min) + (n.source === 'fitbit' ? ' asleep (Fitbit)' : ' in bed (phone)') : '· no bedtime logged'}${stg}</title></rect>
       ${lbl ? `<text x="${(x + bw / 2).toFixed(1)}" y="${(y - 2).toFixed(1)}" fill="var(--text)" font-size="7.5" font-family="var(--mono)" text-anchor="middle">${lbl}</text>` : ''}
       <text x="${(x + bw / 2).toFixed(1)}" y="${H - 2}" fill="var(--dim)" font-size="8" font-family="var(--mono)" text-anchor="middle">${'SMTWTFS'[d.getDay()]}</text>`;
   }).join('');
@@ -5290,15 +5293,41 @@ function sleepNightsCardHTML(){
   const tierLine = !withDur.length
     ? `<div class="dim" style="font-family:var(--mono);font-size:11px">no bedtimes logged yet — set up the "LifeOS Sleep" automation (bed = last app close of the night)</div>`
     : `<div class="dim" style="font-family:var(--mono);font-size:11px">${st.baseline_n >= 3 ? `usual: bed ${st.baseline_bed_clock} · up ${st.baseline_wake_clock} · ${fmtH(st.baseline_dur_min)}` : `${withDur.length} night${withDur.length > 1 ? 's' : ''} logged — baseline after 3`}${tier && tier !== 'none' ? ` · sleep bonus ${tier === 'full' ? '+6' : tier === 'partial' ? '+3' : '+0'}` : ''}${st.debt_min > 30 ? ` · <span style="color:var(--focus)">${st.debt_min}m short</span>` : ''}</div>`;
-  const methodLabel = {up: 'up (steps)', app: 'app open', challenge: 'quiz', override: 'skipped quiz', alarm: 'alarm', shortcut: 'shortcut'};
-  return `<div class="card"><h2>😴 Sleep</h2>
+  const methodLabel = {up: 'up (steps)', app: 'app open', challenge: 'quiz', override: 'skipped quiz', alarm: 'alarm', shortcut: 'shortcut', fitbit: 'Fitbit'};
+  const fb = last && last.source === 'fitbit';
+  // Fitbit stages: one proportional bar (deep / REM / core / awake) under the stats
+  const stagesBar = fb && last.deep != null ? (() => {
+    const segs = [['deep', last.deep, '#6366F1'], ['REM', last.rem, '#A78BFA'], ['core', last.core, '#60A5FA'], ['awake', last.awake, '#FBBF24']].filter(s => s[1] > 0);
+    const tot = segs.reduce((a, s) => a + s[1], 0) || 1;
+    return `<div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin:2px 0 4px">${segs.map(s => `<div title="${s[0]} ${s[1]}m" style="width:${(100 * s[1] / tot).toFixed(1)}%;background:${s[2]}"></div>`).join('')}</div>
+      <div class="dim mono" style="font-size:10px;display:flex;gap:10px;flex-wrap:wrap">${segs.map(s => `<span><span style="display:inline-block;width:7px;height:7px;border-radius:2px;background:${s[2]};margin-right:3px"></span>${s[0]} ${fmtH(s[1])}</span>`).join('')}${last.efficiency ? `<span>· ${Math.round(last.efficiency)}% efficient</span>` : ''}</div>`;
+  })() : '';
+  // vitals: today's resting HR / HRV vs the 14-day median (server computes the baseline + flag)
+  const v = st.vitals || {};
+  const hv = (S.healthDays || []);
+  const hToday = hv[hv.length - 1];
+  const delta = (cur, base, unit, goodUp) => cur == null || base == null ? '' : (() => { const d = Math.round(cur - base); if (!d) return ''; const good = goodUp ? d > 0 : d < 0; return ` <span style="color:${good ? '#4ADE80' : '#FBBF24'};font-size:10px">${d > 0 ? '+' : ''}${d}${unit}</span>`; })();
+  const vitalsLine = (v.rhr != null || v.hrv != null || hToday?.steps != null)
+    ? `<div class="mono" style="font-size:11px;margin-top:5px;display:flex;gap:12px;flex-wrap:wrap">
+        ${v.rhr != null ? `<span>❤️ ${Math.round(v.rhr)} bpm${delta(v.rhr, v.rhr_base, '', false)}</span>` : ''}
+        ${v.hrv != null ? `<span>〰 HRV ${Math.round(v.hrv)} ms${delta(v.hrv, v.hrv_base, '', true)}</span>` : ''}
+        ${hToday?.spo2 != null ? `<span>O₂ ${Math.round(hToday.spo2)}%</span>` : ''}
+        ${hToday?.steps != null ? `<span>👟 ${hToday.steps.toLocaleString()}</span>` : ''}
+        ${v.flag === 'strained' ? `<span style="color:#FBBF24">recover day · capacity ×${v.factor}</span>` : ''}
+      </div>` : '';
+  const srcLine = (fb || (S.healthDays || []).length || (S.settings || {}).health_last_ingest) ? ''
+    : `<div class="dim" style="font-family:var(--mono);font-size:11px;margin-top:4px">Fitbit not flowing yet — Google Health → Apple Health → Health Auto Export automation → here</div>`;
+  return `<div class="card"><h2>😴 Sleep${fb ? ' <span class="dim" style="font-size:10px;font-family:var(--mono);font-weight:400">· Fitbit</span>' : ''}</h2>
     <div style="display:flex;gap:8px;margin-bottom:4px">
-      ${stat(last?.bed || '—', 'BED')}
-      ${stat(last?.wake || '—', 'UP' + (last?.method ? ' · ' + (methodLabel[last.method] || last.method) : ''))}
+      ${stat(last?.bed || '—', fb ? 'ASLEEP AT' : 'BED')}
+      ${stat(last?.wake || '—', (fb ? 'WOKE' : 'UP') + (last?.method && !fb ? ' · ' + (methodLabel[last.method] || last.method) : ''))}
       ${stat(fmtH(last?.dur_min), 'LAST NIGHT', last?.dur_min ? durColor(last.dur_min) : undefined)}
     </div>
+    ${stagesBar}
     ${svg}
     ${tierLine}
+    ${vitalsLine}
+    ${srcLine}
   </div>`;
 }
 
