@@ -1482,7 +1482,8 @@ function taskRowHTML(t){
     <div class="tbody" ${S.editMode ? `onclick="S.editing = S.editing === '${t.id}' ? null : '${t.id}'; render()"` : ''}>
       <div class="tname">${esc(t.title)}</div>
       <div class="tmeta">${meta}</div>
-      ${(S.noteOpen && S.noteOpen.has(t.id) && !editor) ? `<div style="font-size:12px;line-height:1.5;white-space:pre-wrap;margin-top:6px;padding:8px;background:rgba(255,255,255,.04);border-radius:8px;color:var(--text)">${esc(t.notes)}</div>` : ''}
+      ${(S.noteOpen && S.noteOpen.has(t.id) && !editor) ? `<div style="font-size:12px;line-height:1.5;white-space:pre-wrap;margin-top:6px;padding:8px;background:rgba(255,255,255,.04);border-radius:8px;color:var(--text)">${esc(t.notes)}
+        <div style="margin-top:8px;white-space:normal"><button class="btn" style="font-size:11px;padding:4px 10px" onclick="event.stopPropagation();askAboutTask('${t.id}')">💬 Ask the chat about this</button></div></div>` : ''}
       ${(t.prepared_at && S.prepOpen && S.prepOpen.has(t.id) && !editor) ? prepPanelHTML(t) : ''}
       ${(t.job_id && S.kitOpen && S.kitOpen.has(t.id) && !editor) ? applyKitHTML(t) : ''}
       ${editor}
@@ -4222,13 +4223,25 @@ function rChat(){
     </div>
   </div>`;
 }
+/* "Ask the chat about this" (2026-10-15): from a task's ℹ why panel → jump to CHAT with the task
+   (title, meta, notes = the why, prep note, id) as the first message, so follow-ups have context. */
+function askAboutTask(id){
+  const t = (S.tasks || []).find(x => x.id === id); if (!t) return;
+  const meta = [t.project, t.due ? 'due ' + t.due : '', t.deadline_type === 'hard' ? 'HARD' : '',
+                t.est_minutes ? t.est_minutes + 'm' : '', t.energy, t.priority ? t.priority + ' priority' : ''].filter(Boolean).join(' · ');
+  const q = `About this task: "${t.title}"` + (meta ? ` (${meta})` : '') + `\nWhy it was added: ${t.notes || '(no notes)'}` +
+    (t.prep_note ? `\nPrep note: ${t.prep_note}` : '') + `\n(task id ${t.id})\n\nExplain where this came from, why it matters, and what exactly I need to do.`;
+  S._chatForce = q; S.view = 'chat'; render();
+  sendChat();
+}
 function clearChat(){
   if (S.chat.length && !confirm('Clear conversation?')) return;
   S.chat = []; localStorage.removeItem('chatHistory'); render();
 }
 async function sendChat(){
   const inp = document.getElementById('chatinput');
-  const text = (inp?.value || S.chatDraft || '').trim();
+  const text = (S._chatForce || inp?.value || S.chatDraft || '').trim();   // _chatForce: multi-line message from askAboutTask (an <input> would eat the newlines)
+  S._chatForce = null;
   if (!text || S.sending) return;
   S.chatDraft = '';
   S.chat.push({role: 'user', content: text});
