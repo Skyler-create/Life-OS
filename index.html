@@ -542,6 +542,109 @@ main[data-view="yc"] .nowline::before{background:#E9D5FF;box-shadow:0 0 10px rgb
   box-shadow:0 8px 24px rgba(0,0,0,.45);opacity:0;transition:opacity .3s;pointer-events:none;z-index:99}
 #toast.show{opacity:1}
 .empty{color:var(--dim);font-family:var(--mono);font-size:12px;text-align:center;padding:20px}
+
+/* ===== v5 — the "bevel pass" (2026-10-15) =====
+   Visual layer only: hero numerals, ring gauges, gradient area charts, stat
+   tiles, segmented energy bar. Additive CSS + VIZ.* helpers in the JS. Same
+   rule as v3: zero geometry/touch/z-index changes to grids, sheets, nav. */
+:root{
+  --card-a:#171B27; --card-b:#11141C;
+  --ok:#4ADE80; --ok-hi:#86EFAC; --warn:#FBBF24; --cool:#38BDF8;
+  --grad-ok:linear-gradient(135deg,#86EFAC,#34D399);
+  --grad-cool:linear-gradient(135deg,#7DD3FC,#38BDF8);
+}
+body{background-image:
+  radial-gradient(1100px 520px at 50% -10%,rgba(225,37,27,.075),transparent 60%),
+  radial-gradient(800px 460px at 110% 105%,rgba(56,189,248,.045),transparent 60%)}
+header{padding-top:18px}
+header h1{font-size:20px;letter-spacing:1.2px}
+#streakChip{display:inline-flex;align-items:center;gap:6px;padding:4px 11px 4px 8px;
+  background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));
+  border-color:rgba(255,255,255,.09);box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+#streakChip b{font-size:14px;font-weight:800;letter-spacing:-.02em;font-family:'Inter',sans-serif}
+#streakChip .flame{font-size:13px;filter:drop-shadow(0 0 6px rgba(255,120,60,.6))}
+#streakChip.hot{border-color:rgba(255,120,60,.35);background:linear-gradient(180deg,rgba(255,120,60,.14),rgba(225,37,27,.05))}
+
+/* cards: a touch deeper, rounder, lit from the top edge */
+.card{border-radius:18px;background:linear-gradient(180deg,var(--card-a),var(--card-b));
+  border-color:rgba(255,255,255,.07);padding:15px 14px 14px;
+  box-shadow:0 1px 0 rgba(255,255,255,.055) inset,0 16px 36px -14px rgba(0,0,0,.65)}
+.card h2{font-size:10.5px;letter-spacing:1.8px;color:rgba(180,187,204,.72);margin-bottom:10px}
+.starthere{background:linear-gradient(90deg,rgba(225,37,27,.12),transparent 50%),linear-gradient(180deg,var(--card-a),var(--card-b))}
+
+/* hero numerals — big, tight, tabular */
+.hero{font-family:'Inter',-apple-system,sans-serif;font-weight:800;letter-spacing:-.045em;line-height:1;
+  font-variant-numeric:tabular-nums;font-size:38px;color:#fff}
+.hero small{font-size:.42em;font-weight:600;letter-spacing:0;color:var(--dim);margin-left:2px}
+.hero.sm{font-size:26px}
+
+/* stat tiles */
+.tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.tiles.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.tile{--tc:var(--dim);position:relative;overflow:hidden;min-width:0;
+  background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.02));
+  border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:11px 11px 9px;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+.tile::before{content:'';position:absolute;left:-30%;top:-70%;width:120%;height:140%;pointer-events:none;
+  background:radial-gradient(closest-side,color-mix(in srgb,var(--tc) 22%,transparent),transparent 72%);opacity:.9}
+.tile .v{position:relative;font-family:'Inter',sans-serif;font-weight:800;font-size:23px;letter-spacing:-.035em;line-height:1.05;
+  font-variant-numeric:tabular-nums;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .v small{font-size:.5em;font-weight:600;color:var(--dim);letter-spacing:0;margin-left:1px}
+.tile.c .v{color:var(--tc)}
+.tile .l{position:relative;font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-top:4px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .d{position:relative;font-family:var(--mono);font-size:10px;margin-top:3px;color:var(--tc)}
+.tile svg.spk{position:absolute;right:0;bottom:0;width:62%;height:34px;opacity:.5;pointer-events:none}
+
+/* ring gauge */
+.ring{position:relative;flex:0 0 auto;display:inline-block}
+.ring svg{display:block;overflow:visible}
+.ring .rc{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none}
+.ring .rv{font-family:'Inter',sans-serif;font-weight:800;letter-spacing:-.05em;line-height:1;font-variant-numeric:tabular-nums;color:#fff}
+.ring .rl{font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-top:3px}
+
+/* score meter layout */
+.meterbody{display:flex;align-items:center;gap:14px}
+.meterhint{flex:1;min-width:0;font-size:13px;line-height:1.45}
+.meterhint b{color:#fff}
+.meterhint .sub{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:6px;letter-spacing:.04em}
+.meterhint .pill{display:inline-block;font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  padding:3px 8px;border-radius:999px;border:1px solid currentColor;margin-bottom:6px;opacity:.95}
+
+/* segmented energy bar — thicker, gapped, lit */
+.ebar{height:14px;gap:3px;background:none;border-radius:0;box-shadow:none;margin:8px 0 8px;overflow:visible}
+.ebar div{position:relative;border-radius:7px;min-width:6px;overflow:hidden;
+  box-shadow:0 0 0 1px rgba(0,0,0,.25) inset}
+.ebar div::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(255,255,255,.32),rgba(255,255,255,0) 55%)}
+.ebar:has(> div:only-child){background:rgba(255,255,255,.05);border-radius:7px;box-shadow:inset 0 1px 2px rgba(0,0,0,.4)}
+.ebar.thin{height:8px;gap:2px}
+.ebar.thin div{border-radius:4px}
+.ebar.track{background:rgba(255,255,255,.05);border-radius:7px;gap:0;box-shadow:inset 0 1px 2px rgba(0,0,0,.4)}
+.ebar.track div{border-radius:7px}
+.elegend{gap:6px}
+.elegend span{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:999px;
+  background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.06);font-size:10.5px;letter-spacing:.04em}
+.elegend i{margin:0;width:7px;height:7px;border-radius:50%;box-shadow:0 0 8px currentColor}
+.erow{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.erow .dim{font-family:var(--mono);font-size:11px;letter-spacing:.04em}
+
+/* chart frames */
+.chart{position:relative;margin:4px 0 2px}
+.chart svg{display:block;width:100%;height:auto}
+.chart .xl{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9.5px;color:var(--dim);letter-spacing:.06em;margin-top:4px;padding:0 2px}
+.chart-head{display:flex;align-items:baseline;gap:10px;margin-bottom:2px;flex-wrap:wrap}
+.chart-head .dim{font-family:var(--mono);font-size:10.5px;letter-spacing:.04em}
+.chart-head .delta{font-family:var(--mono);font-size:11px;font-weight:700;padding:2px 7px;border-radius:999px;background:rgba(255,255,255,.05)}
+.chart-head .delta.up{color:var(--ok)} .chart-head .delta.dn{color:var(--accent-hi)}
+
+/* stats table → compact dense rows when still used */
+table td:last-child{font-weight:700;color:#fff;text-align:right;font-variant-numeric:tabular-nums}
+
+/* nav: a hair more presence */
+nav button{font-size:11.5px;letter-spacing:.9px;padding:10px 15px}
+nav button.on{box-shadow:0 4px 18px rgba(225,37,27,.4),inset 0 1px 0 rgba(255,255,255,.22)}
+
+.tile{flex:1 1 0}
 </style>
 </head>
 <body>
@@ -1244,7 +1347,9 @@ function render(){
   const streak = S.prevLog || S.todayLog;
   const sc = S.todayLog?.streak_count ?? S.prevLog?.streak_count ?? 0;
   const sh = S.todayLog?.shields ?? S.prevLog?.shields ?? 0;
-  document.getElementById('streakChip').innerHTML = `streak <b>${sc}</b>d${sh ? ' ' + '🛡'.repeat(sh) : ''}`;
+  const chip = document.getElementById('streakChip');
+  chip.innerHTML = `<span class="flame">${sc >= 3 ? '🔥' : '·'}</span><b>${sc}</b><span style="font-size:10px">d</span>${sh ? ' ' + '🛡'.repeat(sh) : ''}`;
+  chip.classList.toggle('hot', sc >= 3);
   const main = document.getElementById('main');
   main.dataset.view = S.view;   // v4: per-view CSS theming (YC tab = her palette)
   // Preserve scroll position on re-renders of the SAME view (adding a task,
@@ -1762,11 +1867,13 @@ function rToday(){
   // energy distribution
   const dist = {}; let total = 0;
   open.forEach(t => { const m = t.est_minutes || 15; dist[t.energy || 'FOCUS'] = (dist[t.energy || 'FOCUS'] || 0) + m; total += m; });
-  const bar = total ? `<div class="ebar">` + Object.entries(dist).map(([e, m]) =>
+  const EORD = ['DEEP', 'FOCUS', 'LIGHT', 'PARALLEL'];
+  const ents = Object.entries(dist).sort((a, b) => EORD.indexOf(a[0]) - EORD.indexOf(b[0]));
+  const bar = total ? `<div class="erow"><span class="hero sm">${Math.round(total/60*10)/10}<small>h</small></span><span class="dim">open · ${open.length} task${open.length === 1 ? '' : 's'}${dist.DEEP ? ' · ' + Math.round(dist.DEEP/60*10)/10 + 'h deep' : ''}</span></div>
+    <div class="ebar">` + ents.map(([e, m]) =>
       `<div style="width:${(m / total * 100).toFixed(1)}%;background:${(ENERGY[e] || {}).hex}"></div>`).join('') + `</div>
-    <div class="elegend">` + Object.entries(dist).map(([e, m]) =>
-      `<span><i style="background:${(ENERGY[e] || {}).hex}"></i>${e} ${Math.round(m/60*10)/10}h</span>`).join('') +
-      `<span style="margin-left:auto">${Math.round(total/60*10)/10}h open</span></div>` : '';
+    <div class="elegend">` + ents.map(([e, m]) =>
+      `<span><i style="background:${(ENERGY[e] || {}).hex};color:${(ENERGY[e] || {}).hex}"></i>${e} ${Math.round(m/60*10)/10}h</span>`).join('') + `</div>` : '';
   const shn = startHereNow(todays);
   const shCard = shn ? `<div class="card starthere"><h2>Start here <span class="dim" style="font-weight:400;text-transform:none;letter-spacing:0">· ${shn.why}</span></h2>${taskRowHTML(shn.t).replace('id="t-', 'id="sht-')}</div>` : '';
   const meter = rMeter();
@@ -1989,9 +2096,7 @@ function creditsCardHTML(){
   const spent = c.spent ?? ((c.windows || 0) + (c.metered || 0));
   const debt = c.debt || 0;   // v9 ledger: yesterday's overspend, paid off before balance goes positive
   const pct = Math.min(100, Math.round((spent + debt) / Math.max(c.gross, 1) * 100));
-  const stat = (v, label, color) => `<div style="flex:1;text-align:center">
-      <div class="mono" style="font-size:24px;font-weight:700;${color ? 'color:' + color : ''}">${v}</div>
-      <div class="dim" style="font-size:10px;letter-spacing:.08em;font-family:var(--mono)">${label}</div></div>`;
+  const stat = (v, label, color, sub) => VIZ.tile(v, label, {color: color || undefined, colored: !!color, sub});
   let timer;
   if (fo) {
     const mins = Math.floor((Date.now() - new Date(fo.started_at).getTime()) / 60000);
@@ -2042,12 +2147,12 @@ function creditsCardHTML(){
           : `<span class="schip" style="font-size:11px;padding:5px 8px;opacity:.5">${k.past ? '✗' : '⏳'} ${esc(k.title)} ${k.start_time}</span>`).join('')}
     </div>`;
   return `<div class="card"><h2>Screen-time credits${c.vacation ? ' <span style="font-size:12px;font-weight:400">🌴 vacation</span>' : ''}</h2>
-    <div style="display:flex;gap:8px;margin-bottom:8px">
-      ${stat(c.balance, 'MIN LEFT', c.balance > 0 ? 'var(--done)' : 'var(--accent)')}
-      ${stat(spent, 'SPENT')}
-      ${stat(c.gross, 'EARNED')}
-    </div>
-    <div class="ebar" style="margin-bottom:6px"><div style="width:${pct}%;background:${pct >= 85 ? '#E1251B' : pct >= 60 ? '#FBBF24' : '#4ADE80'}"></div></div>
+    ${VIZ.tiles([
+      VIZ.tile(c.balance, 'left', {unit: 'm', color: c.balance > 0 ? '#4ADE80' : '#FF4D42', colored: true, sub: debt ? '−' + debt + ' debt' : null}),
+      VIZ.tile(spent, 'spent', {unit: 'm', color: pct >= 85 ? '#FF4D42' : pct >= 60 ? '#FBBF24' : '#8A90A0', colored: pct >= 60, sub: pct + '% of earned'}),
+      VIZ.tile(c.gross, 'earned', {unit: 'm', color: c.gross >= c.cap ? '#FBBF24' : '#8A90A0', colored: c.gross >= c.cap, sub: 'cap ' + c.cap}),
+    ])}
+    <div class="ebar track" style="margin:10px 0 6px;height:10px"><div style="width:${pct}%;background:${pct >= 85 ? 'linear-gradient(90deg,#E1251B,#FF7A5C)' : pct >= 60 ? 'linear-gradient(90deg,#D97706,#FBBF24)' : 'linear-gradient(90deg,#34D399,#86EFAC)'};border-radius:5px"></div></div>
     <div class="dim" style="font-size:11px;margin-bottom:10px">earned = ${c.free} free + ${c.timer} clocked + ${c.bonus} completions${c.wake_bonus ? ` + ${c.wake_bonus} wake` : ''}${c.reflect_bonus ? ` + ${c.reflect_bonus} reflected` : ''}${c.class_bonus ? ` + ${c.class_bonus} class` : ''} · daily cap ${c.cap}${c.gross >= c.cap ? ' — HIT' : ''}</div>
     ${gateLine}${classLine}${starterLine}${timer}${scroll}${debtLine}${wakeLine}${sleepHTML()}
   </div>`;
@@ -2123,9 +2228,7 @@ function rTime(){
   const peak = allHours.map((m, h) => [h, m]).sort((a, b) => b[1] - a[1]).slice(0, 3)
     .filter(x => x[1] > 0).map(x => String(x[0]).padStart(2, '0') + ':00').join(' · ');
   const planPct = totFocus ? Math.round(totPlan / totFocus * 100) : 0;
-  const stat = (v, label, color) => `<div style="flex:1;text-align:center">
-      <div class="mono" style="font-size:20px;font-weight:700;${color ? 'color:' + color : ''}">${v}</div>
-      <div class="dim" style="font-size:10px;letter-spacing:.08em;font-family:var(--mono)">${label}</div></div>`;
+  const stat = (v, label, color, sub) => VIZ.tile(v, label, {color: color || undefined, colored: !!color, sub});
   const stats = `<div class="card"><h2>Last 14 days</h2>
     <div style="display:flex;gap:8px;margin-bottom:8px">
       ${stat(fH(totFocus), 'FOCUSED', 'var(--done)')}
@@ -2647,6 +2750,115 @@ async function confirmWake(method){
 }
 
 /* live "what do I need tonight" meter */
+
+/* ================= VIZ — ring / area / bars / tiles (v5 bevel pass, 2026-10-15) =================
+   Pure functions → SVG/HTML strings. No state, no listeners, no geometry contracts.
+   ring(pct)   : 270° progress arc with gradient + glow + optional target tick
+   area(vals)  : smooth gradient-filled line (sparkline or full chart)
+   bars(rows)  : stacked rounded columns
+   tile(v,l)   : stat tile  ·  tiles([...]) : grid wrapper                                  */
+const VIZ = (() => {
+  let n = 0; const uid = () => 'vz' + (++n) + '_' + Math.floor(Math.random() * 1e6).toString(36);
+  const f = x => (+x).toFixed(1);
+  const pair = c => Array.isArray(c) ? c : [c, c];
+  function ring(pct, o = {}){
+    const size = o.size || 96, sw = o.stroke || 9, c = size / 2, r = c - sw / 2;
+    const sweep = 270, start = 135;                       // open at the bottom, like a dial
+    const p = Math.max(0, Math.min(100, +pct || 0)) / 100;
+    const C = 2 * Math.PI * r, arc = C * sweep / 360;
+    const [c1, c2] = pair(o.color || ['#FF4D42', '#FBBF24']);
+    const id = uid();
+    const tick = o.target == null ? '' : (() => {
+      const a = (start + sweep * (o.target / 100)) * Math.PI / 180;
+      const x1 = c + (r - sw / 2 - 3) * Math.cos(a), y1 = c + (r - sw / 2 - 3) * Math.sin(a);
+      const x2 = c + (r + sw / 2 + 3) * Math.cos(a), y2 = c + (r + sw / 2 + 3) * Math.sin(a);
+      return `<line x1="${f(x1)}" y1="${f(y1)}" x2="${f(x2)}" y2="${f(y2)}" stroke="rgba(255,255,255,.55)" stroke-width="2" stroke-linecap="round"/>`;
+    })();
+    const vsize = o.vsize || Math.round(size * 0.3);
+    return `<div class="ring" style="width:${size}px;height:${size}px">
+      <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+        <defs><linearGradient id="${id}" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient></defs>
+        <circle cx="${c}" cy="${c}" r="${f(r)}" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="${sw}" stroke-linecap="round"
+          stroke-dasharray="${f(arc)} ${f(C)}" transform="rotate(${start} ${c} ${c})"/>
+        ${p > 0 ? `<circle cx="${c}" cy="${c}" r="${f(r)}" fill="none" stroke="url(#${id})" stroke-width="${sw}" stroke-linecap="round"
+          stroke-dasharray="${f(arc * p)} ${f(C)}" transform="rotate(${start} ${c} ${c})"
+          style="filter:drop-shadow(0 0 ${Math.round(sw * .8)}px ${c1}66)"/>` : ''}
+        ${tick}
+      </svg>
+      <div class="rc"><div class="rv" style="font-size:${vsize}px">${o.label ?? Math.round(p * 100)}</div>${o.sub ? `<div class="rl">${o.sub}</div>` : ''}</div>
+    </div>`;
+  }
+  // Catmull-Rom → cubic bezier through the points (tension .5); nulls break the line
+  function smooth(pts){
+    if (pts.length < 2) return pts.length ? `M${f(pts[0].x)},${f(pts[0].y)}` : '';
+    let d = `M${f(pts[0].x)},${f(pts[0].y)}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2;
+      const c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
+      const c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
+      d += ` C${f(c1x)},${f(c1y)} ${f(c2x)},${f(c2y)} ${f(p2.x)},${f(p2.y)}`;
+    }
+    return d;
+  }
+  function area(vals, o = {}){
+    const W = o.w || 560, H = o.h || 150, P = o.pad ?? 10, PB = o.padB ?? P, PT = o.padT ?? P;
+    const v = vals.map(x => (x == null || isNaN(x)) ? null : +x);
+    const nums = v.filter(x => x != null);
+    if (nums.length < 2) return '';
+    const min = o.min ?? Math.min(...nums), max = o.max ?? Math.max(...nums);
+    const span = (max - min) || 1;
+    const X = i => P + i * (W - 2 * P) / Math.max(v.length - 1, 1);
+    const Y = y => H - PB - ((y - min) / span) * (H - PT - PB);
+    const pts = v.map((y, i) => y == null ? null : ({x: X(i), y: Y(y), v: y, i}));
+    // split into continuous runs
+    const runs = []; let cur = [];
+    pts.forEach(p => { if (p) cur.push(p); else if (cur.length) { runs.push(cur); cur = []; } }); if (cur.length) runs.push(cur);
+    const col = o.color || '#FF4D42', id = uid();
+    const fillPaths = runs.map(r => r.length > 1 ? `<path d="${smooth(r)} L${f(r[r.length - 1].x)},${f(H - PB)} L${f(r[0].x)},${f(H - PB)} Z" fill="url(#${id})"/>` : '').join('');
+    const linePaths = runs.map(r => `<path d="${smooth(r)}" fill="none" stroke="${col}" stroke-width="${o.sw || 2.2}" stroke-linejoin="round" stroke-linecap="round" style="filter:drop-shadow(0 0 5px ${col}55)"/>`).join('');
+    const target = o.target == null ? '' : `<line x1="${P}" y1="${f(Y(o.target))}" x2="${W - P}" y2="${f(Y(o.target))}" stroke="rgba(255,255,255,.22)" stroke-dasharray="3 5" stroke-width="1"/>
+      ${o.targetLabel ? `<text x="${W - P}" y="${f(Y(o.target) - 4)}" text-anchor="end" font-size="13" font-family="Consolas,monospace" fill="rgba(255,255,255,.45)">${o.targetLabel}</text>` : ''}`;
+    const dots = !o.dots ? '' : pts.filter(Boolean).map(p => {
+      const dc = typeof o.dots === 'function' ? o.dots(p.i, p.v) : col;
+      if (!dc) return '';
+      return `<circle cx="${f(p.x)}" cy="${f(p.y)}" r="${o.dotR || 3.2}" fill="${dc}" stroke="#0E1017" stroke-width="1.5">${o.titles ? `<title>${o.titles(p.i, p.v)}</title>` : ''}</circle>`;
+    }).join('');
+    const last = pts.filter(Boolean).slice(-1)[0];
+    const end = o.end === false || !last ? '' : `<circle cx="${f(last.x)}" cy="${f(last.y)}" r="${o.endR || 4.5}" fill="${col}" style="filter:drop-shadow(0 0 6px ${col})"/><circle cx="${f(last.x)}" cy="${f(last.y)}" r="${(o.endR || 4.5) + 4}" fill="${col}" opacity=".18"/>`;
+    return `<svg viewBox="0 0 ${W} ${H}" ${o.stretch ? 'preserveAspectRatio="none"' : ''} class="${o.cls || ''}" style="${o.style != null ? o.style : 'width:100%;height:auto;display:block'}">
+      <defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".38"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>
+      ${target}${fillPaths}${linePaths}${dots}${end}</svg>`;
+  }
+  // rows: [{parts:[{v,color}], label, hot}]  → stacked rounded columns, hot = highlighted (today)
+  function bars(rows, o = {}){
+    const W = o.w || 560, H = o.h || 150, P = o.pad ?? 10, LB = o.labels ? 18 : 0;
+    const max = Math.max(o.max || 0, ...rows.map(r => r.parts.reduce((s, p) => s + (p.v || 0), 0)), 1);
+    const BW = (W - 2 * P) / rows.length, gap = Math.min(6, BW * .28), bw = BW - gap;
+    const id = uid();
+    const cols = rows.map((r, i) => {
+      let y = H - P - LB; const x = P + i * BW + gap / 2;
+      const segs = r.parts.map(p => {
+        if (!p.v) return '';
+        const h = (p.v / max) * (H - 2 * P - LB); y -= h;
+        return `<rect x="${f(x)}" y="${f(y)}" width="${f(bw)}" height="${f(h)}" rx="${Math.min(3, bw / 3)}" fill="${p.color}" opacity="${r.dim ? .45 : .95}"><title>${p.title || ''}</title></rect>`;
+      }).join('');
+      const total = r.parts.reduce((s, p) => s + (p.v || 0), 0);
+      const hot = r.hot ? `<rect x="${f(x - gap / 2)}" y="${P}" width="${f(BW)}" height="${f(H - 2 * P - LB)}" rx="6" fill="rgba(255,255,255,.04)"/>` : '';
+      const ghost = total ? '' : `<rect x="${f(x)}" y="${f(H - P - LB - 2)}" width="${f(bw)}" height="2" rx="1" fill="rgba(255,255,255,.08)"/>`;
+      const lab = !o.labels ? '' : `<text x="${f(x + bw / 2)}" y="${H - 3}" text-anchor="middle" font-size="13" font-family="Consolas,monospace" fill="${r.hot ? '#fff' : 'rgba(255,255,255,.38)'}" font-weight="${r.hot ? 700 : 400}">${r.label || ''}</text>`;
+      return hot + ghost + segs + lab;
+    }).join('');
+    return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block"><defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".18"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>${cols}</svg>`;
+  }
+  function tile(v, label, o = {}){
+    const spark = o.spark && o.spark.length > 1 ? area(o.spark, {w: 120, h: 34, pad: 2, color: o.color || '#8A90A0', end: false, sw: 1.6, stretch: true, cls: 'spk', style: ''}) : '';
+    return `<div class="tile${o.colored ? ' c' : ''}" style="--tc:${o.color || 'var(--dim)'}${o.style ? ';' + o.style : ''}">
+      ${spark}<div class="v">${v}${o.unit ? `<small>${o.unit}</small>` : ''}</div><div class="l">${label}</div>${o.sub ? `<div class="d">${o.sub}</div>` : ''}</div>`;
+  }
+  const tiles = (arr, cls = '') => `<div class="tiles ${cls}">${arr.join('')}</div>`;
+  return {ring, area, bars, tile, tiles, smooth};
+})();
+
 function rMeter(){
   if (frozenToday()) return `<div class="card"><h2>Score meter</h2><div class="dim">❄ Vacation mode — streak frozen, nothing owed today.</div></div>`;
   // C7: score + cheapest-path picks come from the server (lifeos_score via S.scoreNow)
@@ -2660,12 +2872,18 @@ function rMeter(){
       ? `finish <b>${picks.map(esc).join('</b> + <b>')}</b> → ~${Math.round(r.projected)} · streak safe`
       : 'streak needs most of the plan — start with the heaviest item';
   }
+  const sc = Math.round(r.score);
+  const ring = VIZ.ring(sc, {size: 104, stroke: 10, target: 70, label: sc, sub: hit ? 'hit' : 'of 70',
+    color: hit ? ['#34D399', '#86EFAC'] : sc >= 45 ? ['#F59E0B', '#FBBF24'] : ['#E1251B', '#FF7A5C']});
+  const left = hit ? 0 : Math.max(0, 70 - sc);
   return `<div class="card"><h2>Score meter</h2>
-    <div style="display:flex;align-items:baseline;gap:10px">
-      <span class="mono" style="font-size:26px;font-weight:700;color:${hit ? 'var(--done)' : 'var(--accent)'}">${r.score}</span>
-      <span class="dim" style="font-size:12px">${hint}</span>
+    <div class="meterbody">${ring}
+      <div class="meterhint">
+        <span class="pill" style="color:${hit ? 'var(--ok)' : left <= 25 ? 'var(--warn)' : 'var(--accent-hi)'}">${hit ? '✓ streak safe' : left + ' to go'}</span>
+        <div>${hint}</div>
+        ${r.projected != null && !hit ? `<div class="sub">projected ${Math.round(r.projected)} if the picks land</div>` : ''}
+      </div>
     </div>
-    <div class="ebar" style="margin-top:8px"><div style="width:${Math.min(r.score, 100)}%;background:${hit ? '#4ADE80' : '#E1251B'}"></div></div>
   </div>`;
 }
 
@@ -3382,12 +3600,17 @@ function rTrends(){
     y: H - P - (Math.min(+l.score, 100) / 100) * (H - 2*P),
     hit: l.streak_hit, d: l.date, s: +l.score,
   }));
-  const y70 = H - P - 0.7 * (H - 2*P);
-  const scoreSvg = line.length > 1 ? `<svg viewBox="0 0 ${W} ${H}" style="width:100%">
-      <line x1="${P}" y1="${y70}" x2="${W-P}" y2="${y70}" stroke="var(--line)" stroke-dasharray="4 4"/>
-      <polyline fill="none" stroke="var(--accent)" stroke-width="2" points="${line.map(p => p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' ')}"/>
-      ${line.map(p => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5" fill="${p.hit ? '#4ADE80' : '#E1251B'}"><title>${p.d}: ${p.s}</title></circle>`).join('')}
-    </svg><div class="dim mono" style="font-size:10px">green dot = streak hit · dashed line = 70</div>`
+  const last7 = pts.slice(-7), prev7 = pts.slice(-14, -7);
+  const avg = a => a.length ? a.reduce((s, l) => s + Math.min(+l.score, 100), 0) / a.length : null;
+  const a7 = avg(last7), a7p = avg(prev7);
+  const delta = (a7 != null && a7p != null) ? Math.round(a7 - a7p) : null;
+  const hits = pts.filter(l => l.streak_hit).length;
+  const scoreSvg = line.length > 1 ? `<div class="chart-head"><span class="hero sm">${Math.round(a7)}</span><span class="dim">7-day avg</span>
+      ${delta != null ? `<span class="delta ${delta >= 0 ? 'up' : 'dn'}">${delta >= 0 ? '▲' : '▼'} ${Math.abs(delta)}</span>` : ''}
+      <span class="dim" style="margin-left:auto">${hits}/${pts.length} hit</span></div>
+    <div class="chart">${VIZ.area(pts.map(l => Math.min(+l.score, 100)), {w: W, h: H, min: 0, max: 100, target: 70, targetLabel: '70', color: '#FF4D42',
+      dots: (i, v) => pts[i].streak_hit ? '#4ADE80' : 'rgba(255,77,66,.9)', titles: (i, v) => pts[i].date + ': ' + v})}
+      <div class="xl"><span>${pts[0].date.slice(5).replace('-', '/')}</span><span>${pts[pts.length - 1].date.slice(5).replace('-', '/')}</span></div></div>`
     : '<div class="empty">Not enough scored days yet — this fills in as you save reflections.</div>';
   // energy minutes done per day — last 14 days, stacked by energy
   const days = [...Array(14)].map((_, i) => { const d = new Date(); d.setDate(d.getDate() - 13 + i); return d.toLocaleDateString('sv-SE'); });
@@ -3396,16 +3619,15 @@ function rTrends(){
     S.tasks.forEach(t => { if (t.status === 'done' && localDay(t.completed_at) === d) o[t.energy || 'FOCUS'] += (t.est_minutes || 15); });
     return {d, o, total: Object.values(o).reduce((a, b) => a + b, 0)};
   });
-  const max = Math.max(...per.map(p => p.total), 60);
-  const BW = (W - 2*P) / 14;
-  const barsSvg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%">${per.map((p, i) => {
-      let y = H - P;
-      return Object.entries(p.o).map(([e, m]) => {
-        if (!m) return '';
-        const h = (m / max) * (H - 2*P); y -= h;
-        return `<rect x="${(P + i*BW + 2).toFixed(1)}" y="${y.toFixed(1)}" width="${(BW - 4).toFixed(1)}" height="${h.toFixed(1)}" fill="${ENERGY[e].hex}" rx="2"><title>${p.d} ${e}: ${Math.round(m/60*10)/10}h</title></rect>`;
-      }).join('');
-    }).join('')}</svg>`;
+  const tISO = todayISO();
+  const wk1 = per.slice(-7).reduce((s, p) => s + p.total, 0), wk0 = per.slice(0, 7).reduce((s, p) => s + p.total, 0);
+  const wkDelta = wk0 ? Math.round((wk1 - wk0) / wk0 * 100) : null;
+  const barsSvg = `<div class="chart-head"><span class="hero sm">${Math.round(wk1/60*10)/10}<small>h</small></span><span class="dim">done this week</span>
+      ${wkDelta != null ? `<span class="delta ${wkDelta >= 0 ? 'up' : 'dn'}">${wkDelta >= 0 ? '▲' : '▼'} ${Math.abs(wkDelta)}%</span>` : ''}</div>
+    <div class="chart">${VIZ.bars(per.map(p => ({
+      label: new Date(p.d + 'T12:00:00').toLocaleDateString('en-US', {weekday: 'narrow'}), hot: p.d === tISO,
+      parts: ['DEEP', 'FOCUS', 'LIGHT', 'PARALLEL'].map(e => ({v: p.o[e], color: ENERGY[e].hex, title: p.d + ' ' + e + ': ' + Math.round(p.o[e]/60*10)/10 + 'h'})),
+    })), {w: W, h: H, max: 60, labels: true})}</div>`;
   // stats
   const wakes = logs.filter(l => l.wake_time).slice(-7);
   const wakeAvg = wakes.length ? (() => {
@@ -3420,14 +3642,14 @@ function rTrends(){
   <div class="card"><h2>Score — last ${line.length} scored days</h2>${scoreSvg}</div>
   <div class="card"><h2>Done work by energy — 14 days</h2>${barsSvg}
     <div class="elegend" style="margin-top:6px">${Object.keys(ENERGY).map(e => `<span><i style="background:${ENERGY[e].hex}"></i>${e}</span>`).join('')}</div></div>
-  <div class="card"><h2>Stats</h2><table>
-    <tr><td>current streak</td><td>${S.todayLog?.streak_count ?? S.prevLog?.streak_count ?? 0}d</td></tr>
-    <tr><td>best recorded streak</td><td>${best}d</td></tr>
-    <tr><td>DEEP hours, last 7 days</td><td>${Math.round(deep7/60*10)/10}h</td></tr>
-    <tr><td>avg wake (last ${wakes.length} logged)</td><td>${wakeAvg}</td></tr>
-    <tr><td>avg focus</td><td>${focusAvg}/5</td></tr>
-    <tr><td>rest days in window</td><td>${logs.filter(l => l.rest_day).length}</td></tr>
-  </table></div>
+  <div class="card"><h2>Stats</h2>${VIZ.tiles([
+    VIZ.tile(S.todayLog?.streak_count ?? S.prevLog?.streak_count ?? 0, 'streak', {unit: 'd', color: '#FF7A5C', colored: true, sub: 'best ' + best + 'd'}),
+    VIZ.tile(Math.round(deep7/60*10)/10, 'deep · 7d', {unit: 'h', color: ENERGY.DEEP.hex, spark: per.slice(-7).map(p => p.o.DEEP)}),
+    VIZ.tile(wakeAvg, 'avg wake', {color: '#FBBF24', sub: wakes.length + ' logged'}),
+    VIZ.tile(focusAvg, 'focus', {unit: '/5', color: '#38BDF8', spark: fl.slice(-10).map(l => l.focus)}),
+    VIZ.tile(logs.filter(l => l.rest_day).length, 'rest days', {color: '#C4B5FD', sub: 'in window'}),
+    VIZ.tile(pts.length ? Math.round(pts.filter(l => l.streak_hit).length / pts.length * 100) : '—', 'hit rate', {unit: pts.length ? '%' : '', color: '#4ADE80', sub: pts.length + ' scored'}),
+  ])}</div>
   ${(() => {
     const cal = S.tasks.filter(t => t.status === 'done' && t.actual_minutes && t.est_minutes);
     if (cal.length < 3) return `<div class="card"><h2>Estimate accuracy</h2><div class="dim">Log actual minutes on done tasks (REFLECT tab) — after 3+ this shows how honest your estimates are, per energy.</div></div>`;
@@ -5014,9 +5236,7 @@ async function undoCaff(id){
 function caffeineCardHTML(){
   const c = S.caff; if (!c) return '';
   const over = +c.bed_level > +c.threshold;
-  const stat = (v, label, color) => `<div style="flex:1;text-align:center">
-      <div class="mono" style="font-size:24px;font-weight:700;${color ? 'color:' + color : ''}">${v}</div>
-      <div class="dim" style="font-size:10px;letter-spacing:.08em;font-family:var(--mono)">${label}</div></div>`;
+  const stat = (v, label, color, sub) => VIZ.tile(v, label, {color: color || undefined, colored: !!color, sub});
   const undo = S.caffUndo ? `<button class="btn" style="padding:4px 10px;font-size:11px" onclick="undoCaff('${S.caffUndo}')">undo</button>` : '';
   return `<div class="card"><h2 style="display:flex;align-items:center">☕ Caffeine <span style="margin-left:auto;display:flex;gap:6px">${undo}<button class="btn" style="padding:4px 10px;font-size:11px" onclick="setView('coffee')">open ›</button></span></h2>
     <div style="display:flex;gap:8px;margin-bottom:6px">
@@ -5049,9 +5269,7 @@ function rCoffee(){
   const c = S.caff; if (!c) return `<div class="empty">no caffeine context — is caffeine_v1 applied?</div>`;
   const over = +c.bed_level > +c.threshold;
   const pct = Math.min(100, Math.round(c.today_mg / c.ceiling * 100));
-  const stat = (v, label, color) => `<div style="flex:1;text-align:center">
-      <div class="mono" style="font-size:22px;font-weight:700;${color ? 'color:' + color : ''}">${v}</div>
-      <div class="dim" style="font-size:10px;letter-spacing:.08em;font-family:var(--mono)">${label}</div></div>`;
+  const stat = (v, label, color, sub) => VIZ.tile(v, label, {color: color || undefined, colored: !!color, sub});
   const today = `<div class="card"><h2>Today</h2>
     <div style="display:flex;gap:8px;margin-bottom:8px">
       ${stat(Math.round(c.level_now), 'MG NOW', '#C4B5FD')}${stat(Math.round(c.bed_level), 'AT BED ' + c.bed_clock, over ? 'var(--accent)' : undefined)}${stat(c.half_life_h + 'h', 'HALF-LIFE')}
@@ -5273,9 +5491,7 @@ function sleepNightsCardHTML(){
   const last = nights[nights.length - 1] || null;
   const withDur = nights.filter(n => n.dur_min);
   const fmtH = m => m == null ? '—' : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}`;
-  const stat = (v, label, color) => `<div style="flex:1;text-align:center">
-      <div class="mono" style="font-size:22px;font-weight:700;${color ? 'color:' + color : ''}">${v}</div>
-      <div class="dim" style="font-size:10px;letter-spacing:.08em;font-family:var(--mono)">${label}</div></div>`;
+  const stat = (v, label, color, sub) => VIZ.tile(v, label, {color: color || undefined, colored: !!color, sub});
   const durColor = m => m == null ? 'var(--card2)' : m >= need - 30 ? '#4ADE80' : m >= need - 90 ? '#FBBF24' : '#E1251B';
   // Chart: hours on the Y axis (gridline every 2 h), the duration written on top of every bar, dashed "need" line.
   // Uniform scaling (no preserveAspectRatio=none) so the text isn't stretched on wide screens.
