@@ -645,6 +645,140 @@ nav button{font-size:11.5px;letter-spacing:.9px;padding:10px 15px}
 nav button.on{box-shadow:0 4px 18px rgba(225,37,27,.4),inset 0 1px 0 rgba(255,255,255,.22)}
 
 .tile{flex:1 1 0}
+
+/* ===== v6 — laptop layout (2026-10-16) =====
+   Everything below is gated on ≥1024px. Phones never match, so the iPhone PWA is
+   untouched. JS side: isDesk() → sidebar nav, TODAY dashboard (todayDeskHTML),
+   per-view layout classes on <main> (deskLayout). */
+:root{--sb:244px}
+#ptitle{display:none}
+.card h2[style*="display:flex"]{white-space:nowrap}
+.card h2[style*="display:flex"] > span.dim{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.card h2 .btn{white-space:nowrap}
+@media (min-width:1024px){
+  body.desk{background-image:
+    radial-gradient(1200px 620px at 72% -12%,rgba(225,37,27,.075),transparent 60%),
+    radial-gradient(900px 520px at 105% 105%,rgba(56,189,248,.05),transparent 60%),
+    radial-gradient(700px 500px at 0% 100%,rgba(129,140,248,.04),transparent 60%)}
+  #app{left:var(--sb);right:0;max-width:none;margin:0;width:auto}
+  #app header{padding:24px 34px 12px;align-items:center;gap:14px}
+  header h1{display:none}
+  #ptitle{display:block;flex:1;min-width:0}
+  #ptitle .greet{font-family:'Inter',sans-serif;font-size:26px;font-weight:800;letter-spacing:-.03em;line-height:1.1;color:#fff}
+  #ptitle .gdate{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-top:5px}
+  #ptitle .gdate b{color:var(--text);font-weight:600}
+  main#main{padding:6px 34px 128px}
+
+  /* sidebar */
+  nav{top:0;bottom:0;left:0;right:auto;width:var(--sb);flex-direction:column;gap:1px;overflow-y:auto;overflow-x:hidden;
+    padding:22px 14px 18px;border-top:none;border-right:1px solid rgba(255,255,255,.06);
+    background:linear-gradient(180deg,rgba(14,16,22,.92),rgba(9,10,14,.92))}
+  nav .nbrand{font-family:var(--mono);font-size:20px;font-weight:800;letter-spacing:1.2px;padding:2px 12px 6px;color:#fff}
+  nav .nbrand .dot{color:var(--accent);text-shadow:0 0 14px rgba(225,37,27,.8)}
+  nav .ngrp{font-family:var(--mono);font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);opacity:.65;padding:18px 12px 6px}
+  nav button{display:flex;align-items:center;gap:11px;width:100%;flex:0 0 auto;padding:9px 12px;border-radius:10px;
+    font-family:'Inter',sans-serif;font-size:13.5px;font-weight:500;letter-spacing:0;color:rgba(214,220,235,.66);text-align:left;position:relative;border:none}
+  nav button svg{width:18px;height:18px;flex:0 0 auto;opacity:.8}
+  nav button:hover{background:rgba(255,255,255,.045);color:#fff}
+  nav button:active{transform:none}
+  nav button.on{background:linear-gradient(90deg,rgba(225,37,27,.20),rgba(225,37,27,.03));color:#fff;
+    box-shadow:inset 0 0 0 1px rgba(255,77,66,.16)}
+  nav button.on::before{content:'';display:block;position:absolute;left:-14px;top:8px;bottom:8px;width:3px;height:auto;margin:0;
+    border-radius:0 3px 3px 0;background:var(--accent-hi);box-shadow:0 0 12px rgba(255,77,66,.85)}
+  nav button.on svg{color:var(--accent-hi);opacity:1}
+  nav button .nb{margin-left:auto;font-family:var(--mono);font-size:10px;font-weight:600;padding:1px 7px;border-radius:999px;
+    background:rgba(255,255,255,.07);color:var(--dim)}
+  nav button.on .nb{background:rgba(255,77,66,.22);color:#fff}
+  nav .nfoot{margin-top:auto;padding:16px 12px 0;font-family:var(--mono);font-size:10px;color:var(--dim);opacity:.6;line-height:1.6}
+  nav .nfoot kbd{font-family:var(--mono);font-size:10px;padding:1px 5px;border-radius:4px;border:1px solid rgba(255,255,255,.14);color:var(--text)}
+
+  /* add bar → floating command bar */
+  #addbar{left:var(--sb);right:0;bottom:22px;background:none;border:none;padding:0 34px;
+    backdrop-filter:none;-webkit-backdrop-filter:none}
+  #addbar .inner{max-width:720px;background:rgba(20,23,32,.86);border:1px solid rgba(255,255,255,.10);border-radius:16px;padding:7px;
+    backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4);
+    box-shadow:0 22px 60px -14px rgba(0,0,0,.85),inset 0 1px 0 rgba(255,255,255,.05)}
+  #addrow input{border:none;background:transparent;box-shadow:none!important;font-size:15px}
+
+  /* sheets become centered modals */
+  .overlay{align-items:center}
+  .sheet{border-radius:22px;max-height:84vh;max-width:640px;box-shadow:0 30px 80px rgba(0,0,0,.6)}
+  .sheet::before{display:none}
+
+  /* mouse affordances */
+  .trow{transition:border-color .15s,background .15s}
+  .trow:hover{border-color:rgba(255,255,255,.12)}
+  .btn:hover,.schip:hover,.chips button:hover{border-color:rgba(255,255,255,.22)}
+  *{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.14) transparent}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:9px;border:2px solid transparent;background-clip:padding-box}
+
+  /* per-view layouts (classes set by deskLayout) */
+  main.desk.narrow > *{max-width:880px;margin-left:auto;margin-right:auto}
+  main.desk.widecal > *{max-width:1320px;margin-left:auto;margin-right:auto}
+  main.desk.widecal .gridwrap{max-height:calc(100vh - 250px)}
+  main.desk.masonry{columns:400px 3;column-gap:16px}
+  main.desk.masonry > *{break-inside:avoid;-webkit-column-break-inside:avoid;page-break-inside:avoid}
+
+  /* TODAY dashboard */
+  .dash{max-width:1640px;margin:0 auto}
+  .dash .card{margin-bottom:14px}
+  .dash-kpis{display:grid;grid-template-columns:minmax(0,1.7fr) repeat(3,minmax(0,1fr));gap:14px;margin-bottom:14px}
+  .dash-kpis > .card{margin:0}
+  .dash-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
+  .dash-r{display:contents}
+  .dash-col{min-width:0}
+  .kpi{position:relative;overflow:hidden;display:flex;flex-direction:column}
+  .kpi::after{content:'';position:absolute;right:-40px;top:-60px;width:180px;height:180px;pointer-events:none;
+    background:radial-gradient(closest-side,color-mix(in srgb,var(--kc,#8A90A0) 22%,transparent),transparent 70%)}
+  .kpi .kv{position:relative;font-family:'Inter',sans-serif;font-weight:800;font-size:34px;letter-spacing:-.045em;line-height:1;
+    color:#fff;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .kpi .kv small{font-size:.42em;font-weight:600;letter-spacing:0;color:var(--dim);margin-left:3px}
+  .kpi .ks{position:relative;font-family:var(--mono);font-size:10.5px;letter-spacing:.03em;color:var(--dim);margin-top:auto;padding-top:9px}
+  .kpi .ks b{color:var(--kc);font-weight:700}
+  .ktrack{position:relative;display:flex;gap:2px;height:8px;margin-top:12px;border-radius:5px;overflow:hidden;background:rgba(255,255,255,.06)}
+  .ktrack i{display:block;height:100%;border-radius:5px}
+  .sec-h{display:flex;align-items:baseline;gap:9px;margin:2px 2px 10px;font-family:var(--mono);font-size:10.5px;
+    letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+  .sec-h b{font-family:'Inter',sans-serif;font-size:15px;font-weight:800;letter-spacing:-.02em;color:#fff}
+  .sec-h .dim{margin-left:auto;letter-spacing:.06em}
+
+  /* day strip */
+  .ds{position:relative;padding-left:48px;margin-top:2px}
+  .ds-hours{position:relative;height:16px;margin-bottom:4px}
+  .ds-hours span{position:absolute;transform:translateX(-50%);font-family:var(--mono);font-size:9.5px;color:rgba(214,220,235,.45);white-space:nowrap}
+  .ds-tick{position:absolute;top:20px;bottom:0;width:1px;background:rgba(255,255,255,.05);pointer-events:none}
+  .ds-lane{position:relative;height:32px;margin-bottom:6px;border-radius:9px;background:rgba(255,255,255,.025)}
+  .ds-lane:last-child{margin-bottom:0}
+  .ds-lane::before{content:attr(data-l);position:absolute;left:-48px;top:50%;transform:translateY(-50%);
+    font-family:var(--mono);font-size:9px;letter-spacing:.14em;color:var(--dim)}
+  .ds-b{position:absolute;top:3px;bottom:3px;min-width:4px;border-radius:7px;overflow:hidden;padding:0 7px;
+    background:linear-gradient(180deg,color-mix(in srgb,var(--c) 34%,transparent),color-mix(in srgb,var(--c) 16%,transparent));
+    border-left:3px solid var(--c);font-size:11px;line-height:26px;white-space:nowrap;text-overflow:ellipsis;color:#fff;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.08);z-index:1}
+  .ds-b.tent{border-left-style:dashed;opacity:.85}
+  .ds-b[onclick]{cursor:pointer}
+  .ds-b:hover{filter:brightness(1.2);z-index:2}
+  .ds-past{position:absolute;top:20px;bottom:0;left:48px;border-radius:9px 0 0 9px;pointer-events:none;z-index:2;
+    background:linear-gradient(90deg,rgba(7,8,12,.42),rgba(7,8,12,.30))}
+  .ds-now{position:absolute;top:17px;bottom:-3px;width:2px;margin-left:-1px;border-radius:2px;z-index:3;pointer-events:none;
+    background:#38BDF8;box-shadow:0 0 10px rgba(56,189,248,.85)}
+  .ds-now::before{content:'';position:absolute;top:-4px;left:-3px;width:8px;height:8px;border-radius:50%;
+    background:#E0F2FE;box-shadow:0 0 8px #38BDF8}
+  .kmeter-alt{display:none}
+  .dash .schip[onclick^="clockIn"]{font-size:10px!important;padding-left:2px!important;padding-right:2px!important;letter-spacing:-.02em}
+  main.desk.widecal .mo-cell{min-height:104px}
+  main.desk.widecal .mo-chip{font-size:10px;padding:2px 4px}
+  .ds-empty{position:absolute;left:12px;top:0;line-height:32px;font-family:var(--mono);font-size:10.5px;color:var(--dim)}
+}
+@media (min-width:1024px) and (max-width:1399px){
+  .dash-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .dash-kpis .kmeter{display:none}
+  .kmeter-alt{display:block}
+  .kpi .kv{font-size:28px}
+  .dash-grid{grid-template-columns:minmax(0,1.25fr) minmax(0,1fr)}
+  .dash-r{display:block;min-width:0}
+}
 </style>
 </head>
 <body>
@@ -663,6 +797,7 @@ nav button.on{box-shadow:0 4px 18px rgba(225,37,27,.4),inset 0 1px 0 rgba(255,25
 <div id="app" class="hidden">
   <header>
     <h1>LifeOS<span class="dot">.</span></h1>
+    <div id="ptitle"></div>
     <span id="streakChip"></span>
     <button id="pushBtn" onclick="enablePush()" title="Push notifications">🔔</button>
   </header>
@@ -1342,8 +1477,13 @@ function render(){
   // parent_id → children map, rebuilt once per render (3-layer tasks)
   S._kids = {};
   S.tasks.forEach(t => { if (t.parent_id) (S._kids[t.parent_id] = S._kids[t.parent_id] || []).push(t); });
-  document.getElementById('nav').innerHTML = VIEWS.map(([v, l]) =>
+  const desk = isDesk();
+  document.body.classList.toggle('desk', desk);
+  document.getElementById('nav').innerHTML = desk ? navDeskHTML() : VIEWS.map(([v, l]) =>
     `<button class="${S.view === v ? 'on' : ''}" onclick="setView('${v}')">${l}</button>`).join('');
+  document.getElementById('ptitle').innerHTML = desk ? deskTitleHTML() : '';
+  const ai = document.getElementById('addinput');
+  if (ai) ai.placeholder = desk ? 'Add a task — press / from anywhere' : 'Add task ...';
   const streak = S.prevLog || S.todayLog;
   const sc = S.todayLog?.streak_count ?? S.prevLog?.streak_count ?? 0;
   const sh = S.todayLog?.shields ?? S.prevLog?.shields ?? 0;
@@ -1373,6 +1513,7 @@ function render(){
   if (S.view === 'chat')    { main.innerHTML = rChat(); const cl = document.getElementById('chatlog'); if (cl) cl.scrollTop = cl.scrollHeight; }
   if (S.view === 'settings') main.innerHTML = rSettings();
   render._lastView = S.view;
+  deskLayout(main);
   if (sameView) main.scrollTop = savedScroll;
   document.getElementById('addbar').classList.toggle('hidden', !(S.view === 'today' || S.view === 'tasks') || !!S.sheet);
   // New-task sheet: every chip tap re-renders the sheet, which used to reset its
@@ -1899,6 +2040,7 @@ function rToday(){
     });
     return rows.length ? `<div class="pname">FROM TODAY'S PLAN</div>` + rows.map(taskRowHTML).join('') : '';
   })();
+  if (isDesk()) return todayDeskHTML({shCard, meter, bar, evCard, sorted, planSection, open, today});
   return wakeChallengeHTML() + goalConfirmsHTML() + shCard + meter + capacityWarnHTML() + callPrepHTML() + planBlocksHTML() + replanCardHTML() + creditsCardHTML() + caffeineCardHTML() + sleepNightsCardHTML() + waitingOnHTML() + evCard +
     (bar ? `<div class="card"><h2>Today's energy</h2>${bar}</div>` : '') +
     chipsHTML() +
@@ -2858,6 +3000,164 @@ const VIZ = (() => {
   const tiles = (arr, cls = '') => `<div class="tiles ${cls}">${arr.join('')}</div>`;
   return {ring, area, bars, tile, tiles, smooth};
 })();
+
+/* ================= v6 — laptop layout (2026-10-16) =================
+   ≥1024px wide: sidebar nav, TODAY as a dashboard, per-view layouts. Phones never
+   match the query, so the iPhone code path is exactly what it was. */
+const DESK_MQ = window.matchMedia('(min-width: 1024px)');
+const isDesk = () => DESK_MQ.matches;
+(DESK_MQ.addEventListener ? DESK_MQ.addEventListener.bind(DESK_MQ, 'change') : DESK_MQ.addListener.bind(DESK_MQ))(() => {
+  if (!document.getElementById('app').classList.contains('hidden')) render();
+});
+const NAV_GROUPS = [['Daily', ['today', 'brief', 'tasks', 'cal', 'reflect']], ['Insight', ['trends', 'time', 'log']],
+  ['Life', ['coffee', 'money', 'jobs', 'cards', 'yc', 'chat']], ['', ['settings']]];
+const NAV_ICON = {
+  today: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2.5 12h2M19.5 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  tasks: '<rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="M8 12.2l2.8 2.8L16 9.5"/>',
+  brief: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>',
+  cal: '<rect x="3.5" y="4.5" width="17" height="16" rx="3"/><path d="M3.5 9.5h17M8 2.5v4M16 2.5v4"/>',
+  chat: '<path d="M20.5 12a8.5 8.5 0 0 1-12.3 7.6L3.5 20.5l1-4.4A8.5 8.5 0 1 1 20.5 12z"/>',
+  reflect: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
+  coffee: '<path d="M4 9h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z"/><path d="M17 11h1.5a2.5 2.5 0 0 1 0 5H17M8 2.5v3M12 2.5v3"/>',
+  yc: '<path d="M12 20s-7.5-4.6-7.5-10.2A4.2 4.2 0 0 1 12 7.3a4.2 4.2 0 0 1 7.5 2.5C19.5 15.4 12 20 12 20z"/>',
+  time: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  log: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
+  trends: '<path d="M3 17l5.5-5.5 4 4L20 8"/><path d="M15 8h5v5"/>',
+  money: '<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><circle cx="12" cy="12" r="2.5"/><path d="M6 9.5v5M18 9.5v5"/>',
+  jobs: '<rect x="3" y="7" width="18" height="13" rx="2.5"/><path d="M9 7V5.5A2 2 0 0 1 11 3.5h2a2 2 0 0 1 2 2V7M3 12.5h18"/>',
+  cards: '<path d="M12 3.5l8.5 4.7L12 13 3.5 8.2z"/><path d="M3.5 12.5L12 17.3l8.5-4.8"/><path d="M3.5 16.5L12 21.3l8.5-4.8"/>',
+  settings: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+};
+const navIcon = v => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${NAV_ICON[v] || '<circle cx="12" cy="12" r="3"/>'}</svg>`;
+const titleCase = s => s.charAt(0) + s.slice(1).toLowerCase();
+function navDeskHTML(){
+  const lab = Object.fromEntries(VIEWS);
+  const placed = new Set(NAV_GROUPS.flatMap(g => g[1]));
+  const groups = NAV_GROUPS.map(g => [g[0], g[1].filter(v => lab[v])]);
+  VIEWS.forEach(([v]) => { if (!placed.has(v)) groups[2][1].push(v); });   // any future tab lands in "Life"
+  const today = todayISO();
+  const badge = {
+    today: S.tasks.filter(t => t.bucket === 'active' && t.status !== 'done' && t.due && t.due <= today && !((S._kids || {})[t.id] || []).length).length,
+    cards: (S.cards || []).length,
+  };
+  const btn = v => `<button class="${S.view === v ? 'on' : ''}" onclick="setView('${v}')">${navIcon(v)}<span>${titleCase(lab[v])}</span>${badge[v] ? `<span class="nb">${badge[v]}</span>` : ''}</button>`;
+  return `<div class="nbrand">LifeOS<span class="dot">.</span></div>` +
+    groups.map(([name, vs]) => (name ? `<div class="ngrp">${name}</div>` : '<div class="ngrp"></div>') + vs.map(btn).join('')).join('') +
+    `<div class="nfoot"><kbd>/</kbd> add task · <kbd>esc</kbd> leave field</div>`;
+}
+function deskTitleHTML(){
+  if (S.view !== 'today') return `<div class="greet">${titleCase((Object.fromEntries(VIEWS))[S.view] || '')}</div>`;
+  const n = new Date(), hr = n.getHours();
+  const hi = hr < 5 ? 'Up late' : hr < 12 ? 'Good morning' : hr < 17 ? 'Good afternoon' : 'Good evening';
+  const date = n.toLocaleDateString('en-US', {weekday: 'long', month: 'short', day: 'numeric'});
+  const sh = S.brief && S.brief.start_here_task;
+  return `<div class="greet">${hi}.</div><div class="gdate">${esc(date)}${sh ? ` · start with <b>${esc(sh)}</b>` : ''}</div>`;
+}
+/* per-view layout: card-only analytics tabs tile into columns; reading/list tabs get a centered column */
+const MASONRY_VIEWS = new Set(['trends', 'coffee', 'money', 'time', 'settings', 'jobs', 'log']);
+function deskLayout(main){
+  const desk = isDesk(), v = S.view;
+  main.classList.toggle('desk', desk);
+  if (!desk) { main.classList.remove('masonry', 'narrow', 'widecal'); return; }
+  const kids = [...main.children];
+  const cardsOnly = kids.length > 1 && kids.every(k => k.matches('.card, details.bsec, .empty'));
+  const masonry = v !== 'today' && MASONRY_VIEWS.has(v) && cardsOnly;
+  const widecal = v === 'cal' || v === 'yc';
+  main.classList.toggle('masonry', masonry);
+  main.classList.toggle('widecal', widecal);
+  main.classList.toggle('narrow', v !== 'today' && !masonry && !widecal);
+}
+/* full-width day strip: calendar lane + plan lane, 7 AM → 1 AM, with the now line */
+function dayStripHTML(today){
+  const S0 = 7 * 60, S1 = 25 * 60, span = S1 - S0;
+  const toMin = s => { if (!s) return null; const [h, m] = String(s).split(':').map(Number); return h * 60 + (m || 0); };
+  const pct = m => Math.max(0, Math.min(100, (m - S0) / span * 100));
+  const blk = (s, e, title, color, extra = '', cls = '') => {
+    if (e <= S0 || s >= S1) return '';
+    const l = pct(s), w = Math.max(pct(e) - l, .6);
+    return `<div class="ds-b ${cls}" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%;--c:${color}" title="${esc(title)}" ${extra}>${w > 4 ? esc(title) : ''}</div>`;
+  };
+  const evs = allEvents().filter(e => e.date === today && e.start_time).map(e => {
+    let s = toMin(e.start_time), en = e.end_time ? toMin(e.end_time) : s + 60; if (en <= s) en += 1440;
+    return blk(s, en, e.title || '', '#FF4D42', e.gid != null ? `onclick="openEv(${e._i})"` : '');
+  }).join('');
+  const pls = (S.planBlocks || []).filter(b => b.date === today).map(b =>
+    blk(b.start_min, b.end_min, b.title || '', b.kind === 'call' ? '#C4B5FD' : ((ENERGY[b.energy] || {}).hex || '#8A90A0'), '', b.locked ? '' : 'tent')).join('');
+  const ticks = [];
+  for (let h = 8; h <= 24; h += 2) {
+    const p = pct(h * 60).toFixed(2), lbl = h === 12 ? '12p' : h === 24 ? '12a' : (h % 12) + (h < 12 ? 'a' : 'p');
+    ticks.push(`<span style="left:${p}%">${lbl}</span>`);
+  }
+  const n = new Date(); let nowM = n.getHours() * 60 + n.getMinutes(); if (nowM < 6 * 60) nowM += 1440;
+  const np = pct(nowM), inRange = nowM > S0 && nowM < S1;
+  const tickLines = [...Array(9)].map((_, i) => `<div class="ds-tick" style="left:calc(48px + (100% - 48px) * ${(pct((8 + i * 2) * 60) / 100).toFixed(4)})"></div>`).join('');
+  return `<div class="card"><h2>Day <span class="dim" style="font-weight:400;text-transform:none;letter-spacing:0">· calendar + plan · 7a → 1a</span></h2>
+    <div class="ds">
+      <div class="ds-hours">${ticks.join('')}</div>${tickLines}
+      <div class="ds-lane" data-l="CAL">${evs || '<span class="ds-empty">no timed events</span>'}</div>
+      <div class="ds-lane" data-l="PLAN">${pls || '<span class="ds-empty">nothing packed</span>'}</div>
+      ${inRange ? `<div class="ds-past" style="width:calc((100% - 48px) * ${(np / 100).toFixed(4)})"></div><div class="ds-now" style="left:calc(48px + (100% - 48px) * ${(np / 100).toFixed(4)})"></div>` : ''}
+    </div></div>`;
+}
+function todayDeskHTML(p){
+  const h = m => Math.round((m || 0) / 60 * 10) / 10;
+  const EORD = ['DEEP', 'FOCUS', 'LIGHT', 'PARALLEL'];
+  const kpi = (label, val, sub, viz, color) => `<div class="card kpi" style="--kc:${color}"><h2>${label}</h2><div class="kv">${val}</div>${viz || ''}<div class="ks">${sub || ''}</div></div>`;
+  const track = (pct, color) => `<div class="ktrack"><i style="width:${Math.max(0, Math.min(100, pct)).toFixed(1)}%;background:${color}"></i></div>`;
+  // done today, by energy
+  const done = S.tasks.filter(isDoneToday);
+  const by = {}; let doneMin = 0;
+  done.forEach(t => { const m = t.est_minutes || 15, e = t.energy || 'FOCUS'; by[e] = (by[e] || 0) + m; doneMin += m; });
+  const openMin = p.open.reduce((s, t) => s + (t.est_minutes || 15), 0);
+  const doneViz = `<div class="ktrack">${EORD.filter(e => by[e]).map(e => `<i style="width:${(by[e] / Math.max(doneMin + openMin, 1) * 100).toFixed(1)}%;background:${ENERGY[e].hex}"></i>`).join('')}</div>`;
+  const kDone = kpi('Done today', `${done.length}<small>/ ${done.length + p.open.length}</small>`,
+    `${h(doneMin)}h shipped${by.DEEP ? ` · <b>${h(by.DEEP)}h deep</b>` : ''} · ${h(openMin)}h left`, doneViz, '#4ADE80');
+  // credits
+  const c = S.credits;
+  const kCred = c ? (() => {
+    const spent = c.spent ?? ((c.windows || 0) + (c.metered || 0));
+    const pc = Math.round((spent + (c.debt || 0)) / Math.max(c.gross, 1) * 100);
+    const col = c.balance <= 0 ? '#FF4D42' : pc >= 60 ? '#FBBF24' : '#4ADE80';
+    return kpi('Screen credits', `${c.balance}<small>m left</small>`, `${spent}m spent · ${c.gross}/${c.cap} earned${c.debt ? ` · <b>−${c.debt} debt</b>` : ''}`,
+      track(pc, `linear-gradient(90deg,${col}99,${col})`), col);
+  })() : kpi('Screen credits', '—', 'no credit data', '', '#8A90A0');
+  // plan load
+  const d = S.dayLoad;
+  const kLoad = (d && d.available != null) ? (() => {
+    const col = d.status === 'over' ? '#FF4D42' : d.status === 'tight' ? '#FBBF24' : '#4ADE80';
+    return kpi('Plan vs free', `${h(d.planned)}<small>h / ${h(d.available)}h</small>`, `<b>${esc(String(d.status || '').toUpperCase())}</b>${d.overload ? ' · ' + esc(d.overload) : ' · before 23:30'}`,
+      track((d.ratio || 0) * 100, `linear-gradient(90deg,${col}99,${col})`), col);
+  })() : kpi('Open work', `${h(openMin)}<small>h</small>`, `${p.open.length} tasks on deck`, '', '#818CF8');
+  const sc = S.todayLog?.streak_count ?? S.prevLog?.streak_count ?? 0;
+  const first = p.meter || kpi('Streak', `${sc}<small>days</small>`, 'score shows once today is planned', '', '#FF7A5C');
+  // ≥1400: the meter leads the KPI row · 1024–1399: it moves to the top of the task column (CSS picks one)
+  const kMeter = first.replace('class="card', 'class="card kmeter'), kMeterAlt = first.replace('class="card', 'class="card kmeter-alt')
+    .replace(/id="(vz[^"]+)"/g, 'id="$1b"').replace(/url\(#(vz[^)]+)\)/g, 'url(#$1b)');   // own gradient ids — the hidden copy can't serve them
+  // columns
+  const rows = p.sorted.length ? p.sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — press / to add a task.</div>`;
+  const c1 = kMeterAlt + wakeChallengeHTML() + goalConfirmsHTML() + p.shCard +
+    `<div class="sec-h"><span>On deck</span><b>${p.open.length}</b><span class="dim">${h(openMin)}h open</span></div>` +
+    chipsHTML() + rows + p.planSection;
+  const showCap = !(d && d.available != null) || d.status === 'over';
+  const c2 = planBlocksHTML() + p.evCard + (showCap ? capacityWarnHTML() : '') + callPrepHTML() + replanCardHTML() + waitingOnHTML();
+  const c3 = creditsCardHTML() + caffeineCardHTML() + sleepNightsCardHTML() + (p.bar ? `<div class="card"><h2>Open work by energy</h2>${p.bar}</div>` : '');
+  return `<div class="dash">
+    <div class="dash-kpis">${kMeter}${kCred}${kLoad}${kDone}</div>
+    ${dayStripHTML(p.today)}
+    <div class="dash-grid">
+      <div class="dash-col">${c1}</div>
+      <div class="dash-r"><div class="dash-col">${c2}</div><div class="dash-col">${c3}</div></div>
+    </div></div>`;
+}
+document.addEventListener('keydown', e => {
+  if (!isDesk() || e.metaKey || e.ctrlKey || e.altKey) return;
+  const tag = (document.activeElement && document.activeElement.tagName) || '';
+  const typing = /INPUT|TEXTAREA|SELECT/.test(tag) || (document.activeElement && document.activeElement.isContentEditable);
+  if (e.key === '/' && !typing) {
+    const bar = document.getElementById('addbar'), a = document.getElementById('addinput');
+    if (a && bar && !bar.classList.contains('hidden')) { e.preventDefault(); a.focus(); }
+  } else if (e.key === 'Escape' && typing && document.activeElement.id === 'addinput') document.activeElement.blur();
+});
 
 function rMeter(){
   if (frozenToday()) return `<div class="card"><h2>Score meter</h2><div class="dim">❄ Vacation mode — streak frozen, nothing owed today.</div></div>`;
