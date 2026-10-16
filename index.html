@@ -3050,7 +3050,8 @@ function deskTitleHTML(){
   const n = new Date(), hr = n.getHours();
   const hi = hr < 5 ? 'Up late' : hr < 12 ? 'Good morning' : hr < 17 ? 'Good afternoon' : 'Good evening';
   const date = n.toLocaleDateString('en-US', {weekday: 'long', month: 'short', day: 'numeric'});
-  const sh = S.brief && S.brief.start_here_task;
+  let sh = S.brief && S.brief.start_here_task;
+  if (sh && S.tasks.some(t => t.status === 'done' && (t.title || '').trim().toLowerCase() === sh.trim().toLowerCase())) sh = null;   // brief's pick already done → don't contradict the live START HERE card
   return `<div class="greet">${hi}.</div><div class="gdate">${esc(date)}${sh ? ` · start with <b>${esc(sh)}</b>` : ''}</div>`;
 }
 /* per-view layout: card-only analytics tabs tile into columns; reading/list tabs get a centered column */
