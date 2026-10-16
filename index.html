@@ -779,6 +779,22 @@ nav button.on{box-shadow:0 4px 18px rgba(225,37,27,.4),inset 0 1px 0 rgba(255,25
   .dash-grid{grid-template-columns:minmax(0,1.25fr) minmax(0,1fr)}
   .dash-r{display:block;min-width:0}
 }
+
+/* ===== v7 — body scores ===== */
+.bodycard{cursor:pointer}
+.bodyrow{display:flex;align-items:center;gap:12px}
+.bodytxt{flex:1;min-width:0}
+.bodytxt .bl{font-family:'Inter',sans-serif;font-weight:800;font-size:19px;letter-spacing:-.02em;line-height:1.1}
+.bodytxt .bw{font-family:var(--mono);font-size:10.5px;color:var(--dim);line-height:1.5;margin-top:4px}
+.bodyrings{position:relative;display:flex;gap:10px;align-items:center}
+.bodykpi{cursor:pointer}
+@media (min-width:1024px){
+  .dash-kpis{grid-template-columns:minmax(0,1.5fr) minmax(0,1.2fr) repeat(3,minmax(0,1fr))}
+  .bodykpi .ks{padding-top:6px}
+}
+@media (min-width:1024px) and (max-width:1399px){
+  .dash-kpis{grid-template-columns:minmax(0,1.3fr) repeat(3,minmax(0,1fr))}
+}
 </style>
 </head>
 <body>
@@ -886,7 +902,7 @@ document.getElementById('a-email').value = OWNER;
 async function loadAll(){
   const seq = loadAll._seq = (loadAll._seq || 0) + 1;
   const today = todayISO();
-  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, jp, flog, jpn, jm, caf, sn, hdays] = await Promise.all([
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, jp, flog, jpn, jm, caf, sn, hdays, bsc] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
@@ -930,6 +946,7 @@ async function loadAll(){
     db.rpc('lifeos_caffeine_context'),
     db.rpc('lifeos_sleep_nights', {p_days: 14}),
     db.rpc('lifeos_health_days', {p_days: 14}),
+    db.rpc('lifeos_body_scores', {p_days: 14}),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   S.cards = cd.data || []; S.events = ev.data || []; S.freezes = fz.data || [];
@@ -964,6 +981,7 @@ async function loadAll(){
   if (Date.now() - (S.lastWrite || 0) < 1200) { setTimeout(loadAll, 1200); return; }   // predates the user's own write
   if (caf.data) S.caff = caf.data;    // caffeine module: level/curve/bags/last-safe (server-computed); keep old on a failed RPC
   S.sleepNights = sn.data || [];   // sleep card: 14 nights — Fitbit session when one exists, else bed = last app close, wake = ranked confirmation
+  S.body = bsc.data || [];        // v7: sleep score + readiness (lifeos_body_scores)
   S.healthDays = hdays.data || []; // Fitbit vitals (resting HR, HRV, steps, SpO2, resp) via Apple Health → LifeOS Health shortcut
   S.expStats = {}; S.expArms = {};
   try {
@@ -2041,7 +2059,7 @@ function rToday(){
     return rows.length ? `<div class="pname">FROM TODAY'S PLAN</div>` + rows.map(taskRowHTML).join('') : '';
   })();
   if (isDesk()) return todayDeskHTML({shCard, meter, bar, evCard, sorted, planSection, open, today});
-  return wakeChallengeHTML() + goalConfirmsHTML() + shCard + meter + capacityWarnHTML() + callPrepHTML() + planBlocksHTML() + replanCardHTML() + creditsCardHTML() + caffeineCardHTML() + sleepNightsCardHTML() + waitingOnHTML() + evCard +
+  return wakeChallengeHTML() + goalConfirmsHTML() + shCard + meter + bodyCardHTML() + capacityWarnHTML() + callPrepHTML() + planBlocksHTML() + replanCardHTML() + creditsCardHTML() + caffeineCardHTML() + sleepNightsCardHTML() + waitingOnHTML() + evCard +
     (bar ? `<div class="card"><h2>Today's energy</h2>${bar}</div>` : '') +
     chipsHTML() +
     (sorted.length ? sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — add a task below or check TASKS.</div>`) +
@@ -3143,7 +3161,7 @@ function todayDeskHTML(p){
   const c2 = planBlocksHTML() + p.evCard + (showCap ? capacityWarnHTML() : '') + callPrepHTML() + replanCardHTML() + waitingOnHTML();
   const c3 = creditsCardHTML() + caffeineCardHTML() + sleepNightsCardHTML() + (p.bar ? `<div class="card"><h2>Open work by energy</h2>${p.bar}</div>` : '');
   return `<div class="dash">
-    <div class="dash-kpis">${kMeter}${kCred}${kLoad}${kDone}</div>
+    <div class="dash-kpis">${kMeter}${bodyCardHTML('kpi')}${kCred}${kLoad}${kDone}</div>
     ${dayStripHTML(p.today)}
     <div class="dash-grid">
       <div class="dash-col">${c1}</div>
@@ -3159,6 +3177,55 @@ document.addEventListener('keydown', e => {
     if (a && bar && !bar.classList.contains('hidden')) { e.preventDefault(); a.focus(); }
   } else if (e.key === 'Escape' && typing && document.activeElement.id === 'addinput') document.activeElement.blur();
 });
+
+/* ================= BODY — sleep score + readiness (v7, 2026-10-16) =================
+   Server: lifeos_body_scores(14) — Fitbit sleep sessions (duration vs need, deep+REM share,
+   efficiency, bedtime vs personal median) → sleep score; + 7-night debt + bedtime spread
+   (+ HRV/RHR vs 14-day baseline once health_daily has them) → readiness. No setup needed. */
+const READY_COL = r => r >= 80 ? ['#34D399', '#86EFAC'] : r >= 60 ? ['#F59E0B', '#FCD34D'] : ['#E1251B', '#FF7A5C'];
+const SLEEP_COL = ['#818CF8', '#C4B5FD'];
+const bodyLatest = () => { const b = S.body || []; return b.length ? b[b.length - 1] : null; };
+const hmin = m => `${Math.floor((m || 0) / 60)}h${String(Math.round((m || 0) % 60)).padStart(2, '0')}`;
+const clock12 = s => { if (!s) return ''; const [h, m] = s.split(':').map(Number); return `${h % 12 || 12}:${String(m).padStart(2, '0')}${h < 12 ? 'a' : 'p'}`; };
+function bodyWhy(b, short){
+  const bits = [`${hmin(b.asleep_min)} asleep`];
+  if (!short && b.deep_min != null) bits.push(`${b.deep_min}m deep · ${b.rem_min}m REM`);
+  if (b.debt_min > 30) bits.push(`${hmin(b.debt_min)} debt`);
+  if (b.bed) bits.push(`asleep ${clock12(b.bed)}`);
+  if (!short && b.bed_sd_min != null && b.bed_sd_min > 45) bits.push(`bedtime ±${b.bed_sd_min}m`);
+  return bits.join(' · ');
+}
+function bodyCardHTML(mode){
+  const b = bodyLatest();
+  if (!b) return '';
+  const stale = b.date !== calTodayISO() ? ` · as of ${b.date.slice(5).replace('-', '/')}` : '';
+  const sz = mode === 'kpi' ? 78 : 86;
+  const rR = VIZ.ring(b.ready, {size: sz, stroke: 8, label: b.ready, sub: 'ready', color: READY_COL(b.ready)});
+  const rS = VIZ.ring(b.sleep, {size: sz, stroke: 8, label: b.sleep, sub: 'sleep', color: SLEEP_COL});
+  const lc = READY_COL(b.ready)[0];
+  if (mode === 'kpi') return `<div class="card kpi bodykpi" style="--kc:${lc}" onclick="setView('trends')" title="tap for the 14-night trend">
+      <h2>Body${stale}</h2><div class="bodyrings">${rR}${rS}</div>
+      <div class="ks"><b>${b.label}</b> · ${esc(bodyWhy(b, true))}</div></div>`;
+  const spark = (S.body || []).length > 1 ? VIZ.area(S.body.map(x => x.ready), {w: 200, h: 34, pad: 3, min: 0, max: 100, color: lc, sw: 1.8, stretch: true, style: 'width:100%;height:34px;display:block;margin-top:6px'}) : '';
+  return `<div class="card bodycard" onclick="setView('trends')"><h2>Body <span class="dim" style="font-weight:400;text-transform:none;letter-spacing:0">· Fitbit${b.vitals ? ' + HRV' : ''}${stale}</span></h2>
+    <div class="bodyrow">${rR}${rS}<div class="bodytxt"><div class="bl" style="color:${lc}">${b.label}</div><div class="bw">${esc(bodyWhy(b))}</div>${spark}</div></div></div>`;
+}
+function bodyTrendHTML(){
+  const b = S.body || [];
+  if (b.length < 2) return '';
+  const last = b[b.length - 1], W = 560;
+  const fmt = d => d.slice(5).replace('-', '/');
+  const avg = k => Math.round(b.reduce((s, x) => s + (+x[k] || 0), 0) / b.length);
+  return `<div class="card"><h2>Body — last ${b.length} nights</h2>
+    <div class="chart-head"><span class="hero sm" style="color:${READY_COL(last.ready)[0]}">${last.ready}</span><span class="dim">readiness · ${last.label} · avg ${avg('ready')}</span>
+      <span class="hero sm" style="margin-left:auto;color:#C4B5FD">${last.sleep}</span><span class="dim">sleep · avg ${avg('sleep')}</span></div>
+    <div class="chart">${VIZ.area(b.map(x => x.ready), {w: W, h: 120, min: 0, max: 100, target: 60, targetLabel: '60', color: '#34D399',
+      dots: (i) => READY_COL(b[i].ready)[0], titles: (i, v) => `${b[i].date}: readiness ${v} (${b[i].label})`})}</div>
+    <div class="chart">${VIZ.area(b.map(x => x.sleep), {w: W, h: 80, min: 0, max: 100, color: '#A78BFA', dots: () => '#C4B5FD', dotR: 2.6,
+      titles: (i, v) => `${b[i].date}: sleep ${v} · ${hmin(b[i].asleep_min)} · asleep ${clock12(b[i].bed)}`})}
+      <div class="xl"><span>${fmt(b[0].date)}</span><span>asleep at: ${b.slice(-7).map(x => clock12(x.bed)).join(' · ')}</span><span>${fmt(last.date)}</span></div></div>
+    <div class="dim mono" style="font-size:10px;margin-top:6px">sleep = duration vs ${hmin(480)} need · deep+REM · efficiency · bedtime vs your usual · readiness adds 7-night debt + bedtime spread${last.vitals ? ' + HRV/RHR' : ' (HRV/RHR join automatically if they ever sync)'}</div></div>`;
+}
 
 function rMeter(){
   if (frozenToday()) return `<div class="card"><h2>Score meter</h2><div class="dim">❄ Vacation mode — streak frozen, nothing owed today.</div></div>`;
@@ -3939,7 +4006,7 @@ function rTrends(){
   const fl = logs.filter(l => l.focus);
   const focusAvg = fl.length ? (fl.reduce((s, l) => s + l.focus, 0) / fl.length).toFixed(1) : '—';
   const deep7 = per.slice(-7).reduce((s, p) => s + p.o.DEEP, 0);
-  return weekHealthHTML() + whatIfCardHTML() + sleepCardHTML() + adherenceCardHTML() + experimentsCardHTML() + `
+  return bodyTrendHTML() + weekHealthHTML() + whatIfCardHTML() + sleepCardHTML() + adherenceCardHTML() + experimentsCardHTML() + `
   <div class="card"><h2>Score — last ${line.length} scored days</h2>${scoreSvg}</div>
   <div class="card"><h2>Done work by energy — 14 days</h2>${barsSvg}
     <div class="elegend" style="margin-top:6px">${Object.keys(ENERGY).map(e => `<span><i style="background:${ENERGY[e].hex}"></i>${e}</span>`).join('')}</div></div>
