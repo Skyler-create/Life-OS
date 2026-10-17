@@ -801,6 +801,26 @@ nav button.on{box-shadow:0 4px 18px rgba(225,37,27,.4),inset 0 1px 0 rgba(255,25
   .dash-kpis .kmeter{display:block!important}
   .kmeter-alt{display:none!important}
 }
+
+/* v7d: laptop hero strip */
+@media (min-width:1024px){
+  .hero-card{display:flex;align-items:center;gap:28px;padding:18px 22px;margin-bottom:14px;
+    background:radial-gradient(600px 220px at 0% 0%,rgba(225,37,27,.10),transparent 70%),linear-gradient(180deg,var(--card-a),var(--card-b))}
+  .hrings{display:flex;gap:22px;flex:0 0 auto}
+  .hring .ring .rl{font-size:9.5px}
+  .htext{flex:1;min-width:0;border-left:1px solid rgba(255,255,255,.07);padding-left:26px}
+  .hnext{font-size:17px;line-height:1.45;color:var(--text)}
+  .hnext b{color:#fff}
+  .hsub{font-family:var(--mono);font-size:11px;color:var(--warn);margin-top:6px}
+  .hbody{font-family:var(--mono);font-size:11.5px;color:var(--dim);margin-top:10px}
+  .hbody span{font-weight:700}
+}
+@media (min-width:1024px) and (max-width:1279px){
+  .hrings{gap:14px}
+  .hero-card{gap:18px}
+  .htext{padding-left:18px}
+  .hnext{font-size:15px}
+}
 </style>
 </head>
 <body>
@@ -3074,7 +3094,7 @@ function deskTitleHTML(){
   const date = n.toLocaleDateString('en-US', {weekday: 'long', month: 'short', day: 'numeric'});
   let sh = S.brief && S.brief.start_here_task;
   if (sh && S.tasks.some(t => t.status === 'done' && (t.title || '').trim().toLowerCase() === sh.trim().toLowerCase())) sh = null;   // brief's pick already done → don't contradict the live START HERE card
-  return `<div class="greet">${hi}.</div><div class="gdate">${esc(date)}${sh ? ` · start with <b>${esc(sh)}</b>` : ''}</div>`;
+  return `<div class="greet">${hi}.</div><div class="gdate">${esc(date)}</div>`;
 }
 /* per-view layout: card-only analytics tabs tile into columns; reading/list tabs get a centered column */
 const MASONRY_VIEWS = new Set(['trends', 'coffee', 'money', 'time', 'settings', 'jobs', 'log']);
@@ -3122,6 +3142,26 @@ function dayStripHTML(today){
       ${inRange ? `<div class="ds-past" style="width:calc((100% - 48px) * ${(np / 100).toFixed(4)})"></div><div class="ds-now" style="left:calc(48px + (100% - 48px) * ${(np / 100).toFixed(4)})"></div>` : ''}
     </div></div>`;
 }
+/* v7d laptop hero: Score · Ready · Sleep rings in one strip + the next move */
+function deskHeroHTML(){
+  const r = S.scoreNow || {}, b = bodyLatest();
+  const frozen = frozenToday();
+  const sc = r.score == null ? null : Math.round(r.score), hit = sc != null && sc >= 70;
+  const scoreCol = hit ? ['#34D399', '#86EFAC'] : (sc || 0) >= 45 ? ['#F59E0B', '#FBBF24'] : ['#E1251B', '#FF7A5C'];
+  const ring = (v, sub, col, extra = {}) => `<div class="hring">${VIZ.ring(v == null ? 0 : v, Object.assign({size: 108, stroke: 10, label: v == null ? '—' : v, sub, color: col}, extra))}</div>`;
+  const rings = ring(sc, 'score', scoreCol, {target: 70}) +
+    (b ? ring(b.ready, 'ready', READY_COL(b.ready)) + ring(b.sleep, 'sleep', SLEEP_COL) : '');
+  let next;
+  if (frozen) next = '❄ Vacation mode — streak frozen.';
+  else if (sc == null) next = 'Score starts once today has a plan.';
+  else if (hit) next = '<b>Streak safe.</b> Everything else today is bonus.';
+  else if ((r.picks || []).length && r.projected != null && r.projected >= 70) next = `Finish <b>${r.picks.map(esc).join('</b> + <b>')}</b> → ~${Math.round(r.projected)}`;
+  else next = 'Most of the plan is needed — start with the heaviest item.';
+  const busy = r.fit != null && r.fit < 1 ? `<div class="hsub">busy day · bar scaled to ${Math.round(r.fit * 100)}%</div>` : '';
+  const body = b ? `<div class="hbody"><span style="color:${READY_COL(b.ready)[0]}">${b.label}</span> · ${esc(bodyWhy(b, true))}</div>` : '';
+  return `<div class="card hero-card"><div class="hrings">${rings}</div><div class="htext"><div class="hnext">${next}</div>${busy}${body}</div></div>`;
+}
+
 function todayDeskHTML(p){
   const h = m => Math.round((m || 0) / 60 * 10) / 10;
   const EORD = ['DEEP', 'FOCUS', 'LIGHT', 'PARALLEL'];
@@ -3161,10 +3201,10 @@ function todayDeskHTML(p){
   const c1 = wakeChallengeHTML() + goalConfirmsHTML() + p.shCard +
     chipsHTML() + rows + p.planSection;
   const showCap = !(d && d.available != null) || d.status === 'over';
-  const c2 = planBlocksHTML() + (showCap ? capacityWarnHTML() : '') + callPrepHTML() + replanCardHTML() + waitingOnHTML();
-  const c3 = creditsCardHTML() + caffeineCardHTML() + sleepNightsCardHTML() + (p.bar ? `<div class="card"><h2>Open work by energy</h2>${p.bar}</div>` : '');
+  const c2 = planBlocksHTML() + (showCap ? capacityWarnHTML() : '') + callPrepHTML() + creditsCardHTML() + replanCardHTML();
+  const c3 = sleepNightsCardHTML() + caffeineCardHTML() + waitingOnHTML();
   return `<div class="dash">
-    <div class="dash-kpis">${kMeter}${bodyCardHTML('kpi')}</div>
+    ${deskHeroHTML()}
     ${dayStripHTML(p.today)}
     <div class="dash-grid">
       <div class="dash-col">${c1}</div>
