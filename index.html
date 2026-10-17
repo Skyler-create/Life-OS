@@ -794,6 +794,13 @@ nav button.on{box-shadow:0 4px 18px rgba(225,37,27,.4),inset 0 1px 0 rgba(255,25
 @media (min-width:1024px) and (max-width:1399px){
   .dash-kpis{grid-template-columns:minmax(0,1.3fr) repeat(3,minmax(0,1fr))}
 }
+
+/* v7c: top row is just score meter + body at every laptop width */
+@media (min-width:1024px){
+  .dash-kpis{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr)!important}
+  .dash-kpis .kmeter{display:block!important}
+  .kmeter-alt{display:none!important}
+}
 </style>
 </head>
 <body>
@@ -2033,7 +2040,7 @@ function rToday(){
     <div class="elegend">` + ents.map(([e, m]) =>
       `<span><i style="background:${(ENERGY[e] || {}).hex};color:${(ENERGY[e] || {}).hex}"></i>${e} ${Math.round(m/60*10)/10}h</span>`).join('') + `</div>` : '';
   const shn = startHereNow(todays);
-  const shCard = shn ? `<div class="card starthere"><h2>Start here <span class="dim" style="font-weight:400;text-transform:none;letter-spacing:0">· ${shn.why}</span></h2>${taskRowHTML(shn.t).replace('id="t-', 'id="sht-')}</div>` : '';
+  const shCard = shn ? `<div class="card starthere"><h2>Start here</h2>${taskRowHTML(shn.t).replace('id="t-', 'id="sht-')}</div>` : '';
   const meter = rMeter();
   allEvents().forEach((e, i) => e._i = i);
   const todaysEv = allEvents().filter(e => e.date === today).sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
@@ -2576,7 +2583,6 @@ function planBlocksHTML(){
       <span>${isCall ? '📞 ' : b.locked ? '📌 ' : b.source === 'soft' ? '💡 ' : ''}${esc(b.title || '')}</span></div>`;
   }).join('');
   return `<div class="card"><h2 style="display:flex;align-items:center">Today's plan
-      <span class="dim" style="font-size:11px;font-weight:400;margin-left:6px">· auto-repacks /20min</span>
       ${canEdit ? `<button class="btn" style="margin-left:auto;padding:4px 10px" onclick="startPlanEdit()">✎ Edit</button>` : ''}</h2>
     ${rows || '<div class="dim" style="font-size:12px">nothing packed — plan empty, all done, or no time left today</div>'}</div>`;
 }
@@ -3108,7 +3114,7 @@ function dayStripHTML(today){
   const n = new Date(); let nowM = n.getHours() * 60 + n.getMinutes(); if (nowM < 6 * 60) nowM += 1440;
   const np = pct(nowM), inRange = nowM > S0 && nowM < S1;
   const tickLines = [...Array(9)].map((_, i) => `<div class="ds-tick" style="left:calc(48px + (100% - 48px) * ${(pct((8 + i * 2) * 60) / 100).toFixed(4)})"></div>`).join('');
-  return `<div class="card"><h2>Day <span class="dim" style="font-weight:400;text-transform:none;letter-spacing:0">· calendar + plan · 7a → 1a</span></h2>
+  return `<div class="card"><h2>Day</h2>
     <div class="ds">
       <div class="ds-hours">${ticks.join('')}</div>${tickLines}
       <div class="ds-lane" data-l="CAL">${evs || '<span class="ds-empty">no timed events</span>'}</div>
@@ -3152,14 +3158,13 @@ function todayDeskHTML(p){
     .replace(/id="(vz[^"]+)"/g, 'id="$1b"').replace(/url\(#(vz[^)]+)\)/g, 'url(#$1b)');   // own gradient ids — the hidden copy can't serve them
   // columns
   const rows = p.sorted.length ? p.sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — press / to add a task.</div>`;
-  const c1 = kMeterAlt + wakeChallengeHTML() + goalConfirmsHTML() + p.shCard +
-    `<div class="sec-h"><span>On deck</span><b>${p.open.length}</b><span class="dim">${h(openMin)}h open</span></div>` +
+  const c1 = wakeChallengeHTML() + goalConfirmsHTML() + p.shCard +
     chipsHTML() + rows + p.planSection;
   const showCap = !(d && d.available != null) || d.status === 'over';
-  const c2 = planBlocksHTML() + p.evCard + (showCap ? capacityWarnHTML() : '') + callPrepHTML() + replanCardHTML() + waitingOnHTML();
+  const c2 = planBlocksHTML() + (showCap ? capacityWarnHTML() : '') + callPrepHTML() + replanCardHTML() + waitingOnHTML();
   const c3 = creditsCardHTML() + caffeineCardHTML() + sleepNightsCardHTML() + (p.bar ? `<div class="card"><h2>Open work by energy</h2>${p.bar}</div>` : '');
   return `<div class="dash">
-    <div class="dash-kpis">${kMeter}${bodyCardHTML('kpi')}${kCred}${kLoad}${kDone}</div>
+    <div class="dash-kpis">${kMeter}${bodyCardHTML('kpi')}</div>
     ${dayStripHTML(p.today)}
     <div class="dash-grid">
       <div class="dash-col">${c1}</div>
@@ -3246,7 +3251,6 @@ function rMeter(){
   return `<div class="card"><h2>Score meter</h2>
     <div class="meterbody">${ring}
       <div class="meterhint">
-        <span class="pill" style="color:${hit ? 'var(--ok)' : left <= 25 ? 'var(--warn)' : 'var(--accent-hi)'}">${hit ? '✓ streak safe' : left + ' to go'}</span>
         <div>${hint}</div>
         ${r.fit != null && r.fit < 1 ? `<div class="sub">busy day · bar scaled to ${Math.round(r.fit * 100)}% of the plan (${Math.round((r.budget_min || 0) / 6) / 10}h of work fits)</div>` : ''}
       </div>
