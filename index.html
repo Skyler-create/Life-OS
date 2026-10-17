@@ -766,7 +766,6 @@ nav button.on{box-shadow:0 4px 18px rgba(225,37,27,.4),inset 0 1px 0 rgba(255,25
   .ds-now::before{content:'';position:absolute;top:-4px;left:-3px;width:8px;height:8px;border-radius:50%;
     background:#E0F2FE;box-shadow:0 0 8px #38BDF8}
   .kmeter-alt{display:none}
-  .dash .schip[onclick^="clockIn"]{font-size:10px!important;padding-left:2px!important;padding-right:2px!important;letter-spacing:-.02em}
   main.desk.widecal .mo-cell{min-height:104px}
   main.desk.widecal .mo-chip{font-size:10px;padding:2px 4px}
   .ds-empty{position:absolute;left:12px;top:0;line-height:32px;font-family:var(--mono);font-size:10.5px;color:var(--dim)}
@@ -2267,12 +2266,12 @@ function creditsCardHTML(){
       <button class="btn primary" style="margin-left:auto;flex:0 0 auto" onclick="clockOut()">Clock out</button></div>`;
   } else {
     timer = `<div style="display:flex;align-items:center;gap:6px">
-      ${['DEEP','FOCUS','LIGHT'].map(e => `<button class="schip" style="flex:1;white-space:nowrap;font-size:11px;padding:7px 6px;text-align:center;touch-action:pan-y;border-color:${ENERGY[e].hex};color:${ENERGY[e].hex}" onclick="clockIn('${e}')">${e} · ${CREDIT_RATE[e] * (c.urgent_mode ? 3 : 1)}m/cr</button>`).join('')}</div>
-    <div class="dim" style="font-size:10px;font-family:var(--mono);margin-top:4px">${c.urgent_mode ? 'deadline week: untethered clock-in = ⅓ rate · hit ▶ on any task for full rate (' + ['DEEP','FOCUS','LIGHT'].map(e => CREDIT_RATE[e] + 'm').join('/') + ')' : 'any task or general clock-in: ' + ['DEEP','FOCUS','LIGHT'].map(e => CREDIT_RATE[e] + 'm').join('/') + ' per credit'}</div>`;
+      ${['DEEP','FOCUS','LIGHT'].map(e => `<button class="schip" style="flex:1;white-space:nowrap;font-size:11px;padding:7px 6px;text-align:center;touch-action:pan-y;border-color:${ENERGY[e].hex};color:${ENERGY[e].hex}" onclick="clockIn('${e}')">${e}</button>`).join('')}</div>
+    `;
   }
   const scroll = c.scroll_open
     ? `<div style="color:var(--accent);font-family:var(--mono);font-size:11px;margin-top:6px">📱 ${esc(c.scroll_open)} meter RUNNING — 1 credit/min${/\(blocked\)/.test(c.scroll_open) ? ' · sneak-back trap, chains to 90m/day' : ', auto-cuts at 30m without a close'}</div>`
-    : `<div class="dim" style="font-family:var(--mono);font-size:11px;margin-top:6px">📱 scrolled ${c.metered || 0}m today${c.windows ? ` · ${c.windows}m prepaid` : ''}</div>`;
+    : '';
   const debtLine = !debt ? '' :
     `<div style="color:var(--accent);font-family:var(--mono);font-size:11px;margin-top:6px">⛓ −${debt} debt carried from yesterday — balance stays 0 until earned credits cover it</div>`;
   const nightLine = !c.night_cap ? '' :
@@ -2289,7 +2288,7 @@ function creditsCardHTML(){
         wt==='override' ? 'skipped quiz — no +10 quiz credits' :
         'after the bonus window — no wake bonus (cap 90)'}</div>`
     : '';
-  const starterLine = !c.start_here ? '' : c.starter_done
+  const starterLine = (!c.start_here || c.starter_done) ? '' : c.starter_done
     ? `<div class="dim" style="font-family:var(--mono);font-size:11px;margin-bottom:8px">🔓 ${c.start_here_done ? 'START HERE done' : 'starter done — ' + c.starter_min + 'm'} on “${esc(c.start_here)}”</div>`
     : `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;border:1px solid var(--focus);border-radius:10px;background:rgba(251,191,36,.06)">
         <span style="font-size:12px;color:var(--focus);min-width:0">🔒 10 free credits locked — ${Math.max(10 - (c.starter_min || 0), 0)} more min on <b>${esc(c.start_here)}</b></span>
@@ -2313,8 +2312,7 @@ function creditsCardHTML(){
       VIZ.tile(c.gross, 'earned', {unit: 'm', color: c.gross >= c.cap ? '#FBBF24' : '#8A90A0', colored: c.gross >= c.cap, sub: 'cap ' + c.cap}),
     ])}
     <div class="ebar track" style="margin:10px 0 6px;height:10px"><div style="width:${pct}%;background:${pct >= 85 ? 'linear-gradient(90deg,#E1251B,#FF7A5C)' : pct >= 60 ? 'linear-gradient(90deg,#D97706,#FBBF24)' : 'linear-gradient(90deg,#34D399,#86EFAC)'};border-radius:5px"></div></div>
-    <div class="dim" style="font-size:11px;margin-bottom:10px">earned = ${c.free} free + ${c.timer} clocked + ${c.bonus} completions${c.wake_bonus ? ` + ${c.wake_bonus} wake` : ''}${c.reflect_bonus ? ` + ${c.reflect_bonus} reflected` : ''}${c.class_bonus ? ` + ${c.class_bonus} class` : ''} · daily cap ${c.cap}${c.gross >= c.cap ? ' — HIT' : ''}</div>
-    ${gateLine}${classLine}${starterLine}${timer}${scroll}${debtLine}${wakeLine}${sleepHTML()}
+    ${gateLine}${classLine}${starterLine}${timer}${scroll}
   </div>`;
 }
 /* "I'm here" for a class -> +N credits (server checks the time window) */
@@ -3206,12 +3204,13 @@ function bodyCardHTML(mode){
   if (mode === 'kpi') return `<div class="card kpi bodykpi" style="--kc:${lc}" onclick="setView('trends')" title="tap for the 14-night trend">
       <h2>Body${stale}</h2><div class="bodyrings">${rR}${rS}</div>
       <div class="ks"><b>${b.label}</b> · ${esc(bodyWhy(b, true))}</div></div>`;
-  const spark = (S.body || []).length > 1 ? VIZ.area(S.body.map(x => x.ready), {w: 200, h: 34, pad: 3, min: 0, max: 100, color: lc, sw: 1.8, stretch: true, style: 'width:100%;height:34px;display:block;margin-top:6px'}) : '';
+  const wk = (S.body || []).slice(-7);
+  const spark = wk.length > 1 ? VIZ.area(wk.map(x => x.ready), {w: 200, h: 34, pad: 3, min: 0, max: 100, color: lc, sw: 1.8, stretch: true, style: 'width:100%;height:34px;display:block;margin-top:6px'}) : '';
   return `<div class="card bodycard" onclick="setView('trends')"><h2>Body <span class="dim" style="font-weight:400;text-transform:none;letter-spacing:0">· Fitbit${b.vitals ? ' + HRV' : ''}${stale}</span></h2>
     <div class="bodyrow">${rR}${rS}<div class="bodytxt"><div class="bl" style="color:${lc}">${b.label}</div><div class="bw">${esc(bodyWhy(b))}</div>${spark}</div></div></div>`;
 }
 function bodyTrendHTML(){
-  const b = S.body || [];
+  const b = (S.body || []).slice(-7);
   if (b.length < 2) return '';
   const last = b[b.length - 1], W = 560;
   const fmt = d => d.slice(5).replace('-', '/');
@@ -3249,7 +3248,7 @@ function rMeter(){
       <div class="meterhint">
         <span class="pill" style="color:${hit ? 'var(--ok)' : left <= 25 ? 'var(--warn)' : 'var(--accent-hi)'}">${hit ? '✓ streak safe' : left + ' to go'}</span>
         <div>${hint}</div>
-        ${r.projected != null && !hit ? `<div class="sub">projected ${Math.round(r.projected)} if the picks land</div>` : ''}
+        ${r.fit != null && r.fit < 1 ? `<div class="sub">busy day · bar scaled to ${Math.round(r.fit * 100)}% of the plan (${Math.round((r.budget_min || 0) / 6) / 10}h of work fits)</div>` : ''}
       </div>
     </div>
   </div>`;
@@ -5854,7 +5853,7 @@ function caffReflectLine(){
    ranked confirmation (up > app > challenge > alarm > override). lifeos_sleep_nights() does
    the pairing; this only draws. */
 function sleepNightsCardHTML(){
-  const nights = S.sleepNights || []; const st = S.sleepStats || {};
+  const nights = (S.sleepNights || []).slice(-7); const st = S.sleepStats || {};   // past week only (Skyler, 10-16)
   const need = +st.need_min || 480;
   const last = nights[nights.length - 1] || null;
   const withDur = nights.filter(n => n.dur_min);
@@ -5887,8 +5886,9 @@ function sleepNightsCardHTML(){
     <line x1="${L}" x2="${W}" y1="${needY.toFixed(1)}" y2="${needY.toFixed(1)}" stroke="var(--focus)" stroke-dasharray="4 4" opacity=".7"/>
     ${bars}</svg>`;
   const tier = S.credits?.sleep_tier;
-  const tierLine = !withDur.length
-    ? `<div class="dim" style="font-family:var(--mono);font-size:11px">no bedtimes logged yet — set up the "LifeOS Sleep" automation (bed = last app close of the night)</div>`
+  const tierLine = withDur.length ? '' : `<div class="dim" style="font-family:var(--mono);font-size:11px">no sleep logged yet</div>`;
+  const _tierOld = !withDur.length
+    ? ''
     : `<div class="dim" style="font-family:var(--mono);font-size:11px">${st.baseline_n >= 3 ? `usual: bed ${st.baseline_bed_clock} · up ${st.baseline_wake_clock} · ${fmtH(st.baseline_dur_min)}` : `${withDur.length} night${withDur.length > 1 ? 's' : ''} logged — baseline after 3`}${tier && tier !== 'none' ? ` · sleep bonus ${tier === 'full' ? '+6' : tier === 'partial' ? '+3' : '+0'}` : ''}${st.debt_min > 30 ? ` · <span style="color:var(--focus)">${st.debt_min}m short</span>` : ''}</div>`;
   const methodLabel = {up: 'up (steps)', app: 'app open', challenge: 'quiz', override: 'skipped quiz', alarm: 'alarm', shortcut: 'shortcut', fitbit: 'Fitbit'};
   const fb = last && last.source === 'fitbit';
@@ -5913,7 +5913,7 @@ function sleepNightsCardHTML(){
         ${v.flag === 'strained' ? `<span style="color:#FBBF24">recover day · capacity ×${v.factor}</span>` : ''}
       </div>` : '';
   const srcLine = (fb || (S.healthDays || []).length || (S.settings || {}).health_last_ingest) ? ''
-    : `<div class="dim" style="font-family:var(--mono);font-size:11px;margin-top:4px">Fitbit not flowing yet — Google Health → Apple Health → Health Auto Export automation → here</div>`;
+    : '';
   return `<div class="card"><h2>😴 Sleep${fb ? ' <span class="dim" style="font-size:10px;font-family:var(--mono);font-weight:400">· Fitbit</span>' : ''}</h2>
     <div style="display:flex;gap:8px;margin-bottom:4px">
       ${stat(last?.bed || '—', fb ? 'ASLEEP AT' : 'BED')}
