@@ -928,7 +928,7 @@ document.getElementById('a-email').value = OWNER;
 async function loadAll(){
   const seq = loadAll._seq = (loadAll._seq || 0) + 1;
   const today = todayISO();
-  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, jp, flog, jpn, jm, caf, sn, hdays, bsc] = await Promise.all([
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
@@ -973,6 +973,9 @@ async function loadAll(){
     db.rpc('lifeos_sleep_nights', {p_days: 14}),
     db.rpc('lifeos_health_days', {p_days: 14}),
     db.rpc('lifeos_body_scores', {p_days: 14}),
+    db.rpc('lifeos_day_tags'),
+    db.rpc('lifeos_tonight_line'),
+    db.rpc('lifeos_tag_effects', {p_days: 30}),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   S.cards = cd.data || []; S.events = ev.data || []; S.freezes = fz.data || [];
@@ -1008,6 +1011,9 @@ async function loadAll(){
   if (caf.data) S.caff = caf.data;    // caffeine module: level/curve/bags/last-safe (server-computed); keep old on a failed RPC
   S.sleepNights = sn.data || [];   // sleep card: 14 nights — Fitbit session when one exists, else bed = last app close, wake = ranked confirmation
   S.body = bsc.data || [];        // v7: sleep score + readiness (lifeos_body_scores)
+  S.dayTags = dtg.data || [];     // day tags (manual + auto caffeine-late) for the credit day
+  S.tonight = tnl.data || null;   // one-sentence tonight line (server)
+  S.tagEffects = tfx.data || [];  // per-tag sleep effect sizes, 30 d
   S.healthDays = hdays.data || []; // Fitbit vitals (resting HR, HRV, steps, SpO2, resp) via Apple Health → LifeOS Health shortcut
   S.expStats = {}; S.expArms = {};
   try {
@@ -3468,6 +3474,7 @@ function rReflect(){
       ${caffReflectLine()}
     </div>
   </div>
+  ${dayTagsCardHTML()}
   <div class="card"><h2>Notes</h2>
     <div class="metric-grid">
       <div class="full"><label>Notes for tomorrow</label><textarea id="r-nt" rows="2">${esc(L.notes_tomorrow || '')}</textarea></div>
@@ -3477,6 +3484,52 @@ function rReflect(){
   </div>
   <button class="btn primary" style="width:100%;padding:12px" onclick="saveReflection()">Save reflection</button>
   <div style="height:10px"></div>`;
+}
+/* ===== DAY TAGS + TONIGHT (2026-10-17) =====
+   One-tap chips for what happened today (alcohol, late caffeine, game, …). A tag on day D is scored
+   against the night that ends on D+1: lifeos_tag_effects compares tagged nights to untagged ones
+   (deep+REM, asleep, onset, efficiency, sleep score, readiness, HRV/RHR once vitals flow).
+   caffeine-late is auto from the caffeine log (≥30 mg after 14:00). The "tonight" sentence is
+   server-built (lifeos_tonight_line) and also goes into the morning brief via plan_context. */
+function tagVocab(){ try { return JSON.parse((S.settings || {}).day_tags_vocab || '[]'); } catch(e){ return []; } }
+function dayTagsCardHTML(){
+  const on = new Set((S.dayTags || []).map(t => t.tag));
+  const auto = new Set((S.dayTags || []).filter(t => t.src === 'auto').map(t => t.tag));
+  const vocab = tagVocab();
+  const extra = [...on].filter(t => !vocab.includes(t));
+  const chip = t => `<button class="schip ${on.has(t) ? 'on' : ''}" ${auto.has(t) ? 'title="auto from the caffeine log"' : ''} onclick="toggleDayTag('${esc(t)}')">${esc(t)}${auto.has(t) ? ' ·auto' : ''}</button>`;
+  const tn = S.tonight || {};
+  return `<div class="card"><h2>Today's tags <span class="dim" style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px">· scored against tonight's sleep</span></h2>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 8px">${vocab.concat(extra).map(chip).join('')}
+      <button class="schip" onclick="addDayTag()">+ tag</button></div>
+    ${tn.line ? `<div style="font-size:13px;line-height:1.45;padding:8px 10px;border-radius:10px;background:rgba(255,255,255,.04)"><span class="dim mono" style="font-size:10px;letter-spacing:.08em">🌙 TONIGHT</span><br>${esc(tn.line)}</div>` : ''}
+  </div>`;
+}
+async function toggleDayTag(tag){
+  S.lastWrite = Date.now();
+  const {data, error} = await db.rpc('lifeos_tag_toggle', {p_tag: tag});
+  if (error || !data || !data.ok) { toast('⚠ ' + ((error && error.message) || (data && data.error) || 'failed')); return; }
+  S.dayTags = data.tags || []; render();
+  const t = await db.rpc('lifeos_tonight_line'); if (t.data) { S.tonight = t.data; renderSoft(); }
+}
+function addDayTag(){
+  const t = (prompt('Tag for today (one word, e.g. sick, travel):') || '').trim().toLowerCase().replace(/\s+/g, '-');
+  if (t) toggleDayTag(t);
+}
+/* TRENDS: per-tag effect table from lifeos_tag_effects(30) */
+function tagEffectsHTML(){
+  const eff = S.tagEffects || [];
+  if (!eff.length) return `<div class="card"><h2>Tag effects</h2><div class="dim" style="font-size:12px">Tag your days on REFLECT (alcohol, game, late meal…). After a few tagged nights this shows what each one does to your sleep.</div></div>`;
+  const show = ['deep_rem_min', 'asleep_min', 'onset_min', 'sleep_score', 'ready', 'hrv_ms', 'resting_hr'];
+  const unit = {deep_rem_min: 'm', asleep_min: 'm', onset_min: 'm', sleep_score: '', ready: '', hrv_ms: 'ms', resting_hr: 'bpm', efficiency: '%'};
+  const rows = eff.map(e => {
+    const ms = (e.metrics || []).filter(m => show.includes(m.metric) && m.delta != null);
+    if (!ms.length) return '';
+    const cells = ms.map(m => `<span style="display:inline-block;min-width:96px;padding:3px 0;font-size:11px;color:${m.worse ? '#FBBF24' : '#4ADE80'}">${m.label} <b>${m.delta > 0 ? '+' : ''}${Math.round(m.delta)}${unit[m.metric] || ''}</b>${Math.abs(m.d || 0) >= 0.8 ? ' ●' : Math.abs(m.d || 0) >= 0.5 ? ' ◐' : ''}</span>`).join('');
+    return `<div style="padding:6px 0;border-top:1px solid var(--line)"><div style="display:flex;justify-content:space-between;align-items:baseline"><b>${esc(e.tag)}</b><span class="dim mono" style="font-size:10px">${e.nights} night${e.nights === 1 ? '' : 's'} vs ${e.base_nights}${e.confidence === 'thin' ? ' · thin' : ''}</span></div><div style="display:flex;flex-wrap:wrap;gap:0 8px">${cells}</div></div>`;
+  }).join('');
+  return `<div class="card"><h2>Tag effects <span class="dim" style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px">· tagged nights vs the rest, 30 d</span></h2>${rows}
+    <div class="dim mono" style="font-size:10px;margin-top:6px">● large effect · ◐ medium · yellow = worse · "thin" = under 3 tagged or 5 baseline nights</div></div>`;
 }
 document.addEventListener('change', async e => {
   if (e.target.id === 'r-rest') updateScorePreview();
@@ -4049,7 +4102,7 @@ function rTrends(){
   const fl = logs.filter(l => l.focus);
   const focusAvg = fl.length ? (fl.reduce((s, l) => s + l.focus, 0) / fl.length).toFixed(1) : '—';
   const deep7 = per.slice(-7).reduce((s, p) => s + p.o.DEEP, 0);
-  return bodyTrendHTML() + weekHealthHTML() + whatIfCardHTML() + sleepCardHTML() + adherenceCardHTML() + experimentsCardHTML() + `
+  return bodyTrendHTML() + tagEffectsHTML() + weekHealthHTML() + whatIfCardHTML() + sleepCardHTML() + adherenceCardHTML() + experimentsCardHTML() + `
   <div class="card"><h2>Score — last ${line.length} scored days</h2>${scoreSvg}</div>
   <div class="card"><h2>Done work by energy — 14 days</h2>${barsSvg}
     <div class="elegend" style="margin-top:6px">${Object.keys(ENERGY).map(e => `<span><i style="background:${ENERGY[e].hex}"></i>${e}</span>`).join('')}</div></div>
