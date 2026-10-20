@@ -1,5 +1,5 @@
 // LifeOS service worker — network-first (revalidating), cache fallback (offline read-only)
-const CACHE = 'lifeos-v3';
+const CACHE = 'lifeos-v4'; // v4 2026-10-20: new icon set — bumping purges every cached copy of the old icons
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));
@@ -12,8 +12,8 @@ self.addEventListener('push', e => {
     body: d.body || '',
     tag: d.kind || 'lifeos',           // one notification per kind — newer replaces older
     data: { url: d.url || './' },
-    badge: 'icon-192.png',
-    icon: 'icon-192.png',
+    badge: 'icon-192.png?v=2',
+    icon: 'icon-192.png?v=2',
   }));
 });
 self.addEventListener('notificationclick', e => {
