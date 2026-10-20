@@ -9,7 +9,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%230B0C10'/><circle cx='50' cy='50' r='27' fill='none' stroke='%233A3D46' stroke-width='3'/><path d='M 50 23 A 27 27 0 1 1 26.6 63.5' fill='none' stroke='%23E1251B' stroke-width='9' stroke-linecap='round'/><circle cx='26.6' cy='63.5' r='7' fill='%23FFEBD7'/><circle cx='50' cy='50' r='3' fill='white'/></svg>">
+<link rel="icon" type="image/png" sizes="64x64" href="favicon-64.png">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -4958,53 +4959,65 @@ document.addEventListener('keydown', e => {
    Read-only mirror of every account; SQL owns all numbers (lifeos_money_week).
    Tap a category chip to fix it — your fix becomes a permanent rule. */
 function fmt$(n){ const v = Math.abs(+n || 0); const s = v >= 1000 ? (v/1000).toFixed(v >= 10000 ? 0 : 1) + 'k' : v.toFixed(v < 100 ? 2 : 0); return (+n < 0 ? '-$' : '$') + s; }
-/* MONEY privacy gate (s36) — the phone's own Face ID via WebAuthn. A privacy
-   curtain against shoulder-surfers with your phone; the data model is unchanged. */
-function moneyUnlockedNow(){ return S._moneyUnlockAt && (Date.now() - S._moneyUnlockAt) < 15 * 60000; }
+/* MONEY vault (2026-10-20) — server-enforced PIN. Replaces the s36 WebAuthn curtain, whose
+   "tap again to enter" fallback let anyone in on a laptop without Windows Hello.
+   RLS on every finance table + lifeos_money_week / lifeos_stocks_context refuse reads unless
+   lifeos_money_unlock(pin) opened a 15-min window (5 wrong PINs = 15-min lockout, pushed).
+   No PIN = no data, even straight from the API with your session. CHAT is gated by the same window. */
+function moneyUnlockedNow(){ return S._moneyUnlockUntil && Date.now() < S._moneyUnlockUntil; }
 async function unlockMoney(){
-  try {
-    if (!window.PublicKeyCredential) throw new Error('no biometrics here');
-    const chal = crypto.getRandomValues(new Uint8Array(16));
-    let credId = null;
-    try { credId = JSON.parse(localStorage.getItem('moneyCred') || 'null'); } catch(e){}
-    if (!credId) {
-      const cred = await navigator.credentials.create({publicKey: {
-        challenge: chal, rp: {name: 'LifeOS'},
-        user: {id: crypto.getRandomValues(new Uint8Array(8)), name: 'skyler', displayName: 'Skyler'},
-        pubKeyCredParams: [{type: 'public-key', alg: -7}, {type: 'public-key', alg: -257}],
-        authenticatorSelection: {authenticatorAttachment: 'platform', userVerification: 'required'},
-        timeout: 60000}});
-      localStorage.setItem('moneyCred', JSON.stringify(Array.from(new Uint8Array(cred.rawId))));
-    } else {
-      await navigator.credentials.get({publicKey: {
-        challenge: chal,
-        allowCredentials: [{type: 'public-key', id: new Uint8Array(credId)}],
-        userVerification: 'required', timeout: 60000}});
-    }
-    S._moneyUnlockAt = Date.now();
-    render();
-  } catch (e) {
-    // device without Face ID/passkeys: second tap enters (curtain, not a vault)
-    if (S._lockRetry) { S._moneyUnlockAt = Date.now(); S._lockRetry = false; render(); }
-    else { S._lockRetry = true; toast('Face ID unavailable — tap again to enter'); }
+  const inp = document.getElementById('money-pin');
+  const pin = ((inp && inp.value) || '').trim();
+  if (!/^\d{4,8}$/.test(pin)) { toast('Enter your money PIN'); if (inp) inp.focus(); return; }
+  if (inp) inp.value = '';
+  const { data, error } = await db.rpc('lifeos_money_unlock', { p_pin: pin });
+  if (error) { toast('Unlock failed: ' + error.message); return; }
+  if (!data || !data.ok) {
+    if (data && data.error === 'locked out') toast('Locked out for 15 min');
+    else if (data && data.error === 'sign in first') toast('Sign in first');
+    else toast('Wrong PIN' + (data && data.remaining != null ? ' (' + data.remaining + ' tries left)' : ''));
+    return;
   }
+  S._moneyUnlockUntil = new Date(data.until).getTime();
+  toast('Money unlocked for 15 min');
+  await loadAll();
+  render();
+}
+async function lockMoney(){
+  try { await db.rpc('lifeos_money_lock'); } catch (e) {}
+  S._moneyUnlockUntil = 0; S.money = null; S.finAccounts = []; S.finTx = []; S.finRecurring = []; S.stocks = null;
+  render();
+}
+async function changeMoneyPin(){
+  const cur = prompt('Current PIN'); if (cur == null) return;
+  const nw = prompt('New PIN (4-8 digits)'); if (nw == null) return;
+  const { data, error } = await db.rpc('lifeos_money_set_pin', { p_old: cur, p_new: nw });
+  if (error || !data || !data.ok) { toast((data && data.error) || (error && error.message) || 'PIN change failed'); return; }
+  S._moneyUnlockUntil = 0; toast('PIN changed - unlock again'); render();
 }
 function rMoney(){
   if (!moneyUnlockedNow()) {
     return `<div class="card" style="text-align:center;padding:30px 16px">
       <div style="font-size:30px">🔒</div>
-      <div style="margin:10px 0 4px;font-weight:700">Money is private</div>
-      <div class="dim" style="font-size:12px;margin-bottom:14px">Net worth, spending, and positions sit behind Face ID.</div>
-      <button class="btn primary" style="width:100%;padding:12px" onclick="unlockMoney()">Unlock with Face ID</button>
+      <div style="margin:10px 0 4px;font-weight:700">Money is locked</div>
+      <div class="dim" style="font-size:12px;margin-bottom:14px">Net worth, spending and positions are unreadable until you enter the PIN. 15-minute window.</div>
+      <input id="money-pin" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="8" placeholder="PIN"
+        style="width:100%;font-size:22px;letter-spacing:8px;text-align:center;padding:10px;margin-bottom:10px"
+        onkeydown="if(event.key==='Enter'){event.preventDefault();unlockMoney()}">
+      <button class="btn primary" style="width:100%;padding:12px" onclick="unlockMoney()">Unlock</button>
     </div>`;
   }
+  const lockbar = `<div style="display:flex;justify-content:flex-end;gap:12px;margin:-4px 0 6px;font-size:11px">
+    <a href="#" class="dim" onclick="changeMoneyPin();return false">change PIN</a>
+    <a href="#" onclick="lockMoney();return false">🔒 lock now</a>
+  </div>`;
   if (!S.moneyView) S.moneyView = localStorage.getItem('moneyView') || 'overview';
   const seg = `<div class="seg" style="display:flex;margin-bottom:10px">${[['overview','OVERVIEW'],['spending','SPENDING'],['stocks','STOCKS']].map(([v, l]) =>
     `<button class="${S.moneyView === v ? 'on' : ''}" style="flex:1" onclick="S.moneyView='${v}';localStorage.setItem('moneyView','${v}');render()">${l}</button>`).join('')}</div>`;
   const body = S.moneyView === 'spending' ? moneySpendingHTML()
              : S.moneyView === 'stocks' ? moneyStocksHTML()
              : moneyOverviewHTML();
-  return seg + body;
+  return lockbar + seg + body;
 }
 /* --- STOCKS section: read-only market mirror + the analyst's latest take --- */
 function moneyStocksHTML(){
