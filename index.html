@@ -927,7 +927,12 @@ document.getElementById('a-email').value = OWNER;
 
 /* ================= data ================= */
 async function loadAll(){
+  // A write that is still in flight (request sent, not yet committed) must not be
+  // read back stale: if one started <1 s ago, wait out the remainder first.
+  const sinceWrite = Date.now() - (S.lastWrite || 0);
+  if (sinceWrite < 1000) { await new Promise(r => setTimeout(r, 1000 - sinceWrite)); }
   const seq = loadAll._seq = (loadAll._seq || 0) + 1;
+  const startedAt = Date.now();   // snapshot is only valid for writes that began BEFORE this
   const today = todayISO();
   const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
@@ -1008,7 +1013,13 @@ async function loadAll(){
   S.focusLog = flog.data || [];    // clocked-in history → blue work spans on CAL
   S.stocks = stx.data || null;     // stocks agent: quotes + indicators + latest report
   if (seq !== loadAll._seq) return;   // a newer loadAll is in flight — this snapshot is stale, drop it
-  if (Date.now() - (S.lastWrite || 0) < 1200) { setTimeout(loadAll, 1200); return; }   // predates the user's own write
+  // RACE FIX (2026-10-21): a tap during an in-flight reload used to get overwritten — the tasks
+  // SELECT had been answered BEFORE the UPDATE committed but its response landed AFTER the
+  // optimistic render, so the row flipped back to undone (credits stayed: the server row was
+  // done). The old check only looked at "write within 1200 ms of completion"; a reload that
+  // started before the tap and finished >1.2 s after it slipped through. Now: any write that
+  // began after this fetch started invalidates the whole snapshot → drop it and refetch.
+  if ((S.lastWrite || 0) >= startedAt) { setTimeout(loadAll, 400); return; }
   if (caf.data) S.caff = caf.data;    // caffeine module: level/curve/bags/last-safe (server-computed); keep old on a failed RPC
   S.sleepNights = sn.data || [];   // sleep card: 14 nights — Fitbit session when one exists, else bed = last app close, wake = ranked confirmation
   S.body = bsc.data || [];        // v7: sleep score + readiness (lifeos_body_scores)
