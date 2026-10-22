@@ -947,7 +947,29 @@ const OWNER  = 'skyler.scooty@gmail.com';                    // your email, lowe
 const GCAL_CLIENT_ID = '118493693943-6l9gncbacaip7d4fct7cgdkr5l51nm1j.apps.googleusercontent.com'; // optional: live Google Calendar (blank = use routine sync only)
 const VAPID_PUBLIC = 'BIV0Jfwa19Q54frhQNxbdR2a8dN6Bw9zCSd_SPIXEeD2YFZbtX6YU3gVcH6bnbD3JHcxmNkXt_nDH2lpO3LDEVk'; // push notifications (GET /functions/v1/notify shows yours)
 const CLAUDE_URL = 'https://claude.ai/project/019f2ae4-de05-714c-8cf0-3bd5d2b1b335'; // lifeOS Project — deep-brainstorm escape hatch in CHAT
-const db = window.supabase.createClient(SB_URL, SB_KEY);
+/* Write tracking at the network layer (2026-10-22). Timer-based guards were not enough: a reload that
+   starts AFTER a tap but BEFORE the UPDATE commits (slow mobile link, token refresh on resume) read a
+   stale row and flipped the task back. Now every non-GET REST/RPC call is counted while in flight, and
+   loadAll (a) waits until nothing is in flight before fetching and (b) drops any snapshot that overlapped
+   a write. Belt-and-braces: cycleTask records its patch and loadAll re-applies it over a contradicting
+   snapshot until a snapshot taken strictly AFTER the write resolved confirms it. */
+const WR = {inflight: 0, lastStart: 0, lastDone: 0};
+const trackedFetch = (input, init) => {
+  const method = ((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+  const url = typeof input === 'string' ? input : (input && input.url) || '';
+  const isWrite = method !== 'GET' && method !== 'HEAD' && url.indexOf('/rest/v1/') !== -1;
+  if (!isWrite) return fetch(input, init);
+  WR.inflight++; WR.lastStart = Date.now();
+  const done = () => { WR.inflight = Math.max(0, WR.inflight - 1); WR.lastDone = Date.now(); };
+  return fetch(input, init).then(r => { done(); return r; }, e => { done(); throw e; });
+};
+const db = window.supabase.createClient(SB_URL, SB_KEY, {global: {fetch: trackedFetch}});
+/* optimistic task patches awaiting confirmation: id → {patch, at, doneAt} */
+const PENDING_TASK = {};
+async function waitForWrites(maxMs){
+  const t0 = Date.now();
+  while (WR.inflight > 0 && Date.now() - t0 < maxMs) await new Promise(r => setTimeout(r, 80));
+}
 
 const ENERGY = {
   DEEP:    {color:'var(--deep)',     hex:'#818CF8', score:3},
@@ -1007,12 +1029,13 @@ document.getElementById('a-email').value = OWNER;
 
 /* ================= data ================= */
 async function loadAll(){
-  // A write that is still in flight (request sent, not yet committed) must not be
-  // read back stale: if one started <1 s ago, wait out the remainder first.
-  const sinceWrite = Date.now() - (S.lastWrite || 0);
-  if (sinceWrite < 1000) { await new Promise(r => setTimeout(r, 1000 - sinceWrite)); }
+  // Never read while a write is in flight: the snapshot would predate the commit. Also keep the old
+  // small grace period for a write that is about to be sent (S.lastWrite stamped, request not yet out).
+  const sinceStamp = Date.now() - (S.lastWrite || 0);
+  if (sinceStamp < 300) { await new Promise(r => setTimeout(r, 300 - sinceStamp)); }
+  await waitForWrites(8000);
   const seq = loadAll._seq = (loadAll._seq || 0) + 1;
-  const startedAt = Date.now();   // snapshot is only valid for writes that began BEFORE this
+  const startedAt = Date.now();   // snapshot is only valid for writes that began AND finished BEFORE this
   const today = todayISO();
   const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, qsv, exf, exs] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
@@ -1069,6 +1092,14 @@ async function loadAll(){
     db.from('quests').select('*').in('status', ['saved', 'going']).gte('event_date', today).order('event_date').order('starts_at'),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
+  // Re-apply taps the server has not visibly confirmed yet. A patch is retired only once a snapshot
+  // taken strictly after its write resolved agrees with it (or 60 s pass, in case the write failed silently).
+  for (const id in PENDING_TASK) {
+    const p = PENDING_TASK[id], row = S.tasks.find(x => x.id === id);
+    const confirmed = row && p.doneAt && startedAt > p.doneAt && row.status === p.patch.status;
+    if (confirmed || Date.now() - p.at > 60000 || !row) { delete PENDING_TASK[id]; continue; }
+    if (row.status !== p.patch.status) Object.assign(row, p.patch);
+  }
   S.cards = cd.data || []; S.events = ev.data || []; S.freezes = fz.data || [];
   S.brief = b.data || null;
   S.focusOpen = (fs.data || [])[0] || null;
@@ -1104,7 +1135,7 @@ async function loadAll(){
   // done). The old check only looked at "write within 1200 ms of completion"; a reload that
   // started before the tap and finished >1.2 s after it slipped through. Now: any write that
   // began after this fetch started invalidates the whole snapshot → drop it and refetch.
-  if ((S.lastWrite || 0) >= startedAt) { setTimeout(loadAll, 400); return; }
+  if ((S.lastWrite || 0) >= startedAt || WR.lastStart >= startedAt || WR.lastDone >= startedAt) { setTimeout(loadAll, 400); return; }   // a write overlapped this fetch → snapshot may be stale
   if (caf.data) S.caff = caf.data;    // caffeine module: level/curve/bags/last-safe (server-computed); keep old on a failed RPC
   if (!S.qDrag) { S.questDeck = qdk.data || []; S.questCands = qcd.data || []; S.questSaved = qsv.data || []; }   // side quests (don't yank a card mid-drag)
   if (!S.qDrag && !S.exBusy) { S.exFeed = Array.isArray(exf.data) ? exf.data : []; }                   // explore feed (not while a card is mid-interaction)
@@ -1259,6 +1290,7 @@ async function cycleTask(id){
   else if (isPartialToday(t))         patch = {status:'not_started', completed_at:null, partial_date:null};
   else                                patch = {status:'done', completed_at:new Date().toISOString(), partial_date:null};
   Object.assign(t, patch);
+  PENDING_TASK[id] = {patch, at: Date.now(), doneAt: null};
   // Full optimistic re-render (scroll is preserved): the START HERE card
   // advances to the next task IMMEDIATELY, the list row checks off, the
   // energy bar / goal cards / chips all update in the same frame. (The old
@@ -1267,7 +1299,8 @@ async function cycleTask(id){
   render();
   S.lastWrite = Date.now();
   const {error} = await db.from('tasks').update(patch).eq('id', id);
-  if (error) { toast('Save failed: ' + error.message); loadAll(); return; }
+  if (error) { delete PENDING_TASK[id]; toast('Save failed: ' + error.message); loadAll(); return; }
+  if (PENDING_TASK[id]) PENDING_TASK[id].doneAt = Date.now();
   // reconcile the cheap server-derived bits (credits +5, weekly-goal chip
   // from the goal_logs trigger) without the heavy full loadAll
   refreshLight();
@@ -1938,8 +1971,12 @@ function goalConfirmsHTML(){
 }
 async function confirmGoal(id){
   S.lastWrite = Date.now();
-  const {error} = await db.from('tasks').update({status: 'done', completed_at: new Date().toISOString()}).eq('id', id);
-  if (error) { toast('Save failed: ' + error.message); return; }
+  const patch = {status: 'done', completed_at: new Date().toISOString()};
+  const g = S.tasks.find(x => x.id === id); if (g) Object.assign(g, patch);
+  PENDING_TASK[id] = {patch, at: Date.now(), doneAt: null};
+  const {error} = await db.from('tasks').update(patch).eq('id', id);
+  if (error) { delete PENDING_TASK[id]; toast('Save failed: ' + error.message); return; }
+  if (PENDING_TASK[id]) PENDING_TASK[id].doneAt = Date.now();
   toast('🎯 Goal closed — +15 credits');
   loadAll();
 }
@@ -2283,11 +2320,13 @@ async function prepKit(pid){
 async function markApplied(taskId, pid){
   S.lastWrite = Date.now();
   const now = new Date().toISOString();
+  PENDING_TASK[taskId] = {patch: {status: 'done', completed_at: now, partial_date: null}, at: Date.now(), doneAt: null};
   const [a, b] = await Promise.all([
     db.from('tasks').update({status: 'done', completed_at: now, partial_date: null}).eq('id', taskId),
     db.from('job_postings').update({status: 'applied', status_changed_at: now}).eq('id', pid),
   ]);
-  if (a.error || b.error) { toast('failed: ' + ((a.error || b.error).message)); return; }
+  if (a.error || b.error) { delete PENDING_TASK[taskId]; toast('failed: ' + ((a.error || b.error).message)); return; }
+  if (PENDING_TASK[taskId]) PENDING_TASK[taskId].doneAt = Date.now();
   const t = S.tasks.find(x => x.id === taskId); if (t) { t.status = 'done'; t.completed_at = now; }
   const j = S.jobs.find(x => x.id === pid); if (j) { j.status = 'applied'; j.status_changed_at = now; }
   toast('📨 applied — +5cr');
@@ -2329,10 +2368,12 @@ async function prepDone(id){
   const t = S.tasks.find(x => x.id === id); if (!t) return;
   const patch = {status: 'done', completed_at: new Date().toISOString(), partial_date: null};
   Object.assign(t, patch); S.prepOpen?.delete(id);
+  PENDING_TASK[id] = {patch, at: Date.now(), doneAt: null};
   render(); toast('Done — +5 credits');            // instant; card row disappears now
   S.lastWrite = Date.now();
   const {error} = await db.from('tasks').update(patch).eq('id', id);
-  if (error) { toast('Save failed: ' + error.message); loadAll(); return; }
+  if (error) { delete PENDING_TASK[id]; toast('Save failed: ' + error.message); loadAll(); return; }
+  if (PENDING_TASK[id]) PENDING_TASK[id].doneAt = Date.now();
   refreshLight();
 }
 async function prepClear(id){
