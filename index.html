@@ -1245,7 +1245,7 @@ let rtChannel = null, rtTimer = null;
 function uiBusy(){
   const a = document.activeElement;   // typing anywhere in the app counts as busy — a rebuild would eat the keyboard
   const typing = a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.closest && a.closest('#main,#sheetroot,#addbar');
-  return !!(typing || S.editing || S.sending || S.sheet || S.planEditMode || S.brewEdit || S.caffPick || S.bagEdit || S.pbSheet || S.evSheet || S.dropAsk || PDrag || S.qDrag);
+  return !!(typing || S.editing || S.sending || S.sheet || S.planEditMode || S.brewEdit || S.caffPick || S.bagEdit || S.pbSheet || S.evSheet || S.dropAsk || S.clockAsk || PDrag || S.qDrag);
 }
 function uiScrolling(){ return Date.now() - Math.max(S._gsAt || 0, S._msAt || 0) < 1200; }
 /* background refresh that arrives while the user is busy: remember it, replay when free */
@@ -2435,14 +2435,22 @@ function creditsCardHTML(){
   let timer;
   if (fo) {
     const mins = Math.floor((Date.now() - new Date(fo.started_at).getTime()) / 60000);
-    const tTitle = fo.task_id ? (S.tasks.find(x => x.id === fo.task_id)?.title || 'task') : null;
+    const tTitle = fo.task_id ? (S.tasks.find(x => x.id === fo.task_id)?.title || 'task') : (fo.label || null);
     timer = `<div style="display:flex;align-items:center;gap:10px">
       <span class="mono" style="font-size:20px;font-weight:700;color:${(ENERGY[fo.energy] || ENERGY.LIGHT).hex}">⏱ ${Math.floor(mins/60)}:${String(mins%60).padStart(2,'0')}</span>
-      <span class="dim" style="font-size:11px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${tTitle ? '▶ ' + esc(tTitle) : fo.energy + ' (general)'}${(+fo.credit_rate || 1) < 1 ? ' · ⅓ rate' : ''} · ~${Math.floor(mins / (CREDIT_RATE[fo.energy] || CREDIT_RATE.LIGHT) * (+fo.credit_rate || 1))}cr</span>
+      <span class="dim" style="font-size:11px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${tTitle ? (fo.task_id ? '▶ ' : fo.energy + ' · ') + esc(tTitle) : fo.energy + ' (general)'}${(+fo.credit_rate || 1) < 1 ? ' · ⅓ rate' : ''} · ~${Math.floor(mins / (CREDIT_RATE[fo.energy] || CREDIT_RATE.LIGHT) * (+fo.credit_rate || 1))}cr</span>
       <button class="btn primary" style="margin-left:auto;flex:0 0 auto" onclick="clockOut()">Clock out</button></div>`;
+  } else if (S.clockAsk) {
+    const e = S.clockAsk, hex = ENERGY[e].hex;
+    timer = `<div style="display:flex;align-items:center;gap:6px">
+      <span class="mono" style="font-size:11px;font-weight:700;color:${hex};flex:0 0 auto">${e}</span>
+      <input id="clockLabel" placeholder="what are you working on?" maxlength="80" autocomplete="off" style="flex:1;min-width:0;font-size:14px;padding:8px 10px;border-radius:10px;border:1px solid ${hex};background:#0E1118;color:var(--text)"
+        onkeydown="if(event.key==='Enter'){event.preventDefault();clockInGo()} if(event.key==='Escape'){S.clockAsk=null;render()}">
+      <button class="btn primary" style="flex:0 0 auto" onclick="clockInGo()">Go</button>
+      <button class="btn" style="flex:0 0 auto;padding:9px 10px" onclick="S.clockAsk=null;render()">✕</button></div>`;
   } else {
     timer = `<div style="display:flex;align-items:center;gap:6px">
-      ${['DEEP','FOCUS','LIGHT'].map(e => `<button class="schip" style="flex:1;white-space:nowrap;font-size:11px;padding:7px 6px;text-align:center;touch-action:pan-y;border-color:${ENERGY[e].hex};color:${ENERGY[e].hex}" onclick="clockIn('${e}')">${e}</button>`).join('')}</div>
+      ${['DEEP','FOCUS','LIGHT'].map(e => `<button class="schip" style="flex:1;white-space:nowrap;font-size:11px;padding:7px 6px;text-align:center;touch-action:pan-y;border-color:${ENERGY[e].hex};color:${ENERGY[e].hex}" onclick="clockAsk('${e}')">${e}</button>`).join('')}</div>
     `;
   }
   const scroll = c.scroll_open
@@ -2501,13 +2509,24 @@ async function attendClass(ki){
   const cr = await db.rpc('lifeos_credits'); S.credits = cr.data || S.credits; renderSoft();
 }
 /* general clock-in: untethered, time credits only */
-async function clockIn(energy){
+function clockAsk(energy){
+  S.clockAsk = energy; render();
+  setTimeout(() => { const i = document.getElementById('clockLabel'); if (i) i.focus(); }, 30);
+}
+function clockInGo(){
+  const e = S.clockAsk; if (!e) return;
+  const label = (document.getElementById('clockLabel')?.value || '').trim();
+  S.clockAsk = null;
+  clockIn(e, label || null);
+}
+async function clockIn(energy, label){
   S.lastWrite = Date.now();
-  const {data, error} = await db.from('focus_sessions').insert({energy}).select().single();
+  const row = {energy}; if (label) row.label = label;
+  const {data, error} = await db.from('focus_sessions').insert(row).select().single();
   if (error) { toast('Clock-in failed: ' + error.message); return; }
   S.focusOpen = data; render();
   const third = (+data.credit_rate || 1) < 1;
-  toast('Clocked in — ' + energy + (third ? ' general = ⅓ rate this week (1cr per ' + CREDIT_RATE[energy] * 3 + 'm) · ▶ on a task earns full' : ' general · 1cr per ' + CREDIT_RATE[energy] + 'm'));
+  toast('Clocked in — ' + energy + (label ? ' · ' + label : '') + (energy === 'LIGHT' ? ' · feeds stay open' : '') + (third ? ' · ⅓ rate this week' : ''));
 }
 /* one-tap clock-in on today's START HERE task — unlocks the 10 free credits */
 function startStartHere(){
