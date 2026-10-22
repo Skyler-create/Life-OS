@@ -554,7 +554,10 @@ main[data-view="yc"] .nowline::before{background:#E9D5FF;box-shadow:0 0 10px rgb
 .qwhen{font-family:var(--mono);font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:var(--focus)}
 .qtitle{font-size:21px;font-weight:700;line-height:1.15;letter-spacing:-.2px}
 .qwhere{font-size:13px;color:var(--dim)}
-.qdesc{font-size:13px;line-height:1.4;color:#C9CDD8;overflow:hidden;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;margin-top:2px}
+.qdesc{font-size:13px;line-height:1.45;color:#C9CDD8;overflow:hidden;display:-webkit-box;-webkit-line-clamp:7;-webkit-box-orient:vertical;margin-top:2px;white-space:pre-line}
+.qdesc.open{display:block;overflow:auto;-webkit-overflow-scrolling:touch;touch-action:pan-y;max-height:42vh;-webkit-line-clamp:unset}
+.qdesc.more::after{content:"… more";color:var(--focus);font-family:var(--mono);font-size:11px}
+.qcard .qimg.hi{flex:0 0 46%}
 .qchips{display:flex;gap:6px;flex-wrap:wrap;margin-top:auto;padding-top:6px}
 .qchip{font-family:var(--mono);font-size:10px;letter-spacing:.8px;text-transform:uppercase;padding:4px 8px;border-radius:999px;
   border:1px solid var(--line);color:var(--dim);background:rgba(255,255,255,.03)}
@@ -3471,12 +3474,12 @@ function questCardHTML(it, i){
   }
   const q = it.q;
   return `<div class="qcard ${q.image_url ? '' : 'noimg'} ${cls}" ${grab}>
-    <div class="qimg"${q.image_url ? ` style="background-image:url('${esc(q.image_url)}')"` : ''}></div>
+    <div class="qimg${q.image_url && (!q.description || q.description.length < 120) ? ' hi' : ''}"${q.image_url ? ` style="background-image:url('${esc(q.image_url)}')"` : ''}></div>
     <div class="qbody">
       <div class="qwhen">${esc(questWhen(q))}</div>
       <div class="qtitle">${esc(q.title)}</div>
-      ${q.venue || q.address ? `<div class="qwhere">${esc(q.venue || q.address)}</div>` : ''}
-      ${q.description ? `<div class="qdesc">${esc(q.description)}</div>` : ''}
+      ${q.venue || q.address ? `<div class="qwhere">${esc(q.venue || q.address)}${q.address && q.venue && q.address !== q.venue && !q.address.startsWith(q.venue) ? `<span class="dim"> · ${esc(q.address)}</span>` : ''}</div>` : ''}
+      ${q.description ? `<div class="qdesc ${S.qExpand === q.id ? 'open' : (q.description.length > 260 ? 'more' : '')}" onpointerdown="event.stopPropagation()" onclick="S.qExpand = S.qExpand === ${q.id} ? null : ${q.id}; render()">${esc(q.description)}</div>` : ''}
       <div class="qchips">
         ${q.is_free ? '<span class="qchip free">free</span>' : q.cost ? `<span class="qchip cost">${esc(q.cost)}</span>` : ''}
         ${q.event_type ? `<span class="qchip">${esc(q.event_type)}</span>` : ''}
@@ -3567,6 +3570,7 @@ async function questSwipe(dir){
     el.onpointerdown = null;
   }
   // optimistic: the card is gone from the deck now; saved/going lists update in the same frame
+  S.qExpand = null;
   if (it.kind === 'q') {
     S.questDeck = (S.questDeck || []).filter(x => x.id !== it.q.id);
     if (dir !== 'left') { it.q.status = dir === 'up' ? 'going' : 'saved'; S.questSaved = [...(S.questSaved || []).filter(x => x.id !== it.q.id), it.q].sort((a, b) => (a.event_date + (a.starts_at || '')).localeCompare(b.event_date + (b.starts_at || ''))); }
