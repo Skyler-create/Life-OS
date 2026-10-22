@@ -581,6 +581,36 @@ main[data-view="yc"] .nowline::before{background:#E9D5FF;box-shadow:0 0 10px rgb
 .qempty{height:min(62vh,560px);display:flex;align-items:center;justify-content:center;text-align:center;color:var(--dim);border:1px dashed var(--line);border-radius:20px;margin-bottom:10px}
 body.desk .qstack{max-width:440px;margin-left:auto;margin-right:auto}
 body.desk .qbtns{max-width:440px;margin-left:auto;margin-right:auto}
+/* ---- EXPLORE: idea feed on the same stack ---- */
+.qcard.ex .qbody{gap:9px}
+.exkind{font-family:var(--mono);font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--dim);display:flex;justify-content:space-between;align-items:center}
+.exkind b{color:var(--focus);font-weight:600}
+.exkind.back b{color:var(--deep)}
+.exhook{font-size:19px;font-weight:650;line-height:1.28;letter-spacing:-.1px}
+.qcard.ex.lesson .exhook{font-size:17px}
+.exscroll{flex:1;min-height:0;overflow:auto;-webkit-overflow-scrolling:touch;touch-action:pan-y;font-size:13.5px;line-height:1.5;color:#D3D7E2;padding-right:2px}
+.exscroll p{margin:0 0 8px}.exscroll strong{color:var(--text)}
+.exsrc{font-family:var(--mono);font-size:10px;color:var(--dim);margin-top:auto;padding-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.exsrc a{color:inherit;text-decoration:none}
+.exrow{display:flex;gap:8px;align-items:center}
+.exrow input[type=number]{flex:1;min-width:0;font-size:18px;padding:9px 12px;border-radius:12px;border:1px solid var(--line);background:#0E1118;color:var(--text);font-family:var(--mono)}
+.exrow .unit{font-family:var(--mono);font-size:11px;color:var(--dim);flex:0 0 auto;max-width:34%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.exslide{width:100%;margin:2px 0 0;accent-color:var(--focus)}
+.exgo{padding:10px 16px;border-radius:12px;border:0;background:var(--grad);color:#fff;font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:1px;flex:0 0 auto}
+.exgo[disabled]{opacity:.5}
+.exres{border-radius:12px;padding:10px 12px;background:rgba(255,255,255,.04);border:1px solid var(--line)}
+.exres .big{font-size:26px;font-weight:800;letter-spacing:-.5px}
+.exres .pts{font-family:var(--mono);font-size:12px;color:var(--dim)}
+.exres.good .big{color:var(--done)}.exres.ok .big{color:var(--focus)}.exres.bad .big{color:var(--accent-hi)}
+.exans{width:100%;min-height:72px;resize:vertical;font-size:14px;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:#0E1118;color:var(--text);font-family:inherit;line-height:1.4}
+.exverdict{font-family:var(--mono);font-size:11px;letter-spacing:1px;text-transform:uppercase;font-weight:700}
+.exverdict.correct{color:var(--done)}.exverdict.partial{color:var(--focus)}.exverdict.wrong{color:var(--accent-hi)}
+.exchoice{display:flex;gap:10px}
+.exchoice button{flex:1;padding:11px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--text);font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:1px}
+.exchoice button.yes{color:var(--done);border-color:rgba(74,222,128,.4)}.exchoice button.no{color:var(--accent-hi);border-color:rgba(255,77,66,.35)}
+.exstats{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px}
+.exstats .qchip b{color:var(--text);font-weight:700}
+.qtag.d{left:50%;top:40%;transform:translate(-50%,-50%);color:var(--deep);border-color:var(--deep);font-size:18px}
 #auth input{margin-bottom:10px}
 #authmsg{font-family:var(--mono);font-size:12px;color:var(--focus);margin-top:8px;min-height:16px}
 .hidden{display:none!important}
@@ -981,7 +1011,7 @@ async function loadAll(){
   const seq = loadAll._seq = (loadAll._seq || 0) + 1;
   const startedAt = Date.now();   // snapshot is only valid for writes that began BEFORE this
   const today = todayISO();
-  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, qsv] = await Promise.all([
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, qsv, exf, exs] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
@@ -1031,6 +1061,8 @@ async function loadAll(){
     db.rpc('lifeos_tag_effects', {p_days: 30}),
     db.rpc('lifeos_quests_deck', {p_limit: 40}),                                                      // side quests: ranked open cards
     db.rpc('lifeos_quests_candidates', {p_limit: 5}),                                                 // side quests: "follow @x?" source cards
+    db.rpc('lifeos_explore_feed', {p_limit: 20}),                                                     // explore: comebacks + today's lesson + curio/guess mix
+    db.rpc('lifeos_explore_stats'),
     db.from('quests').select('*').in('status', ['saved', 'going']).gte('event_date', today).order('event_date').order('starts_at'),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
@@ -1072,6 +1104,8 @@ async function loadAll(){
   if ((S.lastWrite || 0) >= startedAt) { setTimeout(loadAll, 400); return; }
   if (caf.data) S.caff = caf.data;    // caffeine module: level/curve/bags/last-safe (server-computed); keep old on a failed RPC
   if (!S.qDrag) { S.questDeck = qdk.data || []; S.questCands = qcd.data || []; S.questSaved = qsv.data || []; }   // side quests (don't yank a card mid-drag)
+  if (!S.qDrag && !S.exBusy) { S.exFeed = Array.isArray(exf.data) ? exf.data : []; }                   // explore feed (not while a card is mid-interaction)
+  S.exStats = exs.data || S.exStats || null;
   S.sleepNights = sn.data || [];   // sleep card: 14 nights — Fitbit session when one exists, else bed = last app close, wake = ranked confirmation
   S.body = bsc.data || [];        // v7: sleep score + readiness (lifeos_body_scores)
   S.dayTags = dtg.data || [];     // day tags (manual + auto caffeine-late) for the credit day
@@ -1581,7 +1615,7 @@ async function saveReflection(){
 }
 
 /* ================= rendering ================= */
-const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['cal','CAL'],['quests','QUESTS'],['chat','CHAT'],['reflect','REFLECT'],['coffee','COFFEE'],['yc','YC'],['time','TIME'],['log','LOG'],['trends','TRENDS'],['money','MONEY'],['jobs','JOBS'],['cards','CARDS'],['settings','SETTINGS']];
+const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['cal','CAL'],['quests','QUESTS'],['explore','EXPLORE'],['chat','CHAT'],['reflect','REFLECT'],['coffee','COFFEE'],['yc','YC'],['time','TIME'],['log','LOG'],['trends','TRENDS'],['money','MONEY'],['jobs','JOBS'],['cards','CARDS'],['settings','SETTINGS']];
 function setView(v){ S.view = v; S.editing = null; localStorage.setItem('view', v); render(); }
 function setFilt(f){ S.filt = f; localStorage.setItem('filt', f); render(); }
 
@@ -1624,6 +1658,7 @@ function render(){
   if (S.view === 'cal')     main.innerHTML = rCal();
   if (S.view === 'cards')   main.innerHTML = rCards();
   if (S.view === 'quests')  main.innerHTML = rQuests();
+  if (S.view === 'explore') main.innerHTML = rExplore();
   if (S.view === 'chat')    { main.innerHTML = rChat(); const cl = document.getElementById('chatlog'); if (cl) cl.scrollTop = cl.scrollHeight; }
   if (S.view === 'settings') main.innerHTML = rSettings();
   render._lastView = S.view;
@@ -3121,7 +3156,7 @@ const isDesk = () => DESK_MQ.matches;
 (DESK_MQ.addEventListener ? DESK_MQ.addEventListener.bind(DESK_MQ, 'change') : DESK_MQ.addListener.bind(DESK_MQ))(() => {
   if (!document.getElementById('app').classList.contains('hidden')) render();
 });
-const NAV_GROUPS = [['Daily', ['today', 'brief', 'tasks', 'cal', 'quests', 'reflect']], ['Insight', ['trends', 'time', 'log']],
+const NAV_GROUPS = [['Daily', ['today', 'brief', 'tasks', 'cal', 'quests', 'explore', 'reflect']], ['Insight', ['trends', 'time', 'log']],
   ['Life', ['coffee', 'money', 'jobs', 'cards', 'yc', 'chat']], ['', ['settings']]];
 const NAV_ICON = {
   today: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2.5 12h2M19.5 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
@@ -3129,6 +3164,7 @@ const NAV_ICON = {
   brief: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>',
   cal: '<rect x="3.5" y="4.5" width="17" height="16" rx="3"/><path d="M3.5 9.5h17M8 2.5v4M16 2.5v4"/>',
   quests: '<circle cx="12" cy="12" r="8.5"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
+  explore: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 16l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/>',
   chat: '<path d="M20.5 12a8.5 8.5 0 0 1-12.3 7.6L3.5 20.5l1-4.4A8.5 8.5 0 1 1 20.5 12z"/>',
   reflect: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
   coffee: '<path d="M4 9h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z"/><path d="M17 11h1.5a2.5 2.5 0 0 1 0 5H17M8 2.5v3M12 2.5v3"/>',
@@ -3153,6 +3189,7 @@ function navDeskHTML(){
     today: S.tasks.filter(t => t.bucket === 'active' && t.status !== 'done' && t.due && t.due <= today && !((S._kids || {})[t.id] || []).length).length,
     cards: (S.cards || []).length,
     quests: (S.questDeck || []).length,
+    explore: (S.exStats && S.exStats.due_back) || 0,
   };
   const btn = v => `<button class="${S.view === v ? 'on' : ''}" onclick="setView('${v}')">${navIcon(v)}<span>${titleCase(lab[v])}</span>${badge[v] ? `<span class="nb">${badge[v]}</span>` : ''}</button>`;
   return `<div class="nbrand">LifeOS<span class="dot">.</span></div>` +
@@ -3467,6 +3504,7 @@ function rQuests(){
 let QD = null;
 function qDown(e){
   if (e.pointerType === 'mouse' && e.button !== 0) return;
+  if (e.target.closest && e.target.closest('input,textarea,button,select,a,.exscroll')) return;   // typing / scrolling inside a card is not a swipe
   const el = e.currentTarget;
   QD = {el, x: e.clientX, y: e.clientY, moved: false, w: el.offsetWidth, h: el.offsetHeight};
   S.qDrag = true;
@@ -3490,9 +3528,11 @@ function qUp(e){
   const lost = e.type === 'pointercancel' && !e.clientX && !e.clientY;
   const dx = lost ? 0 : e.clientX - d.x, dy = lost ? 0 : e.clientY - d.y;
   const up = dy < -d.h * .25 && Math.abs(dx) < Math.abs(dy);
-  if (up) return questSwipe('up');
-  if (dx > d.w * .3) return questSwipe('right');
-  if (dx < -d.w * .3) return questSwipe('left');
+  const ex = S.view === 'explore';
+  if (up && ex) { exploreUp(); }                               // explore: ↑ opens depth, card stays
+  else if (up) return questSwipe('up');
+  else if (dx > d.w * .3) return ex ? exploreSwipe('right') : questSwipe('right');
+  else if (dx < -d.w * .3) return ex ? exploreSwipe('left') : questSwipe('left');
   d.el.classList.add('snap'); d.el.style.transform = '';
   d.el.querySelectorAll('.qtag').forEach(t => { t.style.opacity = 0; });
   if (d.moved) {   // a drag that snapped back must not count as a click on the link under the finger
@@ -3506,7 +3546,12 @@ document.addEventListener('pointermove', qMove, {passive: true});
 document.addEventListener('pointerup', qUp);
 document.addEventListener('pointercancel', qUp);
 document.addEventListener('keydown', e => {
-  if (S.view !== 'quests' || uiBusy() || !questDeckItems().length) return;
+  if (uiBusy()) return;
+  if (S.view === 'explore' && (S.exFeed || []).length) {
+    if (e.key === 'ArrowLeft') exploreSwipe('left'); else if (e.key === 'ArrowRight') exploreSwipe('right'); else if (e.key === 'ArrowUp') { e.preventDefault(); exploreUp(); }
+    return;
+  }
+  if (S.view !== 'quests' || !questDeckItems().length) return;
   if (e.key === 'ArrowLeft') questSwipe('left');
   else if (e.key === 'ArrowRight') questSwipe('right');
   else if (e.key === 'ArrowUp') { e.preventDefault(); questSwipe('up'); }
@@ -3545,6 +3590,147 @@ async function questAct(id, dir){
   render();
   const {data, error} = await db.rpc('lifeos_quests_swipe', {p_id: id, p_dir: dir});
   if (error || (data && data.ok === false)) { toast('Save failed: ' + (error ? error.message : (data.note || ''))); loadAll(); }
+}
+
+/* --- EXPLORE — idea feed: curio (↑ depth) · guess (lock in a number) · lesson (typed answer, graded). Server: lifeos_explore_* --- */
+function exTop(){ return (S.exFeed || [])[0] || null; }
+function exMd(t){ try { return marked.parse(t || ''); } catch (_e) { return '<p>' + esc(t || '') + '</p>'; } }
+function exNum(n){ n = Number(n); if (!isFinite(n)) return '?'; return Math.abs(n) >= 1000 ? n.toLocaleString('en-US', {maximumFractionDigits: 0}) : String(+n.toFixed(2)); }
+function exStatsHTML(){
+  const st = S.exStats || {};
+  const chip = (l, v) => `<span class="qchip"><b>${v}</b> ${l}</span>`;
+  return `<div class="exstats">${chip('today', st.today || 0)}${st.calibration != null ? chip('guess avg', st.calibration) : ''}${chip('kept', st.liked || 0)}${st.due_back ? chip('due back', st.due_back) : ''}${chip('unseen', st.unseen || 0)}</div>`;
+}
+function exCardHTML(c, i){
+  const cls = i === 0 ? 'top' : i === 1 ? 'n1' : 'n2';
+  const grab = i === 0 ? 'onpointerdown="qDown(event)"' : '';
+  const back = c.mode === 'comeback';
+  const open = S.exOpen === c.id;
+  const src = c.source_name ? `<div class="exsrc">${c.source_url ? `<a href="${esc(c.source_url)}" target="_blank" rel="noopener">${esc(c.source_name)} ↗</a>` : esc(c.source_name)}</div>` : '';
+  const kindLine = (label, extra) => `<div class="exkind ${back ? 'back' : ''}"><span>${back ? '<b>remember?</b> · ' : ''}${esc(label)}</span><span>${extra || ''}</span></div>`;
+  let inner = '';
+  if (c.kind === 'curio') {
+    const topic = c.topic + (c.tags && c.tags.length ? ' · ' + c.tags.slice(0, 2).join(', ') : '');
+    if (back) {
+      const rev = S.exReveal === c.id;
+      inner = kindLine(topic) + `<div class="exhook">${esc(c.hook)}</div>` +
+        (rev ? `<div class="exscroll">${exMd(c.body)}</div><div class="exchoice"><button class="no" onclick="exBack(${c.id},'forgot')">NOPE</button><button class="yes" onclick="exBack(${c.id},'remember')">GOT IT</button></div>`
+             : `<div class="dim" style="font-size:13px">Say the why out loud first.</div><div class="exchoice"><button onclick="S.exReveal=${c.id};render()">REVEAL</button></div>`) + src;
+    } else {
+      inner = kindLine(topic, open ? '' : '<span class="dim">↑ depth</span>') + `<div class="exhook">${esc(c.hook)}</div>` +
+        (open ? `<div class="exscroll">${exMd(c.body)}</div>` : '') + src;
+    }
+  } else if (c.kind === 'guess') {
+    const r = S.exResult && S.exResult.id === c.id ? S.exResult : null;
+    const g = S.exGuess && S.exGuess.id === c.id ? S.exGuess.v : null;
+    const lo = Number(c.guess_min), hi = Number(c.guess_max), logS = lo > 0 && hi / lo >= 50;
+    const sv = g != null && g > 0 ? (logS ? Math.log(g / lo) / Math.log(hi / lo) : (g - lo) / (hi - lo)) * 1000 : 500;
+    inner = kindLine(c.topic + ' · guess') + `<div class="exhook">${esc(c.hook)}</div>` +
+      (r ? `<div class="exres ${r.pts >= 70 ? 'good' : r.pts >= 35 ? 'ok' : 'bad'}"><div class="big">${exNum(r.answer)} <span style="font-size:13px;font-weight:500;color:var(--dim)">${esc(c.answer_unit || '')}</span></div><div class="pts">you said ${exNum(r.guess)} · ${r.pts} pts${r.log_err != null ? ' · off by ' + Math.pow(10, r.log_err).toFixed(1) + '×' : ''}</div></div><div class="exscroll">${exMd(c.body)}</div>`
+         : `<div class="exrow"><input type="number" id="exg-${c.id}" inputmode="decimal" placeholder="your guess" value="${g != null ? g : ''}" oninput="exSetGuess(${c.id}, this.value)"><span class="unit">${esc(c.answer_unit || '')}</span><button class="exgo" onclick="exLock(${c.id})">LOCK IN</button></div>
+            <input class="exslide" type="range" min="0" max="1000" value="${Math.round(Math.max(0, Math.min(1000, sv)))}" oninput="exSlide(${c.id}, this.value, ${lo}, ${hi}, ${logS})">`) + src;
+  } else {
+    const a = S.exAnswer && S.exAnswer.id === c.id ? S.exAnswer : null;
+    inner = kindLine((c.track || 'lesson') + ' · ' + (c.lesson_no || '')) + `<div class="exhook">${esc(c.hook)}</div>` +
+      `<div class="exscroll">${exMd(c.body)}<p><strong>${esc(c.question || '')}</strong></p>` +
+      (a && a.verdict ? `<div class="exres"><div class="exverdict ${a.verdict}">${a.verdict}</div><div style="font-size:13px;margin-top:4px">${esc(a.feedback || '')}</div></div>`
+       : `<textarea class="exans" id="exa-${c.id}" placeholder="Your answer, in your own words…" oninput="S.exBusy=true"${a && a.grading ? ' disabled' : ''}>${esc(a ? a.text || '' : '')}</textarea><div class="exrow" style="margin-top:8px;justify-content:flex-end"><button class="exgo" onclick="exAnswer(${c.id})"${a && a.grading ? ' disabled' : ''}>${a && a.grading ? 'GRADING…' : 'ANSWER'}</button></div>`) +
+      `</div>` + src;
+  }
+  return `<div class="qcard ex ${c.kind} noimg ${cls}" ${grab}><div class="qbody">${inner}</div>
+    <div class="qtag r">${back ? 'GOT IT' : c.kind === 'curio' ? 'MORE' : 'KEEP'}</div><div class="qtag l">${back ? 'NOPE' : 'PASS'}</div>${c.kind === 'curio' && !back && !open ? '<div class="qtag u d">DEPTH</div>' : ''}</div>`;
+}
+function rExplore(){
+  const feed = S.exFeed || [];
+  const stack = feed.length
+    ? `<div class="qstack noswipe">${feed.slice(0, 3).map((c, i) => exCardHTML(c, i)).join('')}</div>
+       <div class="qbtns"><button class="qbtn l" onclick="exploreSwipe('left')" title="pass (←)">✕</button><button class="qbtn u" onclick="exploreUp()" title="depth (↑)">↑</button><button class="qbtn r" onclick="exploreSwipe('right')" title="more like this (→)">♥</button></div>`
+    : `<div class="qempty"><div>You've seen everything<br><span class="mono" style="font-size:11px">new ideas arrive with the morning routine</span></div></div>`;
+  return exStatsHTML() + stack;
+}
+function exSetGuess(id, v){ S.exGuess = {id, v: v === '' ? null : Number(v)}; S.exBusy = true; }
+function exSlide(id, pos, lo, hi, logS){
+  const p = Number(pos) / 1000; let v = logS ? lo * Math.pow(hi / lo, p) : lo + (hi - lo) * p;
+  v = Math.abs(v) >= 100 ? Math.round(v) : +v.toPrecision(3);
+  S.exGuess = {id, v}; S.exBusy = true;
+  const inp = document.getElementById('exg-' + id); if (inp) inp.value = v;
+}
+async function exLock(id){
+  const c = exTop(); if (!c || c.id !== id) return;
+  const g = S.exGuess && S.exGuess.id === id ? S.exGuess.v : null;
+  if (g == null || !isFinite(g)) { toast('Type or slide a guess first'); return; }
+  S.lastWrite = Date.now();
+  const {data, error} = await db.rpc('lifeos_explore_act', {p_id: id, p_action: 'guess', p_value: {guess: g}});
+  if (error || !data || data.ok === false) { toast('Save failed: ' + (error ? error.message : '')); return; }
+  S.exResult = Object.assign({id}, data); S.exBusy = false;
+  if (c.mode === 'comeback') S.exBackAuto = data.pts >= 70 ? 'remember' : 'forgot';
+  if (data.pts >= 50) bumpCardsCorrect();
+  render();
+}
+async function exAnswer(id){
+  const c = exTop(); if (!c || c.id !== id) return;
+  const ta = document.getElementById('exa-' + id); const text = (ta ? ta.value : '').trim();
+  if (!text) { toast('Write an answer first'); return; }
+  S.exAnswer = {id, text, grading: true}; render();
+  let verdict = 'partial', feedback = '';
+  try {
+    const {data:{session}} = await db.auth.getSession();
+    const r = await fetch(SB_URL + '/functions/v1/grade', {method: 'POST', headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + session.access_token},
+      body: JSON.stringify({front: c.question, back: c.answer_text, answer: text})});
+    const d = await r.json(); verdict = d.verdict || 'partial'; feedback = d.feedback || '';
+  } catch (e) { feedback = 'Grader unreachable — compare with the key: ' + (c.answer_text || ''); }
+  S.exAnswer = {id, text, verdict, feedback}; S.exBusy = false;
+  S.lastWrite = Date.now();
+  db.rpc('lifeos_explore_act', {p_id: id, p_action: 'answer', p_value: {text, verdict, feedback}}).then(({error}) => { if (error) toast('Save failed: ' + error.message); });
+  if (verdict !== 'wrong') bumpCardsCorrect();
+  render();
+}
+function exploreUp(){
+  const c = exTop(); if (!c) return;
+  if (c.kind === 'curio' && c.mode !== 'comeback') {
+    if (S.exOpen !== c.id) { S.exOpen = c.id; S.lastWrite = Date.now(); db.rpc('lifeos_explore_act', {p_id: c.id, p_action: 'up'}); bumpCardsCorrect(); }
+    render();
+  } else if (c.kind === 'curio') { S.exReveal = c.id; render(); }
+}
+function exFly(dir){
+  const el = document.querySelector('.qcard.top'); if (!el) return;
+  el.classList.remove('snap'); el.classList.add('fly');
+  const w = el.offsetWidth;
+  el.style.transform = dir === 'left' ? `translate(${-w * 1.4}px,40px) rotate(-18deg)` : `translate(${w * 1.4}px,40px) rotate(18deg)`;
+  el.style.opacity = '0'; el.onpointerdown = null;
+}
+async function exBack(id, action){   // comeback curio after reveal: GOT IT / NOPE
+  const c = exTop(); if (!c || c.id !== id) return;
+  exFly(action === 'remember' ? 'right' : 'left');
+  S.exFeed = (S.exFeed || []).filter(x => x.id !== id); S.exReveal = null;
+  S.lastWrite = Date.now(); setTimeout(() => { if (!uiBusy()) render(); }, 300);
+  const {error} = await db.rpc('lifeos_explore_act', {p_id: id, p_action: action});
+  if (error) { toast('Save failed: ' + error.message); return; }
+  if (action === 'remember') bumpCardsCorrect();
+  exRefill();
+}
+async function exploreSwipe(dir){
+  const c = exTop(); if (!c) return;
+  let action = dir;
+  if (c.mode === 'comeback') action = (c.kind === 'guess' && S.exBackAuto) ? S.exBackAuto : (dir === 'right' ? 'remember' : 'forgot');
+  exFly(dir);
+  S.exFeed = (S.exFeed || []).filter(x => x.id !== c.id);
+  S.exOpen = null; S.exReveal = null; S.exBackAuto = null; S.exBusy = false;
+  S.lastWrite = Date.now(); setTimeout(() => { if (!uiBusy()) render(); }, 300);
+  const {error} = await db.rpc('lifeos_explore_act', {p_id: c.id, p_action: action});
+  if (error) { toast('Save failed: ' + error.message); loadAll(); return; }
+  exRefill();
+}
+let _exRefill = null;
+function exRefill(){   // keep the stack fed without a full loadAll
+  if ((S.exFeed || []).length > 4) return;
+  clearTimeout(_exRefill);
+  _exRefill = setTimeout(async () => {
+    const {data} = await db.rpc('lifeos_explore_feed', {p_limit: 20});
+    if (Array.isArray(data)) { const have = new Set((S.exFeed || []).map(x => x.id)); S.exFeed = [...(S.exFeed || []), ...data.filter(x => !have.has(x.id))]; }
+    const st = await db.rpc('lifeos_explore_stats'); if (st.data) S.exStats = st.data;
+    if (!uiBusy() && !S.qDrag) render();
+  }, 400);
 }
 
 /* --- BRIEF --- */
