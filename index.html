@@ -534,6 +534,53 @@ main[data-view="yc"] .nowline::before{background:#E9D5FF;box-shadow:0 0 10px rgb
 /* auth */
 #auth{max-width:340px;margin:80px auto;display:none}
 #auth .card{padding:20px}
+
+/* ---- QUESTS: swipe deck ---- */
+.qstack{position:relative;height:min(62vh,560px);margin:4px 0 10px;touch-action:none;user-select:none;-webkit-user-select:none}
+.qcard{position:absolute;inset:0;border-radius:20px;overflow:hidden;display:flex;flex-direction:column;
+  background:linear-gradient(180deg,#1B2030,#12151E);border:1px solid rgba(255,255,255,.08);
+  box-shadow:0 18px 40px rgba(0,0,0,.5);transform-origin:50% 100%;will-change:transform;cursor:grab}
+.qcard.n1{transform:translateY(10px) scale(.965)}
+.qcard.n2{transform:translateY(20px) scale(.93)}
+.qcard.n1 .qbody,.qcard.n2 .qbody{visibility:hidden}
+.qcard.top{z-index:3}.qcard.n1{z-index:2}.qcard.n2{z-index:1}
+.qcard.fly{transition:transform .32s cubic-bezier(.2,.8,.3,1),opacity .32s}
+.qcard.snap{transition:transform .22s cubic-bezier(.2,.8,.3,1)}
+.qimg{flex:0 0 38%;background:#0E1118 center/cover no-repeat;border-bottom:1px solid rgba(255,255,255,.05)}
+.qcard.noimg .qimg{flex:0 0 22%;background:
+  radial-gradient(120% 90% at 20% 0%,rgba(225,37,27,.22),transparent 55%),
+  radial-gradient(90% 80% at 100% 100%,rgba(129,140,248,.18),transparent 55%),#0E1118}
+.qbody{flex:1;padding:14px 16px 12px;display:flex;flex-direction:column;gap:7px;min-height:0}
+.qwhen{font-family:var(--mono);font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:var(--focus)}
+.qtitle{font-size:21px;font-weight:700;line-height:1.15;letter-spacing:-.2px}
+.qwhere{font-size:13px;color:var(--dim)}
+.qdesc{font-size:13px;line-height:1.4;color:#C9CDD8;overflow:hidden;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;margin-top:2px}
+.qchips{display:flex;gap:6px;flex-wrap:wrap;margin-top:auto;padding-top:6px}
+.qchip{font-family:var(--mono);font-size:10px;letter-spacing:.8px;text-transform:uppercase;padding:4px 8px;border-radius:999px;
+  border:1px solid var(--line);color:var(--dim);background:rgba(255,255,255,.03)}
+.qchip.free{color:var(--done);border-color:rgba(74,222,128,.4);background:rgba(74,222,128,.08)}
+.qchip.cost{color:var(--focus);border-color:rgba(251,191,36,.35)}
+.qchip a{color:inherit;text-decoration:none}
+.qtag{position:absolute;top:18px;padding:6px 12px;border-radius:8px;font-family:var(--mono);font-weight:800;font-size:15px;letter-spacing:2px;
+  border:3px solid;opacity:0;pointer-events:none;z-index:4;transform:rotate(-12deg)}
+.qtag.r{left:16px;color:var(--done);border-color:var(--done)}
+.qtag.l{right:16px;color:var(--accent-hi);border-color:var(--accent-hi);transform:rotate(12deg)}
+.qtag.u{left:50%;top:40%;transform:translate(-50%,-50%);color:var(--deep);border-color:var(--deep);font-size:18px}
+.qsrc .qbody{justify-content:center;text-align:center;gap:10px}
+.qsrc .qtitle{font-size:24px}
+.qbtns{display:flex;justify-content:center;gap:18px;margin:2px 0 16px}
+.qbtn{width:56px;height:56px;border-radius:50%;border:1px solid var(--line);background:var(--card);color:var(--text);font-size:22px;
+  display:flex;align-items:center;justify-content:center;box-shadow:0 6px 18px rgba(0,0,0,.35);cursor:pointer}
+.qbtn.l{color:var(--accent-hi)}.qbtn.r{color:var(--done)}.qbtn.u{color:var(--deep);width:48px;height:48px;font-size:18px;align-self:center}
+.qbtn:active{transform:scale(.92)}
+.qrow{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+.qrow .qd{font-family:var(--mono);font-size:10px;color:var(--dim);flex:0 0 64px;line-height:1.3;white-space:nowrap}
+.qrow .qt{flex:1;min-width:0;font-size:13px}
+.qrow .qt small{display:block;color:var(--dim);font-size:11px}
+.qrow .btn{padding:4px 9px;font-size:11px}
+.qempty{height:min(62vh,560px);display:flex;align-items:center;justify-content:center;text-align:center;color:var(--dim);border:1px dashed var(--line);border-radius:20px;margin-bottom:10px}
+body.desk .qstack{max-width:440px;margin-left:auto;margin-right:auto}
+body.desk .qbtns{max-width:440px;margin-left:auto;margin-right:auto}
 #auth input{margin-bottom:10px}
 #authmsg{font-family:var(--mono);font-size:12px;color:var(--focus);margin-top:8px;min-height:16px}
 .hidden{display:none!important}
@@ -934,7 +981,7 @@ async function loadAll(){
   const seq = loadAll._seq = (loadAll._seq || 0) + 1;
   const startedAt = Date.now();   // snapshot is only valid for writes that began BEFORE this
   const today = todayISO();
-  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx] = await Promise.all([
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, qsv] = await Promise.all([
     db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
@@ -982,6 +1029,9 @@ async function loadAll(){
     db.rpc('lifeos_day_tags'),
     db.rpc('lifeos_tonight_line'),
     db.rpc('lifeos_tag_effects', {p_days: 30}),
+    db.rpc('lifeos_quests_deck', {p_limit: 40}),                                                      // side quests: ranked open cards
+    db.rpc('lifeos_quests_candidates', {p_limit: 5}),                                                 // side quests: "follow @x?" source cards
+    db.from('quests').select('*').in('status', ['saved', 'going']).gte('event_date', today).order('event_date').order('starts_at'),
   ]);
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   S.cards = cd.data || []; S.events = ev.data || []; S.freezes = fz.data || [];
@@ -1021,6 +1071,7 @@ async function loadAll(){
   // began after this fetch started invalidates the whole snapshot → drop it and refetch.
   if ((S.lastWrite || 0) >= startedAt) { setTimeout(loadAll, 400); return; }
   if (caf.data) S.caff = caf.data;    // caffeine module: level/curve/bags/last-safe (server-computed); keep old on a failed RPC
+  if (!S.qDrag) { S.questDeck = qdk.data || []; S.questCands = qcd.data || []; S.questSaved = qsv.data || []; }   // side quests (don't yank a card mid-drag)
   S.sleepNights = sn.data || [];   // sleep card: 14 nights — Fitbit session when one exists, else bed = last app close, wake = ranked confirmation
   S.body = bsc.data || [];        // v7: sleep score + readiness (lifeos_body_scores)
   S.dayTags = dtg.data || [];     // day tags (manual + auto caffeine-late) for the credit day
@@ -1126,7 +1177,7 @@ let rtChannel = null, rtTimer = null;
 function uiBusy(){
   const a = document.activeElement;   // typing anywhere in the app counts as busy — a rebuild would eat the keyboard
   const typing = a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.closest && a.closest('#main,#sheetroot,#addbar');
-  return !!(typing || S.editing || S.sending || S.sheet || S.planEditMode || S.brewEdit || S.caffPick || S.bagEdit || S.pbSheet || S.evSheet || S.dropAsk || PDrag);
+  return !!(typing || S.editing || S.sending || S.sheet || S.planEditMode || S.brewEdit || S.caffPick || S.bagEdit || S.pbSheet || S.evSheet || S.dropAsk || PDrag || S.qDrag);
 }
 function uiScrolling(){ return Date.now() - Math.max(S._gsAt || 0, S._msAt || 0) < 1200; }
 /* background refresh that arrives while the user is busy: remember it, replay when free */
@@ -1530,7 +1581,7 @@ async function saveReflection(){
 }
 
 /* ================= rendering ================= */
-const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['cal','CAL'],['chat','CHAT'],['reflect','REFLECT'],['coffee','COFFEE'],['yc','YC'],['time','TIME'],['log','LOG'],['trends','TRENDS'],['money','MONEY'],['jobs','JOBS'],['cards','CARDS'],['settings','SETTINGS']];
+const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['cal','CAL'],['quests','QUESTS'],['chat','CHAT'],['reflect','REFLECT'],['coffee','COFFEE'],['yc','YC'],['time','TIME'],['log','LOG'],['trends','TRENDS'],['money','MONEY'],['jobs','JOBS'],['cards','CARDS'],['settings','SETTINGS']];
 function setView(v){ S.view = v; S.editing = null; localStorage.setItem('view', v); render(); }
 function setFilt(f){ S.filt = f; localStorage.setItem('filt', f); render(); }
 
@@ -1572,6 +1623,7 @@ function render(){
   if (S.view === 'jobs')    main.innerHTML = rJobs();
   if (S.view === 'cal')     main.innerHTML = rCal();
   if (S.view === 'cards')   main.innerHTML = rCards();
+  if (S.view === 'quests')  main.innerHTML = rQuests();
   if (S.view === 'chat')    { main.innerHTML = rChat(); const cl = document.getElementById('chatlog'); if (cl) cl.scrollTop = cl.scrollHeight; }
   if (S.view === 'settings') main.innerHTML = rSettings();
   render._lastView = S.view;
@@ -3069,13 +3121,14 @@ const isDesk = () => DESK_MQ.matches;
 (DESK_MQ.addEventListener ? DESK_MQ.addEventListener.bind(DESK_MQ, 'change') : DESK_MQ.addListener.bind(DESK_MQ))(() => {
   if (!document.getElementById('app').classList.contains('hidden')) render();
 });
-const NAV_GROUPS = [['Daily', ['today', 'brief', 'tasks', 'cal', 'reflect']], ['Insight', ['trends', 'time', 'log']],
+const NAV_GROUPS = [['Daily', ['today', 'brief', 'tasks', 'cal', 'quests', 'reflect']], ['Insight', ['trends', 'time', 'log']],
   ['Life', ['coffee', 'money', 'jobs', 'cards', 'yc', 'chat']], ['', ['settings']]];
 const NAV_ICON = {
   today: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2.5 12h2M19.5 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   tasks: '<rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="M8 12.2l2.8 2.8L16 9.5"/>',
   brief: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>',
   cal: '<rect x="3.5" y="4.5" width="17" height="16" rx="3"/><path d="M3.5 9.5h17M8 2.5v4M16 2.5v4"/>',
+  quests: '<circle cx="12" cy="12" r="8.5"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
   chat: '<path d="M20.5 12a8.5 8.5 0 0 1-12.3 7.6L3.5 20.5l1-4.4A8.5 8.5 0 1 1 20.5 12z"/>',
   reflect: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
   coffee: '<path d="M4 9h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z"/><path d="M17 11h1.5a2.5 2.5 0 0 1 0 5H17M8 2.5v3M12 2.5v3"/>',
@@ -3099,6 +3152,7 @@ function navDeskHTML(){
   const badge = {
     today: S.tasks.filter(t => t.bucket === 'active' && t.status !== 'done' && t.due && t.due <= today && !((S._kids || {})[t.id] || []).length).length,
     cards: (S.cards || []).length,
+    quests: (S.questDeck || []).length,
   };
   const btn = v => `<button class="${S.view === v ? 'on' : ''}" onclick="setView('${v}')">${navIcon(v)}<span>${titleCase(lab[v])}</span>${badge[v] ? `<span class="nb">${badge[v]}</span>` : ''}</button>`;
   return `<div class="nbrand">LifeOS<span class="dot">.</span></div>` +
@@ -3350,6 +3404,147 @@ function rTasks(){
 function tgGroup(i, open){
   const p = (window._gn || [])[i]; if (p == null) return;
   if (open) S.openGroups.add(p); else S.openGroups.delete(p);
+}
+
+/* --- QUESTS — side-quest deck (server: lifeos_quests_*, spec LifeOS\SIDEQUESTS_SPEC.md) --- */
+function questWhen(q){
+  const d = new Date(q.event_date + 'T12:00:00');
+  const day = d.toLocaleDateString('en-US', {weekday: 'short', month: 'short', day: 'numeric'});
+  if (q.all_day || !q.starts_at) return day + ' · all day';
+  const t = x => new Date(x).toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit'}).replace(':00', '').toLowerCase().replace(' ', '');
+  return day + ' · ' + t(q.starts_at) + (q.ends_at ? '–' + t(q.ends_at) : '');
+}
+/* deck = ranked cards with one "follow this source?" card slipped in every 6th slot */
+function questDeckItems(){
+  const out = (S.questDeck || []).map(q => ({kind: 'q', q}));
+  (S.questCands || []).forEach((s, i) => { out.splice(Math.min(4 + i * 6, out.length), 0, {kind: 'src', s}); });
+  return out;
+}
+function questCardHTML(it, i){
+  const cls = i === 0 ? 'top' : i === 1 ? 'n1' : 'n2';
+  const grab = i === 0 ? 'onpointerdown="qDown(event)"' : '';
+  if (it.kind === 'src') {
+    const s = it.s;
+    return `<div class="qcard qsrc noimg ${cls}" ${grab}><div class="qimg"></div><div class="qbody">
+      <div class="qwhen">new source</div>
+      <div class="qtitle">${s.kind === 'ig' ? '@' : ''}${esc(s.handle || s.label || '')}</div>
+      <div class="qwhere">seen ${s.seen_count}×${(s.seen_from || []).length ? ' · via ' + esc(s.seen_from.slice(0, 3).join(', ')) : ''}</div>
+      <div class="qchips" style="justify-content:center"><span class="qchip">${esc(s.kind)}</span></div>
+    </div><div class="qtag r">FOLLOW</div><div class="qtag l">NOPE</div></div>`;
+  }
+  const q = it.q;
+  return `<div class="qcard ${q.image_url ? '' : 'noimg'} ${cls}" ${grab}>
+    <div class="qimg"${q.image_url ? ` style="background-image:url('${esc(q.image_url)}')"` : ''}></div>
+    <div class="qbody">
+      <div class="qwhen">${esc(questWhen(q))}</div>
+      <div class="qtitle">${esc(q.title)}</div>
+      ${q.venue || q.address ? `<div class="qwhere">${esc(q.venue || q.address)}</div>` : ''}
+      ${q.description ? `<div class="qdesc">${esc(q.description)}</div>` : ''}
+      <div class="qchips">
+        ${q.is_free ? '<span class="qchip free">free</span>' : q.cost ? `<span class="qchip cost">${esc(q.cost)}</span>` : ''}
+        ${q.event_type ? `<span class="qchip">${esc(q.event_type)}</span>` : ''}
+        ${q.host ? `<span class="qchip">${esc(q.host.length > 30 ? q.host.slice(0, 28) + '…' : q.host)}</span>` : ''}
+        ${q.url ? `<span class="qchip"><a href="${esc(q.url)}" target="_blank" rel="noopener">open ↗</a></span>` : ''}
+      </div>
+    </div><div class="qtag r">SAVE</div><div class="qtag l">PASS</div><div class="qtag u">GOING</div></div>`;
+}
+function rQuests(){
+  const items = questDeckItems();
+  const stack = items.length
+    ? `<div class="qstack noswipe">${items.slice(0, 3).map((it, i) => questCardHTML(it, i)).join('')}</div>
+       <div class="qbtns"><button class="qbtn l" onclick="questSwipe('left')" title="pass (←)">✕</button><button class="qbtn u" onclick="questSwipe('up')" title="going (↑)">↑</button><button class="qbtn r" onclick="questSwipe('right')" title="save (→)">♥</button></div>`
+    : `<div class="qempty"><div>Deck's empty<br><span class="mono" style="font-size:11px">new cards land with the next fetch</span></div></div>`;
+  const saved = S.questSaved || [];
+  const going = saved.filter(q => q.status === 'going'), sv = saved.filter(q => q.status === 'saved');
+  const row = q => `<div class="qrow"><div class="qd">${esc(questWhen(q)).replace(',', '').replace(' · ', '<br>')}</div>
+    <div class="qt">${q.url ? `<a href="${esc(q.url)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">${esc(q.title)}</a>` : esc(q.title)}<small>${esc(q.venue || q.host || '')}</small></div>
+    ${q.status === 'saved' ? `<button class="btn" onclick="questAct(${q.id},'up')">↑ going</button><button class="btn" onclick="questAct(${q.id},'left')">✕</button>` : '<span class="qchip" style="color:var(--deep);border-color:rgba(129,140,248,.4)">on cal</span>'}</div>`;
+  return stack
+    + (going.length ? `<div class="card"><h2>Going</h2>${going.map(row).join('')}</div>` : '')
+    + (sv.length ? `<div class="card"><h2>Saved</h2>${sv.map(row).join('')}</div>` : '');
+}
+/* drag the top card: → save · ← pass · ↑ going */
+let QD = null;
+function qDown(e){
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  const el = e.currentTarget;
+  QD = {el, x: e.clientX, y: e.clientY, moved: false, w: el.offsetWidth, h: el.offsetHeight};
+  S.qDrag = true;
+  el.classList.remove('snap', 'fly');
+  try { el.setPointerCapture(e.pointerId); } catch (_e) {}
+}
+function qMove(e){
+  if (!QD) return;
+  const dx = e.clientX - QD.x, dy = e.clientY - QD.y;
+  if (Math.abs(dx) > 6 || Math.abs(dy) > 6) QD.moved = true;
+  QD.el.style.transform = `translate(${dx}px,${dy}px) rotate(${dx / 18}deg)`;
+  const up = dy < -40 && Math.abs(dx) < Math.abs(dy);
+  const set = (sel, v) => { const t = QD.el.querySelector(sel); if (t) t.style.opacity = Math.min(1, Math.max(0, v)); };
+  set('.qtag.r', up ? 0 : dx / (QD.w * .3));
+  set('.qtag.l', up ? 0 : -dx / (QD.w * .3));
+  set('.qtag.u', up ? -dy / (QD.h * .25) : 0);
+}
+function qUp(e){
+  if (!QD) return;
+  const d = QD; QD = null; S.qDrag = false;
+  const lost = e.type === 'pointercancel' && !e.clientX && !e.clientY;
+  const dx = lost ? 0 : e.clientX - d.x, dy = lost ? 0 : e.clientY - d.y;
+  const up = dy < -d.h * .25 && Math.abs(dx) < Math.abs(dy);
+  if (up) return questSwipe('up');
+  if (dx > d.w * .3) return questSwipe('right');
+  if (dx < -d.w * .3) return questSwipe('left');
+  d.el.classList.add('snap'); d.el.style.transform = '';
+  d.el.querySelectorAll('.qtag').forEach(t => { t.style.opacity = 0; });
+  if (d.moved) {   // a drag that snapped back must not count as a click on the link under the finger
+    const kill = ev => { ev.stopPropagation(); ev.preventDefault(); };
+    document.addEventListener('click', kill, {capture: true, once: true});
+    setTimeout(() => document.removeEventListener('click', kill, {capture: true}), 120);
+  }
+  if (S._dirty) renderSoft();
+}
+document.addEventListener('pointermove', qMove, {passive: true});
+document.addEventListener('pointerup', qUp);
+document.addEventListener('pointercancel', qUp);
+document.addEventListener('keydown', e => {
+  if (S.view !== 'quests' || uiBusy() || !questDeckItems().length) return;
+  if (e.key === 'ArrowLeft') questSwipe('left');
+  else if (e.key === 'ArrowRight') questSwipe('right');
+  else if (e.key === 'ArrowUp') { e.preventDefault(); questSwipe('up'); }
+});
+async function questSwipe(dir){
+  const it = questDeckItems()[0]; if (!it) return;
+  const el = document.querySelector('.qcard.top');
+  if (el) {
+    el.classList.remove('snap'); el.classList.add('fly');
+    const w = el.offsetWidth, h = el.offsetHeight;
+    el.style.transform = dir === 'left' ? `translate(${-w * 1.4}px,40px) rotate(-18deg)` : dir === 'right' ? `translate(${w * 1.4}px,40px) rotate(18deg)` : `translateY(${-h * 1.3}px) scale(.9)`;
+    el.style.opacity = '0';
+    el.onpointerdown = null;
+  }
+  // optimistic: the card is gone from the deck now; saved/going lists update in the same frame
+  if (it.kind === 'q') {
+    S.questDeck = (S.questDeck || []).filter(x => x.id !== it.q.id);
+    if (dir !== 'left') { it.q.status = dir === 'up' ? 'going' : 'saved'; S.questSaved = [...(S.questSaved || []).filter(x => x.id !== it.q.id), it.q].sort((a, b) => (a.event_date + (a.starts_at || '')).localeCompare(b.event_date + (b.starts_at || ''))); }
+  } else {
+    S.questCands = (S.questCands || []).filter(x => x.id !== it.s.id);
+  }
+  S.lastWrite = Date.now();
+  setTimeout(() => { if (!uiBusy()) render(); }, 300);
+  const {data, error} = it.kind === 'q'
+    ? await db.rpc('lifeos_quests_swipe', {p_id: it.q.id, p_dir: dir})
+    : await db.rpc('lifeos_quests_source_swipe', {p_id: it.s.id, p_dir: dir === 'left' ? 'left' : 'right'});
+  if (error || (data && data.ok === false)) { toast('Swipe failed: ' + (error ? error.message : (data.note || ''))); loadAll(); return; }
+  if (it.kind === 'q' && dir === 'up') toast('⚔ ' + questWhen(it.q) + ' — on your calendar');
+  if (it.kind === 'src' && dir !== 'left') toast('Following ' + (it.s.handle || it.s.label));
+}
+/* saved-list actions: ↑ going (adds the CAL block) · ✕ drop */
+async function questAct(id, dir){
+  const q = (S.questSaved || []).find(x => x.id === id); if (!q) return;
+  if (dir === 'left') S.questSaved = S.questSaved.filter(x => x.id !== id); else q.status = 'going';
+  S.lastWrite = Date.now();
+  render();
+  const {data, error} = await db.rpc('lifeos_quests_swipe', {p_id: id, p_dir: dir});
+  if (error || (data && data.ok === false)) { toast('Save failed: ' + (error ? error.message : (data.note || ''))); loadAll(); }
 }
 
 /* --- BRIEF --- */
