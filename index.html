@@ -1045,7 +1045,9 @@ async function loadAll(){
   const startedAt = Date.now();   // snapshot is only valid for writes that began AND finished BEFORE this
   const today = todayISO();
   const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, qsv, exf, exs] = await Promise.all([
-    db.from('tasks').select('*').order('due', {ascending:true, nullsFirst:false}),
+    // 2026-10-23: 1,245 rows > PostgREST's 1,000-row cap — with order-by-due the rows silently dropped were the
+    // LATEST-due and no-due ones, i.e. live tasks. Open tasks always; done tasks only from the last 30 days.
+    db.from('tasks').select('*').or('status.neq.done,completed_at.gte.' + new Date(Date.now() - 30*864e5).toISOString()).order('due', {ascending:true, nullsFirst:false}),
     db.from('weekly_goals').select('*').eq('active', true).order('sort'),
     db.from('goal_logs').select('*').eq('date', today),
     db.from('briefs').select('*').eq('date', today).maybeSingle(),
