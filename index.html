@@ -954,10 +954,17 @@ const CLAUDE_URL = 'https://claude.ai/project/019f2ae4-de05-714c-8cf0-3bd5d2b1b3
    a write. Belt-and-braces: cycleTask records its patch and loadAll re-applies it over a contradicting
    snapshot until a snapshot taken strictly AFTER the write resolved confirms it. */
 const WR = {inflight: 0, lastStart: 0, lastDone: 0};
+/* 2026-10-23 hotfix: supabase-js sends EVERY rpc() as POST, and loadAll itself calls ~25 read-only RPCs
+   (credits, score, quests_deck, explore_feed, ...). Counting those as writes made loadAll invalidate its
+   own snapshot every time → endless 400 ms refetch loop, blank page, 30 requests in flight. Only RPCs
+   that actually mutate count now (allowlist — an unlisted write just loses the overlap guard, which is
+   harmless; an unlisted read would bring the loop back). Table PATCH/POST/DELETE still count. */
+const WRITE_RPC = /\/rpc\/lifeos_(save_reflection|apply_decomposition|attend_class|task_clockout|task_autocomplete|plan_day|claim_card_bonus|card_review|card_decide|wake_quiz_done|quests_swipe|quests_source_swipe|explore_act|news_feedback|tag_toggle|experiment_stop|money_unlock|money_lock|money_set_pin|stocks_sync|set_vacation|log_caffeine|dismiss_task)\b/;
 const trackedFetch = (input, init) => {
   const method = ((init && init.method) || (input && input.method) || 'GET').toUpperCase();
   const url = typeof input === 'string' ? input : (input && input.url) || '';
-  const isWrite = method !== 'GET' && method !== 'HEAD' && url.indexOf('/rest/v1/') !== -1;
+  const isRpc = url.indexOf('/rest/v1/rpc/') !== -1;
+  const isWrite = method !== 'GET' && method !== 'HEAD' && url.indexOf('/rest/v1/') !== -1 && (!isRpc || WRITE_RPC.test(url));
   if (!isWrite) return fetch(input, init);
   WR.inflight++; WR.lastStart = Date.now();
   const done = () => { WR.inflight = Math.max(0, WR.inflight - 1); WR.lastDone = Date.now(); };
@@ -1135,7 +1142,12 @@ async function loadAll(){
   // done). The old check only looked at "write within 1200 ms of completion"; a reload that
   // started before the tap and finished >1.2 s after it slipped through. Now: any write that
   // began after this fetch started invalidates the whole snapshot → drop it and refetch.
-  if ((S.lastWrite || 0) >= startedAt || WR.lastStart >= startedAt || WR.lastDone >= startedAt) { setTimeout(loadAll, 400); return; }   // a write overlapped this fetch → snapshot may be stale
+  if ((S.lastWrite || 0) >= startedAt || WR.lastStart >= startedAt || WR.lastDone >= startedAt) {   // a write overlapped this fetch → snapshot may be stale
+    loadAll._retries = (loadAll._retries || 0) + 1;
+    if (loadAll._retries <= 4) { setTimeout(loadAll, 400); return; }   // 2026-10-23: never loop forever — after 4 overlaps render what we have (PENDING_TASK still protects taps)
+    console.warn('loadAll: writes kept overlapping, rendering the snapshot anyway');
+  }
+  loadAll._retries = 0;
   if (caf.data) S.caff = caf.data;    // caffeine module: level/curve/bags/last-safe (server-computed); keep old on a failed RPC
   if (!S.qDrag) { S.questDeck = qdk.data || []; S.questCands = qcd.data || []; S.questSaved = qsv.data || []; }   // side quests (don't yank a card mid-drag)
   if (!S.qDrag && !S.exBusy) { S.exFeed = Array.isArray(exf.data) ? exf.data : []; }                   // explore feed (not while a card is mid-interaction)
