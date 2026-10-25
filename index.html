@@ -1044,7 +1044,7 @@ async function loadAll(){
   const seq = loadAll._seq = (loadAll._seq || 0) + 1;
   const startedAt = Date.now();   // snapshot is only valid for writes that began AND finished BEFORE this
   const today = todayISO();
-  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, qsv, exf, exs] = await Promise.all([
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, mch, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, qsv, exf, exs] = await Promise.all([
     // 2026-10-23: 1,245 rows > PostgREST's 1,000-row cap — with order-by-due the rows silently dropped were the
     // LATEST-due and no-due ones, i.e. live tasks. Open tasks always; done tasks only from the last 30 days.
     db.from('tasks').select('*').or('status.neq.done,completed_at.gte.' + new Date(Date.now() - 30*864e5).toISOString()).order('due', {ascending:true, nullsFirst:false}),
@@ -1079,10 +1079,11 @@ async function loadAll(){
     db.from('cycle_marks').select('*').order('date'),
     db.rpc('lifeos_money_week'),
     db.from('fin_accounts').select('*').order('institution').order('name'),
-    db.from('fin_transactions').select('*').gte('posted', new Date(Date.now() - 35 * 864e5).toLocaleDateString('sv-SE'))
-      .order('posted', {ascending: false}).limit(250),
+    db.from('fin_transactions').select('*').gte('posted', new Date(Date.now() - 400 * 864e5).toLocaleDateString('sv-SE'))
+      .order('posted', {ascending: false}).limit(1000),   // money v2: the spending explorer aggregates client-side over ~13 months (PostgREST caps a request at 1,000 rows)
     db.from('fin_recurring').select('*').eq('active', true).eq('ignored', false).order('avg_amount', {ascending: false}),
     db.rpc('lifeos_stocks_context'),
+    db.rpc('lifeos_money_charts'),                                                                    // money v2: net-worth history, portfolio history, window returns, freshness, months
     db.from('job_postings').select('*').neq('status','archived').neq('status','new').order('status_changed_at', {ascending:false}).limit(200),
     db.from('focus_sessions').select('id,task_id,energy,started_at,ended_at').gte('started_at', new Date(Date.now() - 60 * 864e5).toISOString()).order('started_at').limit(2000),
     db.from('job_postings').select('*').eq('status','new').order('rank_score', {ascending:false}).limit(60),
@@ -1137,6 +1138,7 @@ async function loadAll(){
   S.kits = {}; (jm.data || []).forEach(m => S.kits[m.posting_id] = m);   // apply kits (slip-prep)
   S.focusLog = flog.data || [];    // clocked-in history → blue work spans on CAL
   S.stocks = stx.data || null;     // stocks agent: quotes + indicators + latest report
+  S.moneyCharts = (mch.data && !mch.data.locked) ? mch.data : null;   // money v2 chart feed (lifeos_money_charts)
   if (seq !== loadAll._seq) return;   // a newer loadAll is in flight — this snapshot is stale, drop it
   // RACE FIX (2026-10-21): a tap during an in-flight reload used to get overwritten — the tasks
   // SELECT had been answered BEFORE the UPDATE committed but its response landed AFTER the
@@ -5455,7 +5457,7 @@ async function unlockMoney(){
 }
 async function lockMoney(){
   try { await db.rpc('lifeos_money_lock'); } catch (e) {}
-  S._moneyUnlockUntil = 0; S.money = null; S.finAccounts = []; S.finTx = []; S.finRecurring = []; S.stocks = null;
+  S._moneyUnlockUntil = 0; S.money = null; S.finAccounts = []; S.finTx = []; S.finRecurring = []; S.stocks = null; S.moneyCharts = null;
   render();
 }
 async function changeMoneyPin(){
@@ -5464,6 +5466,76 @@ async function changeMoneyPin(){
   const { data, error } = await db.rpc('lifeos_money_set_pin', { p_old: cur, p_new: nw });
   if (error || !data || !data.ok) { toast((data && data.error) || (error && error.message) || 'PIN change failed'); return; }
   S._moneyUnlockUntil = 0; toast('PIN changed - unlock again'); render();
+}
+/* ================= MONEY v2 (2026-10-24) — explorer, charts, portfolio =================
+   Three segments behind the same PIN gate. SQL still owns every number:
+     lifeos_money_week   → week/month cashflow, categories, net worth (unchanged)
+     lifeos_money_charts → net-worth history by bucket, portfolio history vs SPY, window returns,
+                           per-institution freshness, SimpleFIN connection errors, 13 months in/out
+     fin_transactions    → ~13 months loaded; the SPENDING explorer aggregates client-side so every
+                           period / flow / group-by / filter change is instant (no round-trip).
+   Nothing here can move money. Read-only mirror, as before. */
+const MX_DEFAULT = {per: 'month', off: 0, flow: 'out', by: 'cat', cat: null, q: '', nw: 'all', pf: '3m', sort: 'value', open: null, more: 0};
+function mx(){ if (!S.mx) { try { S.mx = Object.assign({}, MX_DEFAULT, JSON.parse(localStorage.getItem('moneyX') || '{}')); } catch (e) { S.mx = Object.assign({}, MX_DEFAULT); } S.mx.q = ''; S.mx.more = 0; } return S.mx; }
+function mxSet(k, v){
+  const x = mx();
+  if (k === 'cat' && x.cat === v) v = null;              // tap the selected row again → clear the filter
+  if (k === 'per') { x.off = 0; x.cat = null; }
+  if (k === 'flow') { x.cat = null; }
+  if (k !== 'more') x.more = 0;
+  x[k] = v;
+  try { const {q, more, open, ...keep} = x; localStorage.setItem('moneyX', JSON.stringify(keep)); } catch (e) {}
+  render();
+}
+function mxSearch(v){ mx().q = v; mx().more = 0; const list = document.getElementById('mx-list'); if (list) list.outerHTML = mxListHTML(); }
+/* money formatting: full dollars with commas for headline numbers, fmt$ (compact k) for dense rows */
+function money$(n, dec){ const v = +n || 0; const a = Math.abs(v); const d = dec != null ? dec : (a < 100 && a !== 0 ? 2 : 0); return (v < 0 ? '-$' : '$') + a.toLocaleString('en-US', {minimumFractionDigits: d, maximumFractionDigits: d}); }
+function fmtR(n){ const v = +n || 0; return Math.abs(v) >= 1000 ? fmt$(v) : (v < 0 ? '-$' : '$') + Math.round(Math.abs(v)).toLocaleString('en-US'); }
+function pctHTML(v, dec){ if (v == null || isNaN(v)) return '<span class="dim">—</span>'; const d = dec != null ? dec : 1; return `<span style="color:${v > 0 ? 'var(--done)' : v < 0 ? 'var(--accent-hi)' : 'var(--dim)'}">${v > 0 ? '+' : ''}${(+v).toFixed(d)}%</span>`; }
+function deltaChip(cur, prev, invert){ if (!prev) return ''; const d = (cur - prev) / prev * 100; const good = invert ? d <= 0 : d >= 0; return `<span class="mono" style="font-size:11px;font-weight:700;padding:2px 7px;border-radius:999px;background:rgba(255,255,255,.05);text-transform:none;letter-spacing:0;color:${good ? 'var(--done)' : 'var(--accent-hi)'}" title="vs previous period">${d >= 0 ? '▲' : '▼'} ${Math.abs(Math.round(d))}% vs prev</span>`; }
+const MCAT_COLOR = {food_out: '#FF7A5C', groceries: '#4ADE80', shopping: '#FBBF24', travel: '#38BDF8', transport: '#818CF8', subscriptions: '#C4B5FD',
+  fees: '#F472B6', fun: '#FB923C', health: '#2DD4BF', other: '#8A90A0', gifts_yc: '#F9A8D4', bike: '#A3E635', education: '#A78BFA', housing: '#F59E0B',
+  income: '#4ADE80', investing: '#818CF8', transfers: '#6B7280', uncategorized: '#4B5563'};
+const MCAT_FALLBACK = ['#FF7A5C', '#38BDF8', '#FBBF24', '#4ADE80', '#C4B5FD', '#F472B6', '#2DD4BF', '#FB923C', '#A3E635', '#818CF8'];
+function mcatColor(c){ if (MCAT_COLOR[c]) return MCAT_COLOR[c]; let h = 0; for (const ch of String(c || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return MCAT_FALLBACK[h % MCAT_FALLBACK.length]; }
+const BUCKET_META = {cash: ['Cash', '#4ADE80'], brokerage: ['E*Trade', '#38BDF8'], managed: ['Managed (Rod)', '#818CF8'], education: ['Coverdell', '#C4B5FD'], foreign: ['台灣銀行', '#FBBF24'], cards: ['Cards owed', '#FF4D42']};
+/* --- tiny chart helpers local to MONEY (VIZ.area/bars/tile do the rest) --- */
+function mDonut(parts, o = {}){
+  const size = o.size || 120, sw = o.stroke || 14, c = size / 2, r = c - sw / 2, C = 2 * Math.PI * r;
+  const tot = parts.reduce((s, p) => s + Math.max(0, +p.v || 0), 0) || 1;
+  let acc = 0;
+  const arcs = parts.map(p => { const v = Math.max(0, +p.v || 0); if (!v) return ''; const len = v / tot * C; const s = `<circle cx="${c}" cy="${c}" r="${r.toFixed(1)}" fill="none" stroke="${p.color}" stroke-width="${sw}" stroke-dasharray="${Math.max(len - 2, 0).toFixed(1)} ${C.toFixed(1)}" stroke-dashoffset="${(-acc).toFixed(1)}" transform="rotate(-90 ${c} ${c})"><title>${esc(p.label || '')}: ${money$(p.v)}</title></circle>`; acc += len; return s; }).join('');
+  return `<div style="position:relative;width:${size}px;height:${size}px;flex:0 0 auto"><svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}"><circle cx="${c}" cy="${c}" r="${r.toFixed(1)}" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="${sw}"/>${arcs}</svg>
+    <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center"><div style="font-family:Inter,sans-serif;font-weight:800;font-size:${o.vsize || 15}px;letter-spacing:-.03em;line-height:1">${o.label || ''}</div>${o.sub ? `<div class="dim mono" style="font-size:9px;margin-top:2px;letter-spacing:.06em">${o.sub}</div>` : ''}</div></div>`;
+}
+/* multi-series line: series = [{vals:[...], color, dash, name}] on a shared x; nulls skipped */
+function mLines(series, o = {}){
+  const W = o.w || 560, H = o.h || 150, P = o.pad ?? 10;
+  const all = series.flatMap(s => s.vals).filter(v => v != null && !isNaN(v));
+  if (all.length < 2) return '';
+  const min = o.min ?? Math.min(...all), max = o.max ?? Math.max(...all), span = (max - min) || 1;
+  const n = Math.max(...series.map(s => s.vals.length));
+  const X = i => P + i * (W - 2 * P) / Math.max(n - 1, 1), Y = y => H - P - ((y - min) / span) * (H - 2 * P);
+  const base = o.base == null ? '' : `<line x1="${P}" y1="${Y(o.base).toFixed(1)}" x2="${W - P}" y2="${Y(o.base).toFixed(1)}" stroke="rgba(255,255,255,.18)" stroke-dasharray="3 5"/>`;
+  const paths = series.map(s => {
+    const pts = s.vals.map((v, i) => v == null || isNaN(v) ? null : {x: X(i), y: Y(v)}).filter(Boolean);
+    if (pts.length < 2) return '';
+    const last = pts[pts.length - 1];
+    return `<path d="${VIZ.smooth(pts)}" fill="none" stroke="${s.color}" stroke-width="${s.sw || 2.2}" stroke-linejoin="round" stroke-linecap="round" ${s.dash ? `stroke-dasharray="${s.dash}"` : ''} opacity="${s.op || 1}" style="${s.glow === false ? '' : `filter:drop-shadow(0 0 5px ${s.color}55)`}"/>
+      ${s.end === false ? '' : `<circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="4" fill="${s.color}" style="filter:drop-shadow(0 0 6px ${s.color})"/>`}`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">${base}${paths}</svg>`;
+}
+function mRangeChips(key, opts){ const cur = mx()[key]; return `<div style="display:flex;gap:4px;margin-left:auto">${opts.map(([v, l]) => `<button class="schip ${cur === v ? 'on' : ''}" style="padding:3px 9px;font-size:10px" data-v="${v}" onclick="mxSet('${key}',this.dataset.v)">${l}</button>`).join('')}</div>`; }
+const mDateLbl = iso => { const d = new Date(iso + 'T12:00:00'); return d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'}); };
+const mDaysBetween = (a, b) => Math.round((new Date(b + 'T12:00:00') - new Date(a + 'T12:00:00')) / 864e5);
+function mSliceByRange(rows, key, range){
+  if (!rows || !rows.length) return [];
+  const days = {'1m': 30, '3m': 91, '6m': 182, '1y': 365}[range];
+  if (!days) return rows;
+  const cutoff = new Date(Date.now() - days * 864e5).toLocaleDateString('sv-SE');
+  const out = rows.filter(r => r[key] >= cutoff);
+  return out.length >= 2 ? out : rows.slice(-2);
 }
 function rMoney(){
   if (!moneyUnlockedNow()) {
@@ -5489,22 +5561,365 @@ function rMoney(){
              : moneyOverviewHTML();
   return lockbar + seg + body;
 }
-/* --- STOCKS section: read-only market mirror + the analyst's latest take --- */
+/* ---------- shared: sync health (shown on every segment when something is wrong) ---------- */
+function moneyHealthHTML(){
+  const mc = S.moneyCharts || {};
+  const errs = mc.sync_errors || [];
+  const today = todayISO();
+  const stale = (mc.freshness || []).filter(f => !f.manual && f.as_of && mDaysBetween(f.as_of, today) > 7);
+  if (!errs.length && !stale.length) return '';
+  const broken = errs.map(e => (String(e).match(/Connection to (.+?) may need attention/) || [])[1]).filter(Boolean);
+  return `<div class="card" style="border-color:var(--focus)">
+    <h2 style="color:var(--focus)">⚠ Sync needs attention</h2>
+    ${broken.length ? `<div style="font-size:13px"><b>${broken.map(esc).join(' · ')}</b> — the bank login expired. Reconnect at <span class="mono">bridge.simplefin.org</span>; balances and transactions resume on the next 2-hour pull.</div>` : ''}
+    ${stale.length ? `<div class="dim" style="font-size:11px;margin-top:6px">Last balance update: ${stale.map(f => `${esc(f.institution)} ${mDateLbl(f.as_of)}`).join(' · ')}. Everything below for those accounts is as of that date.</div>` : ''}
+  </div>`;
+}
+/* ====================== OVERVIEW ====================== */
+function moneyOverviewHTML(){
+  const m = S.money;
+  if (!m) return `<div class="empty">Money data loads after the first sync — check back in a couple hours.</div>`;
+  const mc = S.moneyCharts || {};
+  const x = mx();
+  const nw = m.net_worth || {}, mo = m.month || {};
+  // --- net worth history ---
+  const hist = mSliceByRange(mc.net_worth || [], 'd', x.nw);
+  const first = hist[0], last = hist[hist.length - 1];
+  const nwDelta = first && last ? last.total - first.total : null;
+  const nwPct = first && first.total ? nwDelta / first.total * 100 : null;
+  const nwChart = hist.length > 1 ? `<div class="chart">${VIZ.area(hist.map(h => h.total), {w: 560, h: 140, color: '#FBBF24', end: true})}
+      <div class="xl"><span>${mDateLbl(first.d)}</span><span>${mDateLbl(last.d)}</span></div></div>` : '<div class="dim" style="font-size:11px">History starts after a few daily snapshots.</div>';
+  // --- allocation by bucket (from live balances; cards shown as debt, not in the donut) ---
+  const byB = {};
+  S.finAccounts.filter(a => !a.rollup).forEach(a => {
+    const usd = a.currency === 'USD' ? +a.balance : (m.fx_usdtwd ? +a.balance / m.fx_usdtwd : 0);
+    const b = a.bucket || (usd < 0 ? 'cards' : 'cash');
+    byB[b] = (byB[b] || 0) + usd;
+  });
+  const assets = Object.entries(byB).filter(([b, v]) => b !== 'cards' && v > 0).sort((p, q) => q[1] - p[1]);
+  const assetTot = assets.reduce((s, [, v]) => s + v, 0) || 1;
+  const cardsOwed = -(byB.cards || 0);
+  const donut = mDonut(assets.map(([b, v]) => ({v, color: (BUCKET_META[b] || ['', '#8A90A0'])[1], label: (BUCKET_META[b] || [b])[0]})), {size: 118, label: Math.round(assetTot / 1000) + 'k', sub: 'assets'});
+  const legend = assets.map(([b, v]) => `<div style="display:flex;align-items:center;gap:8px;font-size:12px;padding:2px 0">
+      <i style="width:8px;height:8px;border-radius:50%;background:${(BUCKET_META[b] || ['', '#8A90A0'])[1]};box-shadow:0 0 8px ${(BUCKET_META[b] || ['', '#8A90A0'])[1]};flex:0 0 auto"></i>
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((BUCKET_META[b] || [b])[0])}</span>
+      <span class="mono dim" style="font-size:10px">${Math.round(v / assetTot * 100)}%</span>
+      <span class="mono" style="flex:0 0 64px;text-align:right">${fmt$(v)}</span></div>`).join('');
+  // --- this month in numbers ---
+  const months = mc.months || [];
+  const ym = todayISO().slice(0, 7);
+  const prevFull = months.filter(r => r.m < ym).slice(-3);
+  const avgOut = prevFull.length ? prevFull.reduce((s, r) => s + (+r.out || 0), 0) / prevFull.length : null;
+  const cash = byB.cash || 0;
+  const runway = avgOut ? cash / avgOut : null;
+  const saveRate = +mo.in > 0 ? Math.round((mo.in - mo.out) / mo.in * 100) : null;
+  const tu = mc.tuition || {}; const tuDays = tu.due ? mDaysBetween(todayISO(), tu.due) : null;
+  const dayOfMonth = new Date().getDate();
+  const pace = dayOfMonth > 2 ? mo.out / dayOfMonth * 30 : null;
+  const tiles = VIZ.tiles([
+    VIZ.tile(fmtR(mo.out), 'spent', {color: '#FF7A5C', colored: true, sub: avgOut ? `3-mo avg ${fmtR(avgOut)}` : ''}),
+    VIZ.tile(fmtR(mo.in), 'income', {color: '#4ADE80', sub: saveRate != null ? `saving ${saveRate}%` : 'none this month'}),
+    VIZ.tile(pace ? fmtR(pace) : '—', 'on pace for', {color: '#FBBF24', sub: 'at this rate'}),
+    VIZ.tile(fmtR(cardsOwed), 'cards owed', {color: '#FF4D42', colored: cardsOwed > 1000, sub: cardsOwed > 0 ? 'pay before statement' : 'all clear'}),
+    VIZ.tile(runway != null ? (runway > 99 ? '99+' : runway.toFixed(0)) : '—', 'cash runway', {unit: 'mo', color: '#38BDF8', sub: `cash ${fmtR(cash)}`}),
+    VIZ.tile(tuDays != null ? tuDays : '—', 'to tuition', {unit: 'd', color: '#C4B5FD', sub: tu.amount ? `${fmtR(tu.amount)} · ${cash >= tu.amount ? 'cash covers it' : 'short ' + fmtR(tu.amount - cash)}` : ''}),
+  ]);
+  // --- monthly cashflow: grouped bars (in green, out red) ---
+  const last6 = months.slice(-6);
+  const cfBars = last6.length ? VIZ.bars(last6.flatMap(r => [
+      {parts: [{v: +r.in, color: '#4ADE80', title: r.m + ' in ' + money$(r.in)}], label: ''},
+      {parts: [{v: +r.out, color: '#FF7A5C', title: r.m + ' out ' + money$(r.out)}], label: new Date(r.m + '-15T12:00:00').toLocaleDateString('en-US', {month: 'short'}), hot: r.m === ym},
+    ]), {w: 560, h: 130, labels: true}) : '';
+  const cfRows = last6.slice().reverse().map(r => `<tr><td class="mono dim">${r.m}</td><td class="mono" style="color:var(--done)">${fmtR(r.in)}</td><td class="mono" style="color:#FF7A5C">${fmtR(r.out)}</td>${+r.invested ? `<td class="mono" style="color:var(--deep)">${fmtR(r.invested)}</td>` : '<td></td>'}<td class="mono" style="color:${r.in - r.out >= 0 ? 'var(--done)' : 'var(--accent-hi)'}">${fmtR(r.in - r.out)}</td></tr>`).join('');
+  // --- accounts grouped by institution with freshness ---
+  const fresh = {}; (mc.freshness || []).forEach(f => fresh[f.institution] = f);
+  const groups = {};
+  S.finAccounts.filter(a => !a.rollup).forEach(a => { (groups[a.institution || 'Other'] = groups[a.institution || 'Other'] || []).push(a); });
+  const today = todayISO();
+  const acctRows = Object.entries(groups).map(([inst, accts]) => {
+    const f = fresh[inst]; const age = f && f.as_of ? mDaysBetween(f.as_of, today) : null;
+    const sub = accts.reduce((s, a) => s + (a.currency === 'USD' ? +a.balance : 0), 0);
+    return `<div class="pname" style="margin:10px 2px 2px;display:flex;gap:8px;align-items:baseline"><span style="flex:1">${esc(inst)}</span>
+      ${age != null && !(f && f.manual) ? `<span style="font-size:9px;letter-spacing:0;text-transform:none;color:${age > 7 ? 'var(--focus)' : 'var(--dim)'}">${age === 0 ? 'today' : age === 1 ? 'yesterday' : age + 'd ago'}</span>` : ''}
+      ${accts.length > 1 && accts.every(a => a.currency === 'USD') ? `<span class="mono" style="text-transform:none;letter-spacing:0;color:var(--text)">${fmt$(sub)}</span>` : ''}</div>
+    ${accts.map(a => `<div style="display:flex;gap:8px;align-items:baseline;padding:2px 0;font-size:13px">
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.name)}${a.manual ? ` <button class="btn" style="font-size:10px;padding:1px 7px" onclick="editManualBalance('${a.id}')">✎</button>` : ''}</span>
+      <span class="mono" style="color:${+a.balance < 0 ? 'var(--accent-hi)' : 'var(--text)'}">${a.currency === 'TWD' ? 'NT$' + Math.round(a.balance).toLocaleString() : money$(a.balance)}</span>
+    </div>`).join('')}`;
+  }).join('');
+  return `${moneyHealthHTML()}
+  <div class="card"><h2 style="display:flex;align-items:center;gap:8px"><span>Net worth</span>${mRangeChips('nw', [['1m', '1M'], ['3m', '3M'], ['all', 'ALL']])}</h2>
+    <div class="chart-head"><span class="hero" style="font-size:34px">${money$(nw.total_usd)}</span>
+      ${nwDelta != null ? `<span class="delta ${nwDelta >= 0 ? 'up' : 'dn'}">${nwDelta >= 0 ? '▲' : '▼'} ${fmt$(Math.abs(nwDelta))} · ${Math.abs(nwPct).toFixed(1)}%</span>` : ''}
+      ${first ? `<span class="dim">since ${mDateLbl(first.d)}</span>` : ''}</div>
+    ${nwChart}
+    <div class="dim mono" style="font-size:10.5px;margin-top:6px">linked ${money$(nw.linked_usd)} · 台灣銀行 NT$${Math.round(nw.twd || 0).toLocaleString()}${nw.twd_usd ? ' ≈ ' + money$(nw.twd_usd) : ''} @ ${m.fx_usdtwd ? (+m.fx_usdtwd).toFixed(2) : '—'}</div>
+  </div>
+  <div class="card"><h2>Where the money sits</h2>
+    <div style="display:flex;gap:16px;align-items:center">${donut}<div style="flex:1;min-width:0">${legend}
+      ${cardsOwed > 0 ? `<div style="display:flex;align-items:center;gap:8px;font-size:12px;padding:6px 0 0;margin-top:4px;border-top:1px solid rgba(255,255,255,.05)"><i style="width:8px;height:8px;border-radius:50%;background:#FF4D42;flex:0 0 auto"></i><span style="flex:1" class="dim">cards owed</span><span class="mono" style="color:var(--accent-hi)">-${fmt$(cardsOwed)}</span></div>` : ''}
+    </div></div>
+  </div>
+  <div class="card"><h2>This month in numbers</h2>${tiles}
+    <div class="dim mono" style="font-size:10px;margin-top:8px">spent/income exclude transfers + investing · runway = cash ÷ 3-month average spend</div></div>
+  <div class="card"><h2>Cashflow — 6 months</h2>${cfBars}
+    <div class="elegend" style="margin:6px 0 8px"><span><i style="background:#4ADE80"></i>in</span><span><i style="background:#FF7A5C"></i>out</span><span><i style="background:#818CF8"></i>invested</span></div>
+    <table><tr><th>month</th><th>in</th><th>out</th><th>invested</th><th>net</th></tr>${cfRows}</table></div>
+  <div class="card"><h2>Accounts</h2>${acctRows}
+    <div class="dim mono" style="font-size:10px;margin-top:8px">read-only mirror · synced every 2h via SimpleFIN · nothing here can move money</div></div>
+  <div style="height:10px"></div>`;
+}
+/* ====================== SPENDING explorer ====================== */
+const MX_PERIODS = [['week', 'WEEK'], ['month', 'MONTH'], ['quarter', '3 MO'], ['year', 'YEAR'], ['all', 'ALL']];
+const MX_FLOWS = [['out', 'spending'], ['in', 'income'], ['invest', 'investing'], ['transfers', 'transfers']];
+const MX_GROUPS = [['cat', 'category'], ['payee', 'merchant'], ['acct', 'account'], ['dow', 'weekday']];
+function mxRange(per, off){
+  const t = new Date(); t.setHours(12, 0, 0, 0);
+  const iso = d => d.toLocaleDateString('sv-SE');
+  if (per === 'week') { const dow = (t.getDay() + 6) % 7; const s = new Date(t); s.setDate(t.getDate() - dow - 7 * off); const e = new Date(s); e.setDate(s.getDate() + 6); return {s: iso(s), e: iso(e), label: `${mDateLbl(iso(s))} – ${mDateLbl(iso(e))}`}; }
+  if (per === 'month') { const s = new Date(t.getFullYear(), t.getMonth() - off, 1, 12); const e = new Date(t.getFullYear(), t.getMonth() - off + 1, 0, 12); return {s: iso(s), e: iso(e), label: s.toLocaleDateString('en-US', {month: 'long', year: 'numeric'})}; }
+  if (per === 'quarter') { const q0 = Math.floor(t.getMonth() / 3) * 3; const s = new Date(t.getFullYear(), q0 - 3 * off, 1, 12); const e = new Date(t.getFullYear(), q0 - 3 * off + 3, 0, 12); return {s: iso(s), e: iso(e), label: `Q${Math.floor(s.getMonth() / 3) + 1} ${s.getFullYear()}`}; }
+  if (per === 'year') { const y = t.getFullYear() - off; return {s: `${y}-01-01`, e: `${y}-12-31`, label: String(y)}; }
+  const all = S.finTx.map(r => r.posted).filter(Boolean); const s = all.length ? all.reduce((a, b) => a < b ? a : b) : iso(t);
+  return {s, e: iso(t), label: `All · since ${mDateLbl(s)}`, all: true};
+}
+function mxFlowOk(t, flow){
+  const c = t.category || '';
+  if (flow === 'out') return +t.amount < 0 && c !== 'transfers' && c !== 'investing';
+  if (flow === 'in') return +t.amount > 0 && c !== 'transfers' && c !== 'investing';
+  if (flow === 'invest') return c === 'investing';
+  return c === 'transfers';
+}
+const mxAmt = t => Math.abs(+t.amount || 0);
+function mxAcctShort(a){ const m = String(a.name || '').match(/\((\d+)\)\s*$/); const base = String(a.name || '').replace(/\s*\(\d+\)\s*$/, '').replace(/^(chase|pnc|discover|amazon|total)\s+/i, '').split(/\s+/)[0]; return (base || a.institution || 'acct') + (m ? ' ' + m[1] : ''); }
+function mxPayeeKey(t){ return String(t.payee || t.description || '?').replace(/\s+#?\d{3,}.*$/, '').replace(/\s{2,}/g, ' ').trim().slice(0, 28) || '?'; }
+function mxGroupKey(t, by){
+  if (by === 'cat') return t.category || 'uncategorized';
+  if (by === 'payee') return mxPayeeKey(t);
+  if (by === 'acct') { const a = S.finAccounts.find(a => a.id === t.account_id); return a ? a.name : 'account'; }
+  return new Date((t.posted || '') + 'T12:00:00').toLocaleDateString('en-US', {weekday: 'short'});
+}
+function mxGroup(rows, by){
+  const g = {}; rows.forEach(t => { const k = mxGroupKey(t, by); (g[k] = g[k] || {k, amt: 0, n: 0}).amt += mxAmt(t); g[k].n++; });
+  const out = Object.values(g);
+  if (by === 'dow') { const ord = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']; out.sort((a, b) => ord.indexOf(a.k) - ord.indexOf(b.k)); } else out.sort((a, b) => b.amt - a.amt);
+  return out;
+}
+function mxFiltered(){
+  const x = mx(); const R = mxRange(x.per, x.off);
+  const base = S.finTx.filter(t => t.posted >= R.s && t.posted <= R.e && mxFlowOk(t, x.flow));
+  const prevR = x.per === 'all' ? null : mxRange(x.per, x.off + 1);
+  const prev = prevR ? S.finTx.filter(t => t.posted >= prevR.s && t.posted <= prevR.e && mxFlowOk(t, x.flow)) : [];
+  const sel = x.cat ? base.filter(t => mxGroupKey(t, x.by) === x.cat) : base;
+  const q = (x.q || '').trim().toLowerCase();
+  const listed = q ? sel.filter(t => (String(t.payee || '') + ' ' + String(t.description || '') + ' ' + String(t.category || '')).toLowerCase().includes(q)) : sel;
+  return {x, R, base, prev, sel, listed};
+}
+/* buckets for the trend bars: week→days, month→days, quarter→weeks, year/all→months */
+function mxTrend(rows, R, per){
+  const keyOf = per === 'week' || per === 'month' ? (d => d) : per === 'quarter' ? (d => { const dt = new Date(d + 'T12:00:00'); dt.setDate(dt.getDate() - (dt.getDay() + 6) % 7); return dt.toLocaleDateString('sv-SE'); }) : (d => d.slice(0, 7));
+  const keys = [];
+  if (per === 'week' || per === 'month') { for (let d = new Date(R.s + 'T12:00:00'); d.toLocaleDateString('sv-SE') <= R.e; d.setDate(d.getDate() + 1)) keys.push(d.toLocaleDateString('sv-SE')); }
+  else if (per === 'quarter') { const d = new Date(R.s + 'T12:00:00'); d.setDate(d.getDate() - (d.getDay() + 6) % 7); for (; d.toLocaleDateString('sv-SE') <= R.e; d.setDate(d.getDate() + 7)) keys.push(d.toLocaleDateString('sv-SE')); }
+  else { const d = new Date(R.s.slice(0, 7) + '-15T12:00:00'); const endK = R.e.slice(0, 7); for (; d.toLocaleDateString('sv-SE').slice(0, 7) <= endK; d.setMonth(d.getMonth() + 1)) keys.push(d.toLocaleDateString('sv-SE').slice(0, 7)); }
+  const cats = mxGroup(rows, 'cat').slice(0, 6).map(c => c.k);
+  const per_ = {}; keys.forEach(k => per_[k] = {});
+  rows.forEach(t => { const k = keyOf(t.posted); if (!per_[k]) return; const c = cats.includes(t.category || 'uncategorized') ? (t.category || 'uncategorized') : '_other'; per_[k][c] = (per_[k][c] || 0) + mxAmt(t); });
+  const today = todayISO();
+  const lblEvery = per === 'month' ? 5 : per === 'quarter' ? 2 : 1;
+  const lbl = (k, i) => { if (i % lblEvery && i !== keys.length - 1) return ''; if (per === 'week') return new Date(k + 'T12:00:00').toLocaleDateString('en-US', {weekday: 'narrow'}); if (per === 'month') return String(+k.slice(8)); if (per === 'quarter') return mDateLbl(k).replace(' ', ' '); return new Date(k + '-15T12:00:00').toLocaleDateString('en-US', {month: 'short'}).slice(0, 1); };
+  return {keys, cats, rows: keys.map((k, i) => ({label: lbl(k, i), hot: keyOf(today) === k, parts: cats.concat('_other').map(c => ({v: per_[k][c] || 0, color: c === '_other' ? '#4B5563' : mcatColor(c), title: `${k} ${c === '_other' ? 'everything else' : c}: ${money$(per_[k][c] || 0)}`}))}))};
+}
+function mxListHTML(){
+  const {x, listed} = mxFiltered();
+  const catList = (() => { try { return JSON.parse(S.settings.fin_categories || '[]'); } catch (e) { return []; } })();
+  const N = 40 + 40 * (x.more || 0);
+  const multiAcct = new Set(listed.map(t => t.account_id)).size > 1;
+  const rows = listed.slice(0, N).map(t => {
+    const key = t.account_id + '|' + t.tx_id;
+    const chip = S.txEdit === key
+      ? `<select onchange="recatTx('${t.account_id}','${esc(t.tx_id)}',this.value)" onblur="S.txEdit=null;render()">
+          <option value="">—</option>${catList.map(c => `<option ${c === t.category ? 'selected' : ''}>${c}</option>`).join('')}</select>`
+      : `<button class="btn" style="font-size:10px;padding:2px 8px;color:${t.category ? mcatColor(t.category) : 'var(--focus)'};border-color:${t.category ? mcatColor(t.category) + '55' : 'var(--focus)'}"
+          onclick="S.txEdit='${key}';render()">${esc(t.category || 'tag it')}</button>`;
+    const acct = S.finAccounts.find(a => a.id === t.account_id);
+    return `<div style="display:flex;gap:8px;align-items:baseline;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.03)">
+      <span class="mono dim" style="flex:0 0 36px;font-size:10px">${(t.posted || '').slice(5).replace('-', '/')}</span>
+      <span style="flex:1;min-width:0;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(t.description || '')}">${esc(t.payee || t.description || '?')}${acct && multiAcct ? `<span class="dim" style="font-size:9.5px"> · ${esc(mxAcctShort(acct))}</span>` : ''}</span>
+      ${chip}
+      <span class="mono" style="flex:0 0 auto;font-size:12px;color:${+t.amount > 0 ? 'var(--done)' : 'var(--text)'}">${fmt$(t.amount)}</span>
+    </div>`;
+  }).join('');
+  return `<div id="mx-list">${rows || '<div class="dim" style="font-size:12px;padding:8px 0">nothing matches</div>'}
+    ${listed.length > N ? `<button class="btn" style="width:100%;margin-top:8px;font-size:11px" onclick="mxSet('more',${(x.more || 0) + 1})">show ${Math.min(40, listed.length - N)} more of ${listed.length}</button>` : ''}
+    <div class="dim mono" style="font-size:10px;margin-top:6px">${listed.length} transactions · tap a tag to fix it — your fix becomes a permanent rule</div></div>`;
+}
+function moneySpendingHTML(){
+  const m = S.money;
+  if (!m) return `<div class="empty">Money data loads after the first sync.</div>`;
+  const {x, R, base, prev, sel} = mxFiltered();
+  const tot = base.reduce((s, t) => s + mxAmt(t), 0), ptot = prev.reduce((s, t) => s + mxAmt(t), 0);
+  const days = Math.max(1, Math.min(mDaysBetween(R.s, R.e) + 1, mDaysBetween(R.s, todayISO()) + 1));
+  const biggest = base.slice().sort((a, b) => mxAmt(b) - mxAmt(a))[0];
+  const flowName = (MX_FLOWS.find(f => f[0] === x.flow) || [])[1] || '';
+  const chips = (key, opts) => `<div class="chips" style="margin:0 0 8px">${opts.map(([v, l]) => `<button class="schip ${x[key] === v ? 'on' : ''}" data-v="${v}" onclick="mxSet('${key}',this.dataset.v)">${l}</button>`).join('')}</div>`;
+  const nav = `<div style="display:flex;align-items:center;gap:6px;margin:2px 0 10px">
+      <button class="btn" style="padding:4px 10px" onclick="mxSet('off',${x.off + 1})" ${x.per === 'all' ? 'disabled' : ''}>◀</button>
+      <div style="flex:1;text-align:center;font-weight:700;font-size:14px">${esc(R.label)}</div>
+      <button class="btn" style="padding:4px 10px" onclick="mxSet('off',${Math.max(0, x.off - 1)})" ${x.off === 0 || x.per === 'all' ? 'disabled' : ''}>▶</button></div>`;
+  const tiles = VIZ.tiles([
+    VIZ.tile(fmtR(tot), flowName, {color: x.flow === 'in' ? '#4ADE80' : x.flow === 'invest' ? '#818CF8' : '#FF7A5C', colored: true, sub: ptot ? `prev ${fmtR(ptot)}` : ''}),
+    VIZ.tile(fmtR(tot / days), 'per day', {color: '#FBBF24', sub: `${days} day${days === 1 ? '' : 's'}`}),
+    VIZ.tile(base.length, 'transactions', {color: '#38BDF8', sub: biggest ? `max ${fmtR(mxAmt(biggest))}` : ''}),
+  ]);
+  const trend = mxTrend(base, R, x.per);
+  const trendSvg = `<div class="chart">${VIZ.bars(trend.rows, {w: 560, h: 130, labels: true})}</div>
+    <div class="elegend" style="margin-top:6px">${trend.cats.map(c => `<span><i style="background:${mcatColor(c)}"></i>${esc(c)}</span>`).join('')}${trend.rows.some(r => r.parts[r.parts.length - 1].v) ? '<span><i style="background:#4B5563"></i>everything else</span>' : ''}</div>`;
+  // breakdown by group with vs-previous deltas
+  const groups = mxGroup(base, x.by), pgroups = {}; mxGroup(prev, x.by).forEach(g => pgroups[g.k] = g.amt);
+  const gmax = Math.max(...groups.map(g => g.amt), 1);
+  const gRows = groups.slice(0, x.by === 'payee' ? 15 : 20).map(g => `
+    <div style="display:flex;gap:8px;align-items:center;padding:4px 0;cursor:pointer;${x.cat === g.k ? 'background:rgba(255,255,255,.04);margin:0 -6px;padding-left:6px;padding-right:6px;border-radius:8px' : ''}" data-v="${esc(g.k)}" onclick="mxSet('cat',this.dataset.v)">
+      <span style="flex:0 0 98px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${g.k === 'uncategorized' ? 'color:var(--dim)' : ''}">${esc(g.k)}</span>
+      <div style="flex:1;height:9px;border-radius:99px;background:rgba(255,255,255,.05);overflow:hidden"><div style="width:${Math.round(g.amt / gmax * 100)}%;height:100%;background:${x.by === 'cat' ? mcatColor(g.k) : 'var(--grad)'};opacity:.85"></div></div>
+      <span class="mono dim" style="flex:0 0 30px;font-size:10px;text-align:right">${tot ? Math.round(g.amt / tot * 100) : 0}%</span>
+      <span class="mono" style="flex:0 0 52px;font-size:11.5px;text-align:right">${fmtR(g.amt)}</span>
+      <span style="flex:0 0 46px;text-align:right;font-size:10px">${pgroups[g.k] ? (() => { const d = Math.round((g.amt - pgroups[g.k]) / pgroups[g.k] * 100); return `<span class="mono" style="color:${(x.flow === 'in' ? d >= 0 : d <= 0) ? 'var(--done)' : 'var(--accent-hi)'}">${d >= 0 ? '+' : ''}${d}%</span>`; })() : '<span class="dim">new</span>'}</span>
+    </div>`).join('');
+  // monthly matrix: last 6 months × top categories (spending only; flow-aware label)
+  const months = []; for (let i = 5; i >= 0; i--) { const d = new Date(); d.setDate(15); d.setMonth(d.getMonth() - i); months.push(d.toLocaleDateString('sv-SE').slice(0, 7)); }
+  const mrows = S.finTx.filter(t => mxFlowOk(t, x.flow) && t.posted >= months[0] + '-01');
+  const topCats = mxGroup(mrows, 'cat').slice(0, 8).map(c => c.k);
+  const cell = {}; let cmax = 1;
+  mrows.forEach(t => { const k = (t.posted || '').slice(0, 7), c = topCats.includes(t.category || 'uncategorized') ? (t.category || 'uncategorized') : '_other'; cell[k + c] = (cell[k + c] || 0) + mxAmt(t); cell[k + '_tot'] = (cell[k + '_tot'] || 0) + mxAmt(t); });
+  topCats.concat('_other').forEach(c => months.forEach(k => { cmax = Math.max(cmax, cell[k + c] || 0); }));
+  const heat = v => v ? `background:rgba(255,122,92,${(0.08 + 0.55 * Math.sqrt(v / cmax)).toFixed(2)})` : '';
+  const matrix = `<div style="overflow-x:auto;-webkit-overflow-scrolling:touch"><table style="min-width:100%;font-size:11px;white-space:nowrap">
+    <tr><th></th>${months.map(k => `<th style="text-align:right">${new Date(k + '-15T12:00:00').toLocaleDateString('en-US', {month: 'short'})}</th>`).join('')}</tr>
+    ${topCats.concat(months.some(k => cell[k + '_other']) ? ['_other'] : []).map(c => `<tr><td style="color:${c === '_other' ? 'var(--dim)' : mcatColor(c)}">${c === '_other' ? 'everything else' : esc(c)}</td>${months.map(k => `<td class="mono" style="text-align:right;font-weight:400;color:var(--text);${heat(cell[k + c])}">${cell[k + c] ? fmtR(cell[k + c]) : '<span class="dim">·</span>'}</td>`).join('')}</tr>`).join('')}
+    <tr><td style="font-weight:700">total</td>${months.map(k => `<td class="mono" style="text-align:right;font-weight:700">${fmtR(cell[k + '_tot'] || 0)}</td>`).join('')}</tr>
+  </table></div>`;
+  const subs = S.finRecurring.filter(r => ['monthly', 'yearly'].includes(r.kind));
+  const subTot = subs.reduce((s, r) => s + (r.kind === 'yearly' ? +r.avg_amount / 12 : +r.avg_amount), 0);
+  const subRows = subs.map(r => `
+    <div style="display:flex;gap:8px;align-items:baseline;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.04)">
+      <span style="flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.payee)}</span>
+      <span class="mono dim" style="font-size:11px;flex:0 0 auto">${fmt$(r.avg_amount)}/${r.kind === 'yearly' ? 'yr' : 'mo'} · next ${(r.next_expected || '').slice(5).replace('-', '/')}</span>
+      <button class="btn" style="flex:0 0 auto;font-size:11px;padding:3px 8px" data-p="${esc(r.payee)}" onclick="ignoreRecurring(this.dataset.p)" title="not a subscription">✕</button>
+    </div>`).join('');
+  return `${moneyHealthHTML()}
+  ${m.uncategorized > 0 ? `<div class="card"><div class="dim" style="font-size:11px">🏷 ${m.uncategorized} transactions don't have a category yet — a free background AI labels ~150/hr. No money involved; this hits zero on its own.</div></div>` : ''}
+  <div class="card">
+    ${chips('per', MX_PERIODS)}
+    ${nav}
+    ${chips('flow', MX_FLOWS)}
+    ${tiles}
+    ${base.length ? trendSvg : '<div class="dim" style="font-size:12px;margin-top:8px">No ' + esc(flowName) + ' in this period.</div>'}
+  </div>
+  <div class="card"><h2 style="display:flex;align-items:center;gap:8px"><span>Breakdown</span>${ptot ? deltaChip(tot, ptot, x.flow !== 'in') : ''}<span class="dim" style="margin-left:auto;text-transform:none;letter-spacing:0">${x.cat ? `filter: <b style="color:var(--text)">${esc(x.cat)}</b> ✕` : 'tap a row to filter'}</span></h2>
+    ${chips('by', MX_GROUPS)}
+    ${gRows || '<div class="dim" style="font-size:12px">nothing here</div>'}
+  </div>
+  <div class="card"><h2>${esc(flowName)} by month — 6 months</h2>${matrix}
+    <div class="dim mono" style="font-size:10px;margin-top:6px">top 8 categories; darker = more. Scroll sideways on phone.</div></div>
+  <div class="card"><h2 style="display:flex;align-items:center;gap:8px"><span>Transactions</span><span class="dim" style="margin-left:auto;text-transform:none;letter-spacing:0">${esc(R.label)}${x.cat ? ' · ' + esc(x.cat) : ''}</span></h2>
+    <input id="mx-q" placeholder="search payee / note / category" value="${esc(x.q || '')}" style="margin-bottom:8px;font-size:16px;padding:7px 11px" oninput="mxSearch(this.value)">
+    ${mxListHTML()}
+  </div>
+  <div class="card"><h2>Subscriptions${subs.length ? ` — ${fmt$(subTot)}/mo` : ''}</h2>
+    ${subRows || '<div class="dim" style="font-size:12px">None detected yet — monthly patterns need 3+ charges of history. These surface as cycles accrue.</div>'}
+  </div>
+  <div style="height:10px"></div>`;
+}
+/* ====================== STOCKS — portfolio mirror + analyst ====================== */
 function moneyStocksHTML(){
-  const st = S.stocks || {};
+  const st = S.stocks || {}, mc = S.moneyCharts || {}, x = mx();
   const rows = st.tickers || [];
   const hold = rows.filter(r => r.role === 'holding');
   const watch = rows.filter(r => r.role === 'watch');
+  const ret = {}; (mc.returns || []).forEach(r => ret[r.ticker] = r);
+  const totalVal = hold.reduce((s, r) => s + (+r.value || 0), 0);
+  const cost = +mc.cost_basis_total || hold.reduce((s, r) => s + (+r.shares || 0) * (+r.cost_basis || 0), 0);
+  const pl = totalVal - cost, plPct = cost ? pl / cost * 100 : null;
+  const dayChg = hold.reduce((s, r) => r.pct_1d == null || r.value == null ? s : s + r.value - r.value / (1 + r.pct_1d / 100), 0);
+  const dayPct = totalVal ? dayChg / (totalVal - dayChg) * 100 : null;
+  // --- portfolio history vs SPY (SPY rebased to the portfolio start) ---
+  const ph = mSliceByRange(mc.portfolio || [], 'd', x.pf);
+  const p0 = ph[0], pN = ph[ph.length - 1];
+  const youPct = p0 && p0.value ? (pN.value - p0.value) / p0.value * 100 : null;
+  const spyPct = p0 && p0.spy ? (pN.spy - p0.spy) / p0.spy * 100 : null;
+  const showCost = ph.length > 1 && cost > 0 && cost >= Math.min(...ph.map(p => p.value)) * 0.85 && cost <= Math.max(...ph.map(p => p.value)) * 1.15;
+  const pfChart = ph.length > 1 ? `<div class="chart">${mLines([
+      {vals: ph.map(p => p.spy && p0.spy ? p.spy / p0.spy * p0.value : null), color: '#8A90A0', dash: '4 4', sw: 1.4, glow: false, end: false},
+      {vals: ph.map(p => p.value), color: '#38BDF8'},
+    ], {w: 560, h: 150, base: showCost ? cost : null})}
+      <div class="xl"><span>${mDateLbl(p0.d)}</span><span>${mDateLbl(pN.d)}</span></div></div>
+    <div class="elegend" style="margin-top:4px"><span><i style="background:#38BDF8"></i>you ${youPct != null ? pctHTML(youPct) : ''}</span><span><i style="background:#8A90A0"></i>SPY ${spyPct != null ? pctHTML(spyPct) : ''}</span>${youPct != null && spyPct != null ? `<span class="dim">${youPct >= spyPct ? 'beating' : 'trailing'} SPY by ${Math.abs(youPct - spyPct).toFixed(1)} pts</span>` : ''}</div>`
+    : '<div class="dim" style="font-size:11px">Portfolio history appears once quotes exist for your holdings.</div>';
+  // --- allocation donut by ticker ---
+  const alloc = hold.filter(r => +r.value > 0).sort((a, b) => b.value - a.value);
+  const TK_COLORS = ['#38BDF8', '#818CF8', '#4ADE80', '#FBBF24', '#FF7A5C', '#C4B5FD', '#2DD4BF', '#F472B6', '#A3E635', '#FB923C', '#F9A8D4', '#60A5FA', '#F59E0B'];
+  const tkColor = {}; alloc.forEach((r, i) => tkColor[r.ticker] = TK_COLORS[i % TK_COLORS.length]);
+  const donut = mDonut(alloc.map(r => ({v: r.value, color: tkColor[r.ticker], label: r.ticker})), {size: 118, label: alloc.length, sub: 'positions'});
+  const top = alloc[0];
+  const legend = alloc.slice(0, 8).map(r => `<div style="display:flex;align-items:center;gap:8px;font-size:12px;padding:1.5px 0"><i style="width:8px;height:8px;border-radius:50%;background:${tkColor[r.ticker]};flex:0 0 auto"></i><b class="mono" style="flex:0 0 46px">${esc(r.ticker)}</b><div style="flex:1;height:5px;border-radius:99px;background:rgba(255,255,255,.05)"><div style="width:${(r.value / totalVal * 100).toFixed(1)}%;height:100%;border-radius:99px;background:${tkColor[r.ticker]}"></div></div><span class="mono dim" style="font-size:10px;flex:0 0 34px;text-align:right">${(r.value / totalVal * 100).toFixed(0)}%</span></div>`).join('')
+    + (alloc.length > 8 ? `<div class="dim mono" style="font-size:10px;margin-top:2px">+${alloc.length - 8} more</div>` : '');
+  // --- holdings table, sortable ---
+  const sortKey = x.sort || 'value';
+  const sorted = hold.slice().sort((a, b) => sortKey === 'name' ? a.ticker.localeCompare(b.ticker) : sortKey === 'pl' ? (+b.pl_pct || -1e9) - (+a.pl_pct || -1e9) : sortKey === 'day' ? (+b.pct_1d || -1e9) - (+a.pct_1d || -1e9) : sortKey === 'm1' ? ((ret[b.ticker] || {}).m1 ?? -1e9) - ((ret[a.ticker] || {}).m1 ?? -1e9) : (+b.value || 0) - (+a.value || 0));
+  const sortChips = `<div class="chips" style="margin:0 0 6px">${[['value', 'value'], ['pl', 'P/L'], ['day', 'today'], ['m1', '1 mo'], ['name', 'A–Z']].map(([v, l]) => `<button class="schip ${sortKey === v ? 'on' : ''}" style="padding:4px 10px;font-size:10px" onclick="mxSet('sort','${v}')">${l}</button>`).join('')}</div>`;
+  const hrow = r => {
+    const plUsd = r.value != null && r.cost_basis != null && r.shares ? r.value - r.shares * r.cost_basis : null;
+    const w = totalVal ? r.value / totalVal * 100 : 0;
+    const rr = ret[r.ticker] || {};
+    const open = x.open === r.ticker;
+    return `<div style="border-bottom:1px solid rgba(255,255,255,.04)">
+      <div style="display:flex;gap:8px;align-items:center;padding:6px 0;cursor:pointer" onclick="mxSet('open',${open ? 'null' : `'${esc(r.ticker)}'`})">
+        <div style="flex:0 0 62px"><b class="mono">${esc(r.ticker)}</b><div style="height:3px;border-radius:99px;background:rgba(255,255,255,.06);margin-top:3px"><div style="width:${Math.min(100, w * 2.5).toFixed(0)}%;height:100%;border-radius:99px;background:${tkColor[r.ticker] || '#8A90A0'}"></div></div></div>
+        <div style="flex:1;min-width:0"><div class="mono" style="font-size:13px">${r.value != null ? money$(r.value) : '—'}</div><div class="mono dim" style="font-size:10px">${r.shares ? (+r.shares).toLocaleString('en-US', {maximumFractionDigits: 2}) + ' × $' + r.close : ''}${w ? ' · ' + w.toFixed(0) + '%' : ''}</div></div>
+        <div style="flex:0 0 74px;text-align:right"><div class="mono" style="font-size:12px">${plUsd != null ? `<span style="color:${plUsd >= 0 ? 'var(--done)' : 'var(--accent-hi)'}">${plUsd >= 0 ? '+' : ''}${fmt$(plUsd)}</span>` : '—'}</div><div class="mono" style="font-size:10px">${pctHTML(r.pl_pct)}</div></div>
+        <div style="flex:0 0 52px;text-align:right" class="mono"><div style="font-size:12px">${pctHTML(r.pct_1d)}</div><div class="dim" style="font-size:9px;letter-spacing:.05em">TODAY</div></div>
+      </div>
+      ${open ? `<div style="padding:2px 0 10px;font-size:11.5px">
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px 10px" class="mono">
+          <div><span class="dim">avg cost</span> ${r.cost_basis != null ? '$' + (+r.cost_basis).toFixed(2) : '—'}</div><div><span class="dim">close</span> $${r.close ?? '—'}</div><div><span class="dim">as of</span> ${(r.as_of || '').slice(5).replace('-', '/')}</div>
+          <div><span class="dim">RSI14</span> ${r.rsi14 ?? '—'}</div><div><span class="dim">vs MA50</span> ${pctHTML(r.vs_ma50)}</div><div><span class="dim">vs MA200</span> ${pctHTML(r.vs_ma200)}</div>
+          <div><span class="dim">off 52w hi</span> ${pctHTML(r.pct_off_52wk_high)}</div><div><span class="dim">earnings</span> ${r.next_earnings ? r.next_earnings.slice(5).replace('-', '/') : '—'}</div><div><span class="dim">cost</span> ${r.shares && r.cost_basis ? fmt$(r.shares * r.cost_basis) : '—'}</div>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap" class="mono">${[['w1', '1w'], ['m1', '1m'], ['m3', '3m'], ['m6', '6m'], ['ytd', 'YTD'], ['y1', '1y']].map(([k, l]) => `<span style="font-size:10.5px;padding:3px 7px;border-radius:999px;background:rgba(255,255,255,.04)"><span class="dim">${l}</span> ${pctHTML(rr[k], 0)}${ret.SPY && ret.SPY[k] != null && rr[k] != null ? `<span class="dim" style="font-size:9px"> vs SPY ${ret.SPY[k] >= 0 ? '+' : ''}${Math.round(ret.SPY[k])}</span>` : ''}</span>`).join('')}</div>
+        ${r.thesis ? `<div class="dim" style="margin-top:8px;line-height:1.45">${esc(r.thesis)}</div>` : ''}
+        <div style="display:flex;gap:8px;margin-top:8px"><button class="btn" style="font-size:10px;padding:3px 9px" onclick="editHolding('${esc(r.ticker)}')">✎ shares / cost</button><button class="btn" style="font-size:10px;padding:3px 9px;margin-left:auto" onclick="delTicker('${esc(r.ticker)}','holding')">✕ remove</button></div>
+      </div>` : ''}
+    </div>`;
+  };
+  // --- returns matrix ---
+  const RW = [['w1', '1w'], ['m1', '1m'], ['m3', '3m'], ['m6', '6m'], ['ytd', 'YTD'], ['y1', '1y']];
+  const heat = v => v == null ? '' : `background:${v >= 0 ? 'rgba(74,222,128,' : 'rgba(255,77,66,'}${Math.min(0.55, 0.06 + Math.abs(v) / 60).toFixed(2)})`;
+  const matrixRows = [].concat(ret.SPY ? [Object.assign({}, ret.SPY, {_bench: true})] : [], sorted.map(r => ret[r.ticker]).filter(Boolean).filter(r => r.ticker !== 'SPY'), watch.map(r => ret[r.ticker]).filter(Boolean).map(r => Object.assign({}, r, {_watch: true})));
+  const matrix = matrixRows.length ? `<div style="overflow-x:auto;-webkit-overflow-scrolling:touch"><table style="font-size:11px;white-space:nowrap;min-width:100%">
+      <tr><th></th>${RW.map(([, l]) => `<th style="text-align:right">${l}</th>`).join('')}</tr>
+      ${matrixRows.map(r => `<tr style="${r._bench ? 'border-bottom:2px solid rgba(255,255,255,.1)' : ''}"><td class="mono" style="${r._watch ? 'color:var(--dim)' : ''}">${esc(r.ticker)}${r._bench ? ' <span class="dim" style="font-size:9px">bench</span>' : r._watch ? ' <span class="dim" style="font-size:9px">watch</span>' : ''}</td>${RW.map(([k]) => `<td class="mono" style="text-align:right;font-weight:400;color:var(--text);${heat(r[k])}">${r[k] == null ? '<span class="dim">·</span>' : (r[k] > 0 ? '+' : '') + Math.round(r[k]) + '%'}</td>`).join('')}</tr>`).join('')}
+    </table></div>` : '';
+  // --- movers ---
+  const withM1 = hold.filter(r => ret[r.ticker] && ret[r.ticker].m1 != null).sort((a, b) => ret[b.ticker].m1 - ret[a.ticker].m1);
+  const byPl = hold.filter(r => r.pl_pct != null).sort((a, b) => b.pl_pct - a.pl_pct);
+  const movers = (withM1.length || byPl.length) ? VIZ.tiles([
+    withM1[0] ? VIZ.tile(esc(withM1[0].ticker), 'best · 1 mo', {color: '#4ADE80', colored: true, sub: pctHTML(ret[withM1[0].ticker].m1)}) : '',
+    withM1.length > 1 ? VIZ.tile(esc(withM1[withM1.length - 1].ticker), 'worst · 1 mo', {color: '#FF4D42', colored: true, sub: pctHTML(ret[withM1[withM1.length - 1].ticker].m1)}) : '',
+    byPl[0] ? VIZ.tile(esc(byPl[0].ticker), 'biggest gain', {color: '#4ADE80', sub: pctHTML(byPl[0].pl_pct) + (byPl[0].value && byPl[0].shares ? ` · +${fmt$(byPl[0].value - byPl[0].shares * byPl[0].cost_basis)}` : '')}) : '',
+    byPl.length > 1 ? VIZ.tile(esc(byPl[byPl.length - 1].ticker), 'biggest loss', {color: '#FF4D42', sub: pctHTML(byPl[byPl.length - 1].pl_pct) + (byPl[byPl.length - 1].value && byPl[byPl.length - 1].shares ? ` · ${fmt$(byPl[byPl.length - 1].value - byPl[byPl.length - 1].shares * byPl[byPl.length - 1].cost_basis)}` : '')}) : '',
+    top ? VIZ.tile(esc(top.ticker), 'largest position', {color: '#38BDF8', sub: `${(top.value / totalVal * 100).toFixed(0)}% of portfolio`}) : '',
+    VIZ.tile(hold.filter(r => r.pl_pct != null && r.pl_pct >= 0).length + '/' + hold.length, 'in the green', {color: '#FBBF24', sub: 'positions above cost'}),
+  ].filter(Boolean)) : '';
+  // --- existing cards: pending buys, watchlist, analyst ---
   const pc = v => v == null ? '<span class="dim">—</span>' : `<span style="color:${v >= 0 ? 'var(--done)' : 'var(--accent-hi)'}">${v >= 0 ? '+' : ''}${v}%</span>`;
-  const row = r => `<div style="display:flex;gap:8px;align-items:baseline;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:12px">
+  const wrow = r => `<div style="display:flex;gap:8px;align-items:baseline;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:12px">
       <b class="mono" style="flex:0 0 52px">${esc(r.ticker)}</b>
       <span class="mono" style="flex:0 0 62px">${r.close != null ? '$' + r.close : '—'}</span>
       <span class="mono" style="flex:0 0 52px">${pc(r.pct_1d)}</span>
-      <span class="mono dim" style="flex:1;min-width:0;font-size:10px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${r.rsi14 != null ? 'RSI ' + r.rsi14 : ''}${r.pct_off_52wk_high != null ? ' · ' + r.pct_off_52wk_high + '% off hi' : ''}${r.next_earnings ? ' · 📅 ' + r.next_earnings.slice(5).replace('-','/') : ''}</span>
-      ${r.role === 'holding' && r.value != null ? `<span class="mono" style="flex:0 0 auto">${fmt$(r.value)}${r.pl_pct != null ? ` <span style="font-size:10px;color:${r.pl_pct >= 0 ? 'var(--done)' : 'var(--accent-hi)'}">${r.pl_pct >= 0 ? '+' : ''}${r.pl_pct}%</span>` : ''}</span>` : ''}
-      <button class="btn" style="flex:0 0 auto;font-size:10px;padding:2px 7px" onclick="delTicker('${esc(r.ticker)}','${r.role}')">✕</button>
+      <span class="mono dim" style="flex:1;min-width:0;font-size:10px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${r.rsi14 != null ? 'RSI ' + r.rsi14 : ''}${r.pct_off_52wk_high != null ? ' · ' + r.pct_off_52wk_high + '% off hi' : ''}${ret[r.ticker] && ret[r.ticker].m1 != null ? ' · 1m ' + (ret[r.ticker].m1 > 0 ? '+' : '') + ret[r.ticker].m1 + '%' : ''}</span>
+      <button class="btn" style="flex:0 0 auto;font-size:10px;padding:2px 7px" onclick="delTicker('${esc(r.ticker)}','watch')">✕</button>
     </div>`;
-  const totalVal = hold.reduce((s, r) => s + (+r.value || 0), 0);
   const rep = st.latest_report;
   const pending = st.unregistered_trades || [];
   const pendCard = !pending.length ? '' : `
@@ -5515,17 +5930,29 @@ function moneyStocksHTML(){
       <span class="mono" style="flex:0 0 auto">${fmt$(Math.abs(p.amount))}</span>
       <button class="btn" style="flex:0 0 auto;font-size:10px;padding:2px 7px" onclick="ackTrade('${esc(p.key)}')" title="dismiss — already registered or not a buy">✕</button></div>`).join('')}
     <div class="dim" style="font-size:11px;margin-top:6px">From your brokerage feed. Register below (ticker · shares · avg $) — quotes fill in automatically — then ✕ to dismiss.</div></div>`;
-  return `${pendCard}
-  <div class="card"><h2>Holdings${totalVal ? ` — ${fmt$(totalVal)}` : ''}</h2>
-    ${hold.length ? hold.map(row).join('') : '<div class="dim" style="font-size:12px">Add what you own — ticker, shares, avg cost. Everything else fills itself in nightly.</div>'}
-    <div style="display:flex;gap:6px;margin-top:8px">
+  const asOf = hold.map(r => r.as_of).filter(Boolean).sort().slice(-1)[0];
+  return `${moneyHealthHTML()}${pendCard}
+  <div class="card"><h2 style="display:flex;align-items:center;gap:8px"><span>Portfolio</span>${mRangeChips('pf', [['1m', '1M'], ['3m', '3M'], ['6m', '6M'], ['1y', '1Y']])}</h2>
+    <div class="chart-head"><span class="hero" style="font-size:34px">${money$(totalVal)}</span>
+      ${dayPct != null ? `<span class="delta ${dayChg >= 0 ? 'up' : 'dn'}" title="today">${dayChg >= 0 ? '▲' : '▼'} ${fmt$(Math.abs(dayChg))} · ${Math.abs(dayPct).toFixed(2)}%</span>` : ''}
+      <span class="dim">today</span></div>
+    <div class="mono" style="font-size:12px;margin:2px 0 6px"><span class="dim">all-time</span> <span style="color:${pl >= 0 ? 'var(--done)' : 'var(--accent-hi)'}">${pl >= 0 ? '+' : ''}${money$(pl)}</span> ${plPct != null ? pctHTML(plPct) : ''} <span class="dim">· cost ${money$(cost)}</span></div>
+    ${pfChart}
+    <div class="dim mono" style="font-size:10px;margin-top:6px">history uses today's share counts × daily closes (not a true time-weighted return) · dashed = SPY rebased to your start${showCost ? ' · dotted = your cost' : ''}</div>
+  </div>
+  ${alloc.length ? `<div class="card"><h2>Allocation</h2><div style="display:flex;gap:16px;align-items:center">${donut}<div style="flex:1;min-width:0">${legend}</div></div></div>` : ''}
+  <div class="card"><h2 style="display:flex;align-items:center;gap:8px"><span>Holdings</span><span class="dim" style="margin-left:auto;text-transform:none;letter-spacing:0">tap a row for detail${asOf ? ' · quotes ' + asOf.slice(5).replace('-', '/') : ''}</span></h2>
+    ${hold.length ? sortChips + sorted.map(hrow).join('') : '<div class="dim" style="font-size:12px">Add what you own — ticker, shares, avg cost. Everything else fills itself in nightly.</div>'}
+    <div style="display:flex;gap:6px;margin-top:10px">
       <input id="h-tk" placeholder="TICKER" style="flex:1;min-width:60px;text-transform:uppercase">
       <input id="h-sh" type="number" placeholder="shares" style="flex:1;min-width:64px">
       <input id="h-cb" type="number" placeholder="avg $" style="flex:1;min-width:64px">
       <button class="btn primary" style="flex:0 0 auto" onclick="addHolding()">add</button>
     </div></div>
+  ${movers ? `<div class="card"><h2>Movers</h2>${movers}</div>` : ''}
+  ${matrix ? `<div class="card"><h2>Returns vs SPY</h2>${matrix}<div class="dim mono" style="font-size:10px;margin-top:6px">price change over each window, dividends excluded · green beats zero, not SPY — compare against the bench row</div></div>` : ''}
   <div class="card"><h2>Watchlist</h2>
-    ${watch.length ? watch.map(row).join('') : '<div class="dim" style="font-size:12px">Tickers on your radar — lighter coverage.</div>'}
+    ${watch.length ? watch.map(wrow).join('') : '<div class="dim" style="font-size:12px">Tickers on your radar — lighter coverage.</div>'}
     <div style="display:flex;gap:6px;margin-top:8px">
       <input id="w-tk" placeholder="TICKER" style="flex:1;text-transform:uppercase">
       <button class="btn primary" style="flex:0 0 auto" onclick="addWatch()">watch</button>
@@ -5536,6 +5963,15 @@ function moneyStocksHTML(){
     : '<div class="card"><h2>Analyst</h2><div class="dim" style="font-size:12px">Daily notes + Monday deep-dives appear here once the radio routine is live.</div></div>'}
   <div class="dim mono" style="font-size:10px;padding:0 2px">quotes: end-of-day, synced weekday evenings · read-only — no trade path exists</div>
   <div style="height:10px"></div>`;
+}
+async function editHolding(tk){
+  const r = (S.stocks && S.stocks.tickers || []).find(h => h.ticker === tk); if (!r) return;
+  const sh = prompt(tk + ' shares', r.shares); if (sh == null || isNaN(parseFloat(sh))) return;
+  const cb = prompt(tk + ' avg cost per share', r.cost_basis); if (cb == null || isNaN(parseFloat(cb))) return;
+  S.lastWrite = Date.now();
+  const {error} = await db.from('holdings').update({shares: parseFloat(sh), cost_basis: parseFloat(cb), est_shares: false}).eq('ticker', tk);
+  if (error) { toast('⚠ ' + error.message); return; }
+  toast('✓ ' + tk + ' updated'); loadAll();
 }
 async function ackTrade(key){
   S.lastWrite = Date.now();
@@ -5571,78 +6007,6 @@ async function delTicker(tk, role){
   S.lastWrite = Date.now();
   await db.from(role === 'holding' ? 'holdings' : 'watch_tickers').delete().eq('ticker', tk);
   loadAll();
-}
-/* --- OVERVIEW + SPENDING sections --- */
-function moneyOverviewHTML(){
-  const m = S.money;
-  if (!m) return `<div class="empty">Money data loads after the first sync — check back in a couple hours.</div>`;
-  const nw = m.net_worth || {};
-  const wk = m.week || {}, mo = m.month || {};
-  const groups = {};
-  S.finAccounts.filter(a => !a.rollup).forEach(a => { (groups[a.institution || 'Other'] = groups[a.institution || 'Other'] || []).push(a); });
-  const acctRows = Object.entries(groups).map(([inst, accts]) => `
-    <div class="pname" style="margin:8px 2px 2px">${esc(inst)}</div>
-    ${accts.map(a => `<div style="display:flex;gap:8px;align-items:baseline;padding:2px 0;font-size:13px">
-      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.name)}${a.manual ? ` <button class="btn" style="font-size:10px;padding:1px 7px" onclick="editManualBalance('${a.id}')">✎</button>` : ''}</span>
-      <span class="mono" style="color:${+a.balance < 0 ? 'var(--accent-hi)' : 'var(--text)'}">${a.currency === 'TWD' ? 'NT$' + Math.round(a.balance).toLocaleString() : fmt$(a.balance)}</span>
-    </div>`).join('')}`).join('');
-  return `
-  <div class="card"><h2>Net worth</h2>
-    <div style="font-size:30px;font-weight:800;letter-spacing:.5px">${fmt$(nw.total_usd)}</div>
-    <div class="dim mono" style="font-size:11px;margin-top:2px">linked ${fmt$(nw.linked_usd)} · 台灣銀行 NT$${Math.round(nw.twd || 0).toLocaleString()}${nw.twd_usd ? ' ≈ ' + fmt$(nw.twd_usd) : ''}</div>
-  </div>
-  <div class="card"><h2>Cashflow</h2>
-    <table>
-      <tr><td>last 7 days</td><td class="mono">in ${fmt$(wk.in)} · out ${fmt$(wk.out)} · net <b style="color:${(wk.in - wk.out) >= 0 ? 'var(--done)' : 'var(--accent-hi)'}">${fmt$(wk.in - wk.out)}</b></td></tr>
-      <tr><td>this month</td><td class="mono">in ${fmt$(mo.in)} · out ${fmt$(mo.out)}${+mo.invested ? ` · <span style="color:var(--deep)">invested ${fmt$(mo.invested)}</span>` : ''}</td></tr>
-    </table></div>
-  <div class="card"><h2>Accounts</h2>${acctRows}
-    <div class="dim mono" style="font-size:10px;margin-top:8px">read-only mirror · synced every 2h via SimpleFIN · nothing here can move money</div></div>
-  <div style="height:10px"></div>`;
-}
-function moneySpendingHTML(){
-  const m = S.money;
-  if (!m) return `<div class="empty">Money data loads after the first sync.</div>`;
-  const cats = (m.week_categories || []).filter(c => c.amt > 0);
-  const maxCat = Math.max(...cats.map(c => +c.amt), 1);
-  const catBars = cats.map(c => `
-    <div style="display:flex;gap:8px;align-items:center;padding:3px 0;font-size:12px">
-      <span style="flex:0 0 92px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" class="${c.cat === 'uncategorized' ? 'dim' : ''}">${esc(c.cat)}</span>
-      <div style="flex:1;height:8px;border-radius:99px;background:rgba(255,255,255,.05);overflow:hidden">
-        <div style="width:${Math.round(c.amt / maxCat * 100)}%;height:100%;background:var(--grad);opacity:.8"></div></div>
-      <span class="mono" style="flex:0 0 auto;font-size:11px">${fmt$(c.amt)}</span>
-    </div>`).join('');
-  const subs = S.finRecurring.filter(r => ['monthly','yearly'].includes(r.kind));
-  const subRows = subs.map(r => `
-    <div style="display:flex;gap:8px;align-items:baseline;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.04)">
-      <span style="flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.payee)}</span>
-      <span class="mono dim" style="font-size:11px;flex:0 0 auto">${fmt$(r.avg_amount)}/${r.kind === 'yearly' ? 'yr' : 'mo'} · next ${(r.next_expected || '').slice(5).replace('-','/')}</span>
-      <button class="btn" style="flex:0 0 auto;font-size:11px;padding:3px 8px" data-p="${esc(r.payee)}" onclick="ignoreRecurring(this.dataset.p)" title="not a subscription">✕</button>
-    </div>`).join('');
-  const catList = (() => { try { return JSON.parse(S.settings.fin_categories || '[]'); } catch(e){ return []; } })();
-  const txRows = S.finTx.filter(t => t.category !== 'transfers').slice(0, 30).map(t => {
-    const key = t.account_id + '|' + t.tx_id;
-    const chip = S.txEdit === key
-      ? `<select onchange="recatTx('${t.account_id}','${esc(t.tx_id)}',this.value)" onblur="S.txEdit=null;render()">
-          <option value="">—</option>${catList.map(c => `<option ${c === t.category ? 'selected' : ''}>${c}</option>`).join('')}</select>`
-      : `<button class="btn" style="font-size:10px;padding:2px 8px;color:${t.category ? 'var(--dim)' : 'var(--focus)'}"
-          onclick="S.txEdit='${key}';render()">${esc(t.category || 'tag it')}</button>`;
-    return `<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.03)">
-      <span class="mono dim" style="flex:0 0 34px;font-size:10px">${(t.posted || '').slice(5).replace('-','/')}</span>
-      <span style="flex:1;min-width:0;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.payee || t.description || '?')}</span>
-      ${chip}
-      <span class="mono" style="flex:0 0 auto;font-size:12px;color:${+t.amount > 0 ? 'var(--done)' : 'var(--text)'}">${fmt$(t.amount)}</span>
-    </div>`;
-  }).join('');
-  return `
-  ${m.uncategorized > 0 ? `<div class="card"><div class="dim" style="font-size:11px">🏷 ${m.uncategorized} transactions don't have a category yet — a free background AI labels ~150/hr. No money involved; this hits zero on its own.</div></div>` : ''}
-  ${cats.length ? `<div class="card"><h2>Where it went — 7 days</h2>${catBars}</div>` : ''}
-  <div class="card"><h2>Subscriptions</h2>
-    ${subRows || '<div class="dim" style="font-size:12px">None detected yet — monthly patterns need 3+ charges of history. These surface as cycles accrue.</div>'}
-  </div>
-  <div class="card"><h2>Recent</h2>${txRows || '<div class="dim">no transactions yet</div>'}
-    <div class="dim mono" style="font-size:10px;margin-top:6px">tap a tag to fix it — your fix becomes a permanent rule</div></div>
-  <div style="height:10px"></div>`;
 }
 async function recatTx(accountId, txId, cat){
   S.txEdit = null;
