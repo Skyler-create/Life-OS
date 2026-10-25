@@ -1057,13 +1057,22 @@ document.getElementById('a-email').value = OWNER;
    load and painted immediately on the next open, with a "cached · refreshing" pill until fresh data lands.
    MONEY data is deliberately NOT cached (PIN-gated server side; it never touches localStorage). */
 const SNAP_KEYS = ['tasks','goals','goalLogsToday','brief','logs','todayLog','prevLog','credits','planBlocks','settings','wakeTargets',
-  'events','freezes','ttEvents','dayLoad','scoreNow','weekHealth','focusOpen','caff','tonight','sleepNights','body','news','people',
-  'questDeck','questSaved','questCands','exFeed','exStats','jobs','kits','waitingOn','personNotes','cycle','cycleMarks','retention','cardInbox','cards','adherence','sleepStats','dayTags','tagEffects','healthDays','focusLog','experiments'];
+  'events','freezes','ttEvents','dayLoad','scoreNow','weekHealth','focusOpen','caff','tonight','sleepNights','body','people',
+  'waitingOn','personNotes','cycle','cycleMarks','dayTags','sleepStats','adherence'];   // TODAY essentials only — jobs/quests/explore/news reload live
+const SNAP_MIN  = ['tasks','goals','goalLogsToday','brief','logs','todayLog','prevLog','credits','planBlocks','settings','scoreNow','focusOpen'];
 function saveSnapshot(){
+  // iOS Safari gives ~5 MB of localStorage per origin and chatHistory etc. live there too: cap the snapshot at
+  // 2 MB, falling back to the minimal set (tasks without notes) rather than failing or crowding the quota out.
+  const build = (keys, slimTasks) => { const d = {}; keys.forEach(k => { if (S[k] !== undefined) d[k] = S[k]; });
+    if (slimTasks && Array.isArray(d.tasks)) d.tasks = d.tasks.map(t => { const {notes, ...rest} = t; return rest; });
+    return JSON.stringify({at: Date.now(), day: todayISO(), slim: !!slimTasks, d}); };
   try {
-    const d = {}; SNAP_KEYS.forEach(k => { if (S[k] !== undefined) d[k] = S[k]; });
-    localStorage.setItem('lifeos_snap', JSON.stringify({at: Date.now(), day: todayISO(), d}));
-  } catch (e) { /* quota or private mode: the cache is a convenience, never required */ }
+    let js = build(SNAP_KEYS, false);
+    if (js.length > 2e6) js = build(SNAP_MIN, false);
+    if (js.length > 2e6) js = build(SNAP_MIN, true);
+    if (js.length > 2.5e6) { localStorage.removeItem('lifeos_snap'); return; }
+    localStorage.setItem('lifeos_snap', js);
+  } catch (e) { try { localStorage.removeItem('lifeos_snap'); } catch (e2) {} }
 }
 function hydrateSnapshot(){
   try {
