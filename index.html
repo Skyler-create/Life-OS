@@ -5628,29 +5628,84 @@ function mDonut(parts, o = {}){
     <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center"><div style="font-family:Inter,sans-serif;font-weight:800;font-size:${o.vsize || 15}px;letter-spacing:-.03em;line-height:1">${o.label || ''}</div>${o.sub ? `<div class="dim mono" style="font-size:9px;margin-top:2px;letter-spacing:.06em">${o.sub}</div>` : ''}</div></div>`;
 }
 /* multi-series line: series = [{vals:[...], color, dash, name}] on a shared x; nulls skipped */
-function mLines(series, o = {}){
-  const W = o.w || 560, H = o.h || 150, P = o.pad ?? 10;
+/* ---- interactive line chart (2026-10-25) ----
+   Dotted y gridlines with labels, dotted x guides with dates, and a crosshair: move/touch across the chart to
+   read the exact day + values (+ the biggest mover that day for net worth). Data lives in MCH[id]; the SVG is
+   rebuilt on every render, the registry entry with it. touch-action:none so a finger drag scrubs, not scrolls. */
+const MCH = {};
+function mLineChart(id, dates, series, o = {}){
+  const W = 560, H = o.h || 170, PL = 8, PR = 54, PT = 10, PB = 24;
   const all = series.flatMap(s => s.vals).filter(v => v != null && !isNaN(v));
-  if (all.length < 2) return '';
-  const min = o.min ?? Math.min(...all), max = o.max ?? Math.max(...all), span = (max - min) || 1;
-  const n = Math.max(...series.map(s => s.vals.length));
-  const X = i => P + i * (W - 2 * P) / Math.max(n - 1, 1), Y = y => H - P - ((y - min) / span) * (H - 2 * P);
-  const base = o.base == null ? '' : `<line x1="${P}" y1="${Y(o.base).toFixed(1)}" x2="${W - P}" y2="${Y(o.base).toFixed(1)}" stroke="rgba(255,255,255,.18)" stroke-dasharray="3 5"/>`;
-  const paths = series.map(s => {
-    const pts = s.vals.map((v, i) => v == null || isNaN(v) ? null : {x: X(i), y: Y(v)}).filter(Boolean);
+  if (all.length < 2 || dates.length < 2) return '';
+  let min = Math.min(...all), max = Math.max(...all); if (o.base != null) { min = Math.min(min, o.base); max = Math.max(max, o.base); }
+  const pad = (max - min) * 0.08 || Math.abs(max) * 0.02 || 1; min -= pad; max += pad;
+  const n = dates.length, span = max - min;
+  const X = i => PL + i * (W - PL - PR) / Math.max(n - 1, 1), Y = v => PT + (1 - (v - min) / span) * (H - PT - PB);
+  // y ticks: 4 "nice" steps
+  const rawStep = span / 4, mag = Math.pow(10, Math.floor(Math.log10(rawStep))), step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(v => v >= rawStep) || mag;
+  const yT = []; for (let v = Math.ceil(min / step) * step; v <= max; v += step) yT.push(v);
+  const fmtY = o.fmtY || (v => fmt$(v));
+  const grid = yT.map(v => `<line x1="${PL}" y1="${Y(v).toFixed(1)}" x2="${W - PR + 4}" y2="${Y(v).toFixed(1)}" stroke="rgba(255,255,255,.10)" stroke-dasharray="2 5"/><text x="${W - PR + 8}" y="${(Y(v) + 4).toFixed(1)}" font-size="11" font-family="Consolas,monospace" fill="rgba(255,255,255,.45)">${fmtY(v)}</text>`).join('');
+  const xi = n <= 5 ? dates.map((_, i) => i) : [0, 1, 2, 3, 4].map(k => Math.round(k * (n - 1) / 4));
+  const xg = xi.map(i => `<line x1="${X(i).toFixed(1)}" y1="${PT}" x2="${X(i).toFixed(1)}" y2="${H - PB + 4}" stroke="rgba(255,255,255,.08)" stroke-dasharray="2 5"/><text x="${X(i).toFixed(1)}" y="${H - 6}" text-anchor="${i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle'}" font-size="11" font-family="Consolas,monospace" fill="rgba(255,255,255,.45)">${mDateLbl(dates[i])}</text>`).join('');
+  const base = o.base == null ? '' : `<line x1="${PL}" y1="${Y(o.base).toFixed(1)}" x2="${W - PR + 4}" y2="${Y(o.base).toFixed(1)}" stroke="rgba(255,255,255,.3)" stroke-dasharray="1 4"/>`;
+  const paths = series.map(sr => {
+    const pts = sr.vals.map((v, i) => v == null || isNaN(v) ? null : {x: X(i), y: Y(v)}).filter(Boolean);
     if (pts.length < 2) return '';
     const last = pts[pts.length - 1];
-    return `<path d="${VIZ.smooth(pts)}" fill="none" stroke="${s.color}" stroke-width="${s.sw || 2.2}" stroke-linejoin="round" stroke-linecap="round" ${s.dash ? `stroke-dasharray="${s.dash}"` : ''} opacity="${s.op || 1}" style="${s.glow === false ? '' : `filter:drop-shadow(0 0 5px ${s.color}55)`}"/>
-      ${s.end === false ? '' : `<circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="4" fill="${s.color}" style="filter:drop-shadow(0 0 6px ${s.color})"/>`}`;
+    const fill = sr.fill ? `<path d="${VIZ.smooth(pts)} L${last.x.toFixed(1)},${H - PB} L${pts[0].x.toFixed(1)},${H - PB} Z" fill="${sr.color}" opacity=".08"/>` : '';
+    return fill + `<path d="${VIZ.smooth(pts)}" fill="none" stroke="${sr.color}" stroke-width="${sr.sw || 2.2}" stroke-linejoin="round" stroke-linecap="round" ${sr.dash ? `stroke-dasharray="${sr.dash}"` : ''} style="${sr.glow === false ? '' : `filter:drop-shadow(0 0 5px ${sr.color}55)`}"/>
+      ${sr.end === false ? '' : `<circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="4" fill="${sr.color}" style="filter:drop-shadow(0 0 6px ${sr.color})"/>`}`;
   }).join('');
-  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">${base}${paths}</svg>`;
+  MCH[id] = {dates, series, W, H, PL, PR, PT, PB, min, span, n, tip: o.tip};
+  const cross = `<g id="${id}-x" style="display:none"><line id="${id}-xv" y1="${PT}" y2="${H - PB + 4}" stroke="rgba(255,255,255,.5)" stroke-dasharray="3 4"/><line id="${id}-xh" x1="${PL}" x2="${W - PR + 4}" stroke="rgba(255,255,255,.35)" stroke-dasharray="3 4"/>${series.map((sr, k) => `<circle id="${id}-d${k}" r="4.5" fill="${sr.color}" stroke="#0E1017" stroke-width="1.5"/>`).join('')}</g>`;
+  return `<div style="position:relative;touch-action:none;user-select:none;-webkit-user-select:none" onpointermove="mChartHover(event,'${id}')" onpointerdown="mChartHover(event,'${id}')" onpointerleave="mChartLeave(event,'${id}')">
+    <svg id="${id}" viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">${grid}${xg}${base}${paths}${cross}</svg>
+    <div id="${id}-tip" style="display:none;position:absolute;top:0;pointer-events:none;background:#1A1E2B;border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:6px 9px;font-size:11px;line-height:1.45;box-shadow:0 6px 20px rgba(0,0,0,.45);white-space:nowrap;z-index:5"></div>
+  </div>`;
+}
+function mChartHover(e, id){
+  const c = MCH[id], svg = document.getElementById(id); if (!c || !svg) return;
+  const r = svg.getBoundingClientRect(); const sx = c.W / r.width;
+  const px = (e.clientX - r.left) * sx;
+  const i = Math.max(0, Math.min(c.n - 1, Math.round((px - c.PL) / ((c.W - c.PL - c.PR) / Math.max(c.n - 1, 1)))));
+  const X = c.PL + i * (c.W - c.PL - c.PR) / Math.max(c.n - 1, 1), Y = v => c.PT + (1 - (v - c.min) / c.span) * (c.H - c.PT - c.PB);
+  const g = document.getElementById(id + '-x'); g.style.display = '';
+  const xv = document.getElementById(id + '-xv'); xv.setAttribute('x1', X); xv.setAttribute('x2', X);
+  const v0 = c.series[0].vals[i];
+  const xh = document.getElementById(id + '-xh'); if (v0 != null) { xh.setAttribute('y1', Y(v0)); xh.setAttribute('y2', Y(v0)); xh.style.display = ''; } else xh.style.display = 'none';
+  c.series.forEach((sr, k) => { const d = document.getElementById(id + '-d' + k); const v = sr.vals[i]; if (v == null || isNaN(v)) { d.style.display = 'none'; return; } d.style.display = ''; d.setAttribute('cx', X); d.setAttribute('cy', Y(v)); });
+  const tip = document.getElementById(id + '-tip'); if (!tip) return;
+  tip.innerHTML = c.tip ? c.tip(i) : c.dates[i];
+  tip.style.display = '';
+  const left = X / sx; const tw = tip.offsetWidth;
+  tip.style.left = Math.max(0, Math.min(r.width - tw, left - tw / 2)) + 'px';
+  tip.style.top = '2px';
+}
+function mChartLeave(e, id){ if (e.pointerType && e.pointerType !== 'mouse') return; const g = document.getElementById(id + '-x'), t = document.getElementById(id + '-tip'); if (g) g.style.display = 'none'; if (t) t.style.display = 'none'; }
+/* bar chart hover/tap: VIZ.bars columns are evenly spaced, so the column under the pointer is pure arithmetic */
+function mBarsWrap(id, rows, svgHTML, o = {}){
+  MCH[id] = {rows, W: 560, P: 10, tip: o.tip, bars: true};
+  return `<div style="position:relative;touch-action:none;user-select:none;-webkit-user-select:none" onpointermove="mBarHover(event,'${id}')" onpointerdown="mBarHover(event,'${id}')" onpointerleave="mChartLeave(event,'${id}')">
+    <div id="${id}-hl" style="display:none;position:absolute;top:0;bottom:0;background:rgba(255,255,255,.06);border-radius:6px;pointer-events:none"></div>
+    <div id="${id}-tip" style="display:none;position:absolute;top:0;pointer-events:none;background:#1A1E2B;border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:6px 9px;font-size:11px;line-height:1.45;box-shadow:0 6px 20px rgba(0,0,0,.45);white-space:nowrap;z-index:5"></div>
+    <div id="${id}">${svgHTML}</div></div>`;
+}
+function mBarHover(e, id){
+  const c = MCH[id], el = document.getElementById(id); if (!c || !el) return;
+  const r = el.getBoundingClientRect(); const n = c.rows.length; if (!n) return;
+  const bw = (c.W - 2 * c.P) / n, sx = c.W / r.width;
+  const i = Math.max(0, Math.min(n - 1, Math.floor(((e.clientX - r.left) * sx - c.P) / bw)));
+  const hl = document.getElementById(id + '-hl'); hl.style.display = ''; hl.style.left = ((c.P + i * bw) / sx) + 'px'; hl.style.width = (bw / sx) + 'px';
+  const tip = document.getElementById(id + '-tip'); tip.innerHTML = c.tip ? c.tip(i) : (c.rows[i].label || ''); tip.style.display = '';
+  const left = (c.P + (i + .5) * bw) / sx, tw = tip.offsetWidth; tip.style.left = Math.max(0, Math.min(r.width - tw, left - tw / 2)) + 'px';
 }
 function mRangeChips(key, opts){ const cur = mx()[key]; return `<div style="display:flex;gap:4px;margin-left:auto">${opts.map(([v, l]) => `<button class="schip ${cur === v ? 'on' : ''}" style="padding:3px 9px;font-size:10px" data-v="${v}" onclick="mxSet('${key}',this.dataset.v)">${l}</button>`).join('')}</div>`; }
 const mDateLbl = iso => { const d = new Date(iso + 'T12:00:00'); return d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'}); };
 const mDaysBetween = (a, b) => Math.round((new Date(b + 'T12:00:00') - new Date(a + 'T12:00:00')) / 864e5);
 function mSliceByRange(rows, key, range){
   if (!rows || !rows.length) return [];
-  const days = {'1m': 30, '3m': 91, '6m': 182, '1y': 365}[range];
+  const days = {'1w': 7, '1m': 30, '3m': 91, '6m': 182, '1y': 365}[range];
   if (!days) return rows;
   const cutoff = new Date(Date.now() - days * 864e5).toLocaleDateString('sv-SE');
   const out = rows.filter(r => r[key] >= cutoff);
@@ -5706,8 +5761,12 @@ function moneyOverviewHTML(){
   const first = hist[0], last = hist[hist.length - 1];
   const nwDelta = first && last ? last.total - first.total : null;
   const nwPct = first && first.total ? nwDelta / first.total * 100 : null;
-  const nwChart = hist.length > 1 ? `<div class="chart">${VIZ.area(hist.map(h => h.total), {w: 560, h: 140, color: '#FBBF24', end: true})}
-      <div class="xl"><span>${mDateLbl(first.d)}</span><span>${mDateLbl(last.d)}</span></div></div>` : '<div class="dim" style="font-size:11px">History starts after a few daily snapshots.</div>';
+  const nwTip = i => { const h = hist[i], p = hist[i - 1]; const d = p ? h.total - p.total : null;
+    const movers = p ? ['cash', 'cards', 'brokerage', 'managed', 'education', 'foreign'].map(b => ({b, d: (+h[b] || 0) - (+p[b] || 0)})).filter(m => Math.abs(m.d) >= 1).sort((a, b) => Math.abs(b.d) - Math.abs(a.d)).slice(0, 3) : [];
+    return `<b>${new Date(h.d + 'T12:00:00').toLocaleDateString('en-US', {weekday: 'short', month: 'short', day: 'numeric'})}</b> · <span class="mono">${money$(h.total)}</span>${d != null ? ` <span class="mono" style="color:${d >= 0 ? 'var(--done)' : 'var(--accent-hi)'}">${d >= 0 ? '+' : '-'}${fmtR(Math.abs(d))}</span>` : ''}
+      ${movers.length ? '<div class="dim">' + movers.map(m => `${(BUCKET_META[m.b] || [m.b])[0]} <span class="mono" style="color:${m.d >= 0 ? 'var(--done)' : 'var(--accent-hi)'}">${m.d >= 0 ? '+' : '-'}${fmtR(Math.abs(m.d))}</span>`).join(' · ') + '</div>' : ''}`; };
+  const nwChart = hist.length > 1 ? `<div class="chart">${mLineChart('nwc', hist.map(h => h.d), [{vals: hist.map(h => h.total), color: '#FBBF24', fill: true}], {h: 170, tip: nwTip})}</div>
+      <div class="dim mono" style="font-size:10px;margin-top:2px">touch or hover the line for the day's number and what moved</div>` : '<div class="dim" style="font-size:11px">History starts after a few daily snapshots.</div>';
   // --- allocation by bucket (from live balances; cards shown as debt, not in the donut) ---
   const byB = {};
   S.finAccounts.filter(a => !a.rollup).forEach(a => {
@@ -5767,7 +5826,7 @@ function moneyOverviewHTML(){
     </div>`).join('')}`;
   }).join('');
   return `${moneyHealthHTML()}
-  <div class="card"><h2 style="display:flex;align-items:center;gap:8px"><span>Net worth</span>${mRangeChips('nw', [['1m', '1M'], ['3m', '3M'], ['all', 'ALL']])}</h2>
+  <div class="card"><h2 style="display:flex;align-items:center;gap:8px"><span>Net worth</span>${mRangeChips('nw', [['1w', '1W'], ['1m', '1M'], ['3m', '3M'], ['all', 'ALL']])}</h2>
     <div class="chart-head"><span class="hero" style="font-size:34px">${money$(nw.total_usd)}</span>
       ${nwDelta != null ? `<span class="delta ${nwDelta >= 0 ? 'up' : 'dn'}">${nwDelta >= 0 ? '▲' : '▼'} ${fmt$(Math.abs(nwDelta))} · ${Math.abs(nwPct).toFixed(1)}%</span>` : ''}
       ${first ? `<span class="dim">since ${mDateLbl(first.d)}</span>` : ''}</div>
@@ -5850,7 +5909,7 @@ function mxTrend(rows, R, per){
   const today = todayISO();
   const lblEvery = per === 'month' ? 5 : per === 'quarter' ? 2 : 1;
   const lbl = (k, i) => { if (i % lblEvery && i !== keys.length - 1) return ''; if (per === 'week') return new Date(k + 'T12:00:00').toLocaleDateString('en-US', {weekday: 'narrow'}); if (per === 'month') return String(+k.slice(8)); if (per === 'quarter') return mDateLbl(k).replace(' ', ' '); return new Date(k + '-15T12:00:00').toLocaleDateString('en-US', {month: 'short'}).slice(0, 1); };
-  return {keys, cats, rows: keys.map((k, i) => ({label: lbl(k, i), hot: keyOf(today) === k, parts: cats.concat('_other').map(c => ({v: Math.max(0, per_[k][c] || 0), color: c === '_other' ? '#4B5563' : mcatColor(c), title: `${k} ${c === '_other' ? 'everything else' : c}: ${money$(per_[k][c] || 0)}`}))}))};
+  return {keys, cats, rows: keys.map((k, i) => ({key: k, label: lbl(k, i), hot: keyOf(today) === k, parts: cats.concat('_other').map(c => ({v: Math.max(0, per_[k][c] || 0), color: c === '_other' ? '#4B5563' : mcatColor(c), title: `${k} ${c === '_other' ? 'everything else' : c}: ${money$(per_[k][c] || 0)}`}))}))};
 }
 function mxListHTML(){
   const {x, listed} = mxFiltered();
@@ -5895,7 +5954,11 @@ function moneySpendingHTML(){
     VIZ.tile(base.length, 'transactions', {color: '#38BDF8', sub: biggest ? `max ${fmtR(mxAmt(biggest))}` : ''}),
   ]);
   const trend = mxTrend(base, R, x.per);
-  const trendSvg = `<div class="chart">${VIZ.bars(trend.rows, {w: 560, h: 130, labels: true})}</div>
+  const trendTip = i => { const r = trend.rows[i]; const tot = r.parts.reduce((s, p) => s + p.v, 0);
+    const title = x.per === 'week' || x.per === 'month' ? new Date(r.key + 'T12:00:00').toLocaleDateString('en-US', {weekday: 'short', month: 'short', day: 'numeric'}) : x.per === 'quarter' ? 'week of ' + mDateLbl(r.key) : new Date(r.key + '-15T12:00:00').toLocaleDateString('en-US', {month: 'long', year: 'numeric'});
+    const parts = r.parts.filter(p => p.v > 0).sort((a, b) => b.v - a.v).slice(0, 5).map(p => `<span style="color:${p.color}">●</span> ${esc(p.title.split(': ')[0].replace(/^\S+\s/, ''))} <span class="mono">${fmtR(p.v)}</span>`).join('<br>');
+    return `<b>${title}</b> · <span class="mono">${fmtR(tot)}</span>${parts ? '<div class="dim" style="margin-top:2px">' + parts + '</div>' : '<div class="dim">nothing</div>'}`; };
+  const trendSvg = `<div class="chart">${mBarsWrap('trc', trend.rows, VIZ.bars(trend.rows, {w: 560, h: 130, labels: true}), {tip: trendTip})}</div>
     <div class="elegend" style="margin-top:6px">${trend.cats.map(c => `<span><i style="background:${mcatColor(c)}"></i>${esc(c)}</span>`).join('')}${trend.rows.some(r => r.parts[r.parts.length - 1].v) ? '<span><i style="background:#4B5563"></i>everything else</span>' : ''}</div>`;
   // breakdown by group with vs-previous deltas
   const groups = mxGroup(base, x.by), pgroups = {}; mxGroup(prev, x.by).forEach(g => pgroups[g.k] = g.amt);
@@ -5971,11 +6034,13 @@ function moneyStocksHTML(){
   const youPct = p0 && p0.value ? (pN.value - p0.value) / p0.value * 100 : null;
   const spyPct = p0 && p0.spy ? (pN.spy - p0.spy) / p0.spy * 100 : null;
   const showCost = ph.length > 1 && cost > 0 && cost >= Math.min(...ph.map(p => p.value)) * 0.85 && cost <= Math.max(...ph.map(p => p.value)) * 1.15;
-  const pfChart = ph.length > 1 ? `<div class="chart">${mLines([
+  const pfTip = i => { const p = ph[i], q = ph[i - 1]; const d = q ? p.value - q.value : null; const you = p0.value ? (p.value - p0.value) / p0.value * 100 : null; const spy = p.spy && p0.spy ? (p.spy - p0.spy) / p0.spy * 100 : null;
+    return `<b>${new Date(p.d + 'T12:00:00').toLocaleDateString('en-US', {weekday: 'short', month: 'short', day: 'numeric'})}</b> · <span class="mono">${money$(p.value)}</span>${d != null ? ` <span class="mono" style="color:${d >= 0 ? 'var(--done)' : 'var(--accent-hi)'}">${d >= 0 ? '+' : '-'}${fmtR(Math.abs(d))}</span>` : ''}
+      <div class="dim">since ${mDateLbl(p0.d)}: you ${you != null ? pctHTML(you) : '—'} · SPY ${spy != null ? pctHTML(spy) : '—'}${p.spy ? ` · SPY $${p.spy}` : ''}</div>`; };
+  const pfChart = ph.length > 1 ? `<div class="chart">${mLineChart('pfc', ph.map(p => p.d), [
+      {vals: ph.map(p => p.value), color: '#38BDF8', fill: true},
       {vals: ph.map(p => p.spy && p0.spy ? p.spy / p0.spy * p0.value : null), color: '#8A90A0', dash: '4 4', sw: 1.4, glow: false, end: false},
-      {vals: ph.map(p => p.value), color: '#38BDF8'},
-    ], {w: 560, h: 150, base: showCost ? cost : null})}
-      <div class="xl"><span>${mDateLbl(p0.d)}</span><span>${mDateLbl(pN.d)}</span></div></div>
+    ], {h: 170, base: showCost ? cost : null, tip: pfTip})}</div>
     <div class="elegend" style="margin-top:4px"><span><i style="background:#38BDF8"></i>you ${youPct != null ? pctHTML(youPct) : ''}</span><span><i style="background:#8A90A0"></i>SPY ${spyPct != null ? pctHTML(spyPct) : ''}</span>${youPct != null && spyPct != null ? `<span class="dim">${youPct >= spyPct ? 'beating' : 'trailing'} SPY by ${Math.abs(youPct - spyPct).toFixed(1)} pts</span>` : ''}</div>`
     : '<div class="dim" style="font-size:11px">Portfolio history appears once quotes exist for your holdings.</div>';
   // --- allocation donut by ticker ---
@@ -6054,7 +6119,7 @@ function moneyStocksHTML(){
     <div class="dim" style="font-size:11px;margin-top:6px">From your brokerage feed. Register below (ticker · shares · avg $) — quotes fill in automatically — then ✕ to dismiss.</div></div>`;
   const asOf = hold.map(r => r.as_of).filter(Boolean).sort().slice(-1)[0];
   return `${moneyHealthHTML()}${pendCard}
-  <div class="card"><h2 style="display:flex;align-items:center;gap:8px"><span>Portfolio</span>${mRangeChips('pf', [['1m', '1M'], ['3m', '3M'], ['6m', '6M'], ['1y', '1Y']])}</h2>
+  <div class="card"><h2 style="display:flex;align-items:center;gap:8px"><span>Portfolio</span>${mRangeChips('pf', [['1w', '1W'], ['1m', '1M'], ['3m', '3M'], ['6m', '6M'], ['1y', '1Y']])}</h2>
     <div class="chart-head"><span class="hero" style="font-size:34px">${money$(totalVal)}</span>
       ${dayPct != null ? `<span class="delta ${dayChg >= 0 ? 'up' : 'dn'}" title="today">${dayChg >= 0 ? '▲' : '▼'} ${fmt$(Math.abs(dayChg))} · ${Math.abs(dayPct).toFixed(2)}%</span>` : ''}
       <span class="dim">today</span></div>
