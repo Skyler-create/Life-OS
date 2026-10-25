@@ -1047,9 +1047,36 @@ db.auth.onAuthStateChange((event, session) => {
   if (!session) { S._loadedOnce = false; return; }
   if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') return;   // hourly token churn is not a reason to rebuild the page
   if (S._loadedOnce) return;
+  hydrateSnapshot();   // 2026-10-25: paint last good state instantly (never a black screen), then refresh
   loadAll();
 });
 document.getElementById('a-email').value = OWNER;
+/* ---- last-good snapshot (2026-10-25) ----
+   The free-tier DB stalls for minutes at a time (every request ~8 s, auth included). A cold open during a
+   stall used to sit on a black screen. Now the non-sensitive slices of S are cached after each successful
+   load and painted immediately on the next open, with a "cached · refreshing" pill until fresh data lands.
+   MONEY data is deliberately NOT cached (PIN-gated server side; it never touches localStorage). */
+const SNAP_KEYS = ['tasks','goals','goalLogsToday','brief','logs','todayLog','prevLog','credits','planBlocks','settings','wakeTargets',
+  'events','freezes','ttEvents','dayLoad','scoreNow','weekHealth','focusOpen','caff','tonight','sleepNights','body','news','people',
+  'questDeck','questSaved','questCands','exFeed','exStats','jobs','kits','waitingOn','personNotes','cycle','cycleMarks','retention','cardInbox','cards','adherence','sleepStats','dayTags','tagEffects','healthDays','focusLog','experiments'];
+function saveSnapshot(){
+  try {
+    const d = {}; SNAP_KEYS.forEach(k => { if (S[k] !== undefined) d[k] = S[k]; });
+    localStorage.setItem('lifeos_snap', JSON.stringify({at: Date.now(), day: todayISO(), d}));
+  } catch (e) { /* quota or private mode: the cache is a convenience, never required */ }
+}
+function hydrateSnapshot(){
+  try {
+    const raw = localStorage.getItem('lifeos_snap'); if (!raw) return false;
+    const snap = JSON.parse(raw);
+    if (!snap || !snap.d || Date.now() - snap.at > 36 * 3600e3) return false;
+    Object.assign(S, snap.d);
+    S._loadedOnce = true; S._fromCache = true;
+    render();
+    staleBar(true, 0, 'cache');
+    return true;
+  } catch (e) { return false; }
+}
 
 /* ================= data ================= */
 /* server-side failure classifier: PostgREST schema cache (PGRST002/003), statement timeout (57014),
@@ -1062,7 +1089,7 @@ function isServerHiccup(err){
   if (err.name === 'TypeError' || err.name === 'AbortError') return true;
   return false;
 }
-function staleBar(on, n){
+function staleBar(on, n, mode){
   let el = document.getElementById('stalebar');
   if (!on) { if (el) el.remove(); return; }
   if (!el) {
@@ -1070,7 +1097,9 @@ function staleBar(on, n){
     el.style.cssText = 'position:fixed;top:calc(6px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:9999;background:#2A1F0E;color:#FBBF24;border:1px solid rgba(251,191,36,.45);border-radius:999px;padding:5px 12px;font:600 11px/1.3 Consolas,monospace;letter-spacing:.3px;box-shadow:0 4px 18px rgba(0,0,0,.5);pointer-events:none;max-width:92vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
     document.body.appendChild(el);
   }
-  el.textContent = (S._loadedOnce ? '⚠ server hiccup — showing last data' : '⚠ server hiccup — loading') + ' · retrying' + (n > 1 ? ' (' + n + ')' : '') + '…';
+  el.textContent = mode === 'cache' ? '⟳ cached · refreshing…'
+                 : mode === 'slow' ? '⏳ server is slow — still loading…'
+                 : (S._loadedOnce ? '⚠ server hiccup — showing last data' : '⚠ server hiccup — loading') + ' · retrying' + (n > 1 ? ' (' + n + ')' : '') + '…';
 }
 async function loadAll(){
   // Never read while a write is in flight: the snapshot would predate the commit. Also keep the old
@@ -1082,7 +1111,12 @@ async function loadAll(){
   const startedAt = Date.now();   // snapshot is only valid for writes that began AND finished BEFORE this
   loadAll._lastStart = startedAt;
   const today = todayISO();
-  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, mch, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, qsv, exf, exs] = await Promise.all([
+  clearTimeout(loadAll._slowT);
+  loadAll._slowT = setTimeout(() => { if (!S._loadedOnce || S._fromCache) staleBar(true, 0, S._fromCache ? 'cache' : 'slow'); }, 4000);
+  // 2026-10-25: two waves instead of one 48-query stampede. Wave 1 = what TODAY needs; it is applied and
+  // painted as soon as it lands on a cold start. Wave 2 = analytics/feeds. Under a DB stall this halves the
+  // time-to-first-paint and keeps the 10-connection PostgREST pool from queueing the critical reads.
+  const Q = [
     // 2026-10-23: 1,245 rows > PostgREST's 1,000-row cap — with order-by-due the rows silently dropped were the
     // LATEST-due and no-due ones, i.e. live tasks. Open tasks always; done tasks only from the last 30 days.
     db.from('tasks').select('*').or('status.neq.done,completed_at.gte.' + new Date(Date.now() - 30*864e5).toISOString()).order('due', {ascending:true, nullsFirst:false}),
@@ -1097,6 +1131,8 @@ async function loadAll(){
     db.rpc('lifeos_credits'),
     db.from('plan_blocks').select('*').gte('date', today).order('date').order('start_min'),
     db.from('lifeos_settings').select('key,value'),
+  ];
+  const Q2 = [
     db.from('timetree_events').select('*')
       .or(`start_ts.gte.${new Date(Date.now() - 60 * 864e5).toISOString()},start_date.gte.${new Date(Date.now() - 60 * 864e5).toLocaleDateString('sv-SE')}`)
       .order('start_ts', {ascending: true, nullsFirst: true}).limit(1000),
@@ -1138,7 +1174,21 @@ async function loadAll(){
     db.rpc('lifeos_explore_feed', {p_limit: 20}),                                                     // explore: comebacks + today's lesson + curio/guess mix
     db.rpc('lifeos_explore_stats'),
     db.from('quests').select('*').in('status', ['saved', 'going']).gte('event_date', today).order('event_date').order('starts_at'),
-  ]);
+  ];
+  const W1 = await Promise.all(Q);
+  if (seq === loadAll._seq && !S._loadedOnce && !W1.some(r => r && r.error && isServerHiccup(r.error))) {
+    // cold start: paint TODAY from the critical wave right away; the full pass below re-applies everything
+    const [t1, g1, gl1, b1, dl1, cd1, ev1, fz1, fs1, cr1, pb1, st1] = W1;
+    S.tasks = t1.data || []; S.goals = g1.data || []; S.goalLogsToday = gl1.data || []; S.brief = b1.data || null;
+    S.cards = cd1.data || []; S.events = ev1.data || []; S.freezes = fz1.data || []; S.focusOpen = (fs1.data || [])[0] || null;
+    S.credits = cr1.data || null; S.planBlocks = pb1.data || [];
+    S.settings = Object.fromEntries((st1.data || []).map(r => [r.key, r.value]));
+    const l1 = dl1.data || []; S.logs = l1; S.todayLog = l1.find(l => l.date === today) || null; S.prevLog = l1.find(l => l.date < today) || null;
+    S._loadedOnce = true; render();
+  }
+  const W2 = await Promise.all(Q2);
+  clearTimeout(loadAll._slowT);
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, mch, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, qsv, exf, exs] = W1.concat(W2);
   // 2026-10-25 OUTAGE FIX: if the server itself is failing (5xx / timeout / schema-cache reload / network),
   // do NOT overwrite good state with empties. Keep what is on screen, show the stale bar, retry with backoff.
   // A permanent per-query error (RLS, missing RPC) is NOT in this class and still falls through as before.
@@ -1152,7 +1202,7 @@ async function loadAll(){
     staleBar(true, loadAll._fail);
     clearTimeout(loadAll._retryT); loadAll._retryT = setTimeout(loadAll, wait);
     if (S._loadedOnce || outage.length >= results.length / 2) return;   // first load with a partial outage: render what came back, retry fills the rest
-  } else { loadAll._fail = 0; staleBar(false); }
+  } else { loadAll._fail = 0; S._fromCache = false; staleBar(false); }
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   // Re-apply taps the server has not visibly confirmed yet. A patch is retired only once a snapshot
   // taken strictly after its write resolved agrees with it (or 60 s pass, in case the write failed silently).
@@ -1233,6 +1283,7 @@ async function loadAll(){
   S.prevLog  = logs.find(l => l.date < today) || null;
   S.logs = logs;
   if (!S._loadedOnce) { S._loadedOnce = true; render(); } else renderSoft();
+  clearTimeout(loadAll._snapT); loadAll._snapT = setTimeout(saveSnapshot, 1500);
   subscribeRealtime();
   captureWake();
   updatePushBtn();
