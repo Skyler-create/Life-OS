@@ -960,12 +960,29 @@ const WR = {inflight: 0, lastStart: 0, lastDone: 0};
    that actually mutate count now (allowlist — an unlisted write just loses the overlap guard, which is
    harmless; an unlisted read would bring the loop back). Table PATCH/POST/DELETE still count. */
 const WRITE_RPC = /\/rpc\/lifeos_(save_reflection|apply_decomposition|attend_class|task_clockout|task_autocomplete|plan_day|claim_card_bonus|card_review|card_decide|wake_quiz_done|quests_swipe|quests_source_swipe|explore_act|news_feedback|tag_toggle|experiment_stop|money_unlock|money_lock|money_set_pin|stocks_sync|set_vacation|log_caffeine|dismiss_task)\b/;
+/* 2026-10-25 OUTAGE FIX: PostgREST reconnects / schema-cache reloads a few times a day; while it rebuilds
+   the cache every request answers 503 PGRST002 ("Could not query the database for the schema cache").
+   loadAll used to take those errors as empty data and blank the page. Reads now retry on 5xx / network
+   failure (0.8 s, 2 s, 4.5 s) — idempotent, so safe. Writes are never retried here. */
+const READ_RETRY_MS = [800, 2000, 4500];
+async function fetchRead(input, init){
+  let lastErr = null;
+  for (let i = 0; i <= READ_RETRY_MS.length; i++) {
+    try {
+      const r = await fetch(input, init);
+      if (r.status < 500 || i === READ_RETRY_MS.length) return r;
+      lastErr = null;
+    } catch (e) { lastErr = e; if (i === READ_RETRY_MS.length) throw e; }
+    await new Promise(res => setTimeout(res, READ_RETRY_MS[i]));
+  }
+  if (lastErr) throw lastErr;
+}
 const trackedFetch = (input, init) => {
   const method = ((init && init.method) || (input && input.method) || 'GET').toUpperCase();
   const url = typeof input === 'string' ? input : (input && input.url) || '';
   const isRpc = url.indexOf('/rest/v1/rpc/') !== -1;
   const isWrite = method !== 'GET' && method !== 'HEAD' && url.indexOf('/rest/v1/') !== -1 && (!isRpc || WRITE_RPC.test(url));
-  if (!isWrite) return fetch(input, init);
+  if (!isWrite) return fetchRead(input, init);
   WR.inflight++; WR.lastStart = Date.now();
   const done = () => { WR.inflight = Math.max(0, WR.inflight - 1); WR.lastDone = Date.now(); };
   return fetch(input, init).then(r => { done(); return r; }, e => { done(); throw e; });
@@ -1035,6 +1052,26 @@ db.auth.onAuthStateChange((event, session) => {
 document.getElementById('a-email').value = OWNER;
 
 /* ================= data ================= */
+/* server-side failure classifier: PostgREST schema cache (PGRST002/003), statement timeout (57014),
+   connection limits (53300), connection failures (08xxx), gateway/fetch errors. */
+function isServerHiccup(err){
+  if (!err) return false;
+  const code = String(err.code || ''), msg = String(err.message || '');
+  if (/^PGRST00[0-3]$/.test(code) || code === '57014' || code === '53300' || /^08/.test(code) || code === '57P01' || code === '57P03') return true;
+  if (/schema cache|statement timeout|failed to fetch|load failed|network|ECONNRESET|socket|gateway|service unavailable|too many connections|terminating connection|recovery mode/i.test(msg)) return true;
+  if (err.name === 'TypeError' || err.name === 'AbortError') return true;
+  return false;
+}
+function staleBar(on, n){
+  let el = document.getElementById('stalebar');
+  if (!on) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement('div'); el.id = 'stalebar';
+    el.style.cssText = 'position:fixed;top:calc(6px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:9999;background:#2A1F0E;color:#FBBF24;border:1px solid rgba(251,191,36,.45);border-radius:999px;padding:5px 12px;font:600 11px/1.3 Consolas,monospace;letter-spacing:.3px;box-shadow:0 4px 18px rgba(0,0,0,.5);pointer-events:none;max-width:92vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+    document.body.appendChild(el);
+  }
+  el.textContent = (S._loadedOnce ? '⚠ server hiccup — showing last data' : '⚠ server hiccup — loading') + ' · retrying' + (n > 1 ? ' (' + n + ')' : '') + '…';
+}
 async function loadAll(){
   // Never read while a write is in flight: the snapshot would predate the commit. Also keep the old
   // small grace period for a write that is about to be sent (S.lastWrite stamped, request not yet out).
@@ -1043,6 +1080,7 @@ async function loadAll(){
   await waitForWrites(8000);
   const seq = loadAll._seq = (loadAll._seq || 0) + 1;
   const startedAt = Date.now();   // snapshot is only valid for writes that began AND finished BEFORE this
+  loadAll._lastStart = startedAt;
   const today = todayISO();
   const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, mch, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, qsv, exf, exs] = await Promise.all([
     // 2026-10-23: 1,245 rows > PostgREST's 1,000-row cap — with order-by-due the rows silently dropped were the
@@ -1101,6 +1139,20 @@ async function loadAll(){
     db.rpc('lifeos_explore_stats'),
     db.from('quests').select('*').in('status', ['saved', 'going']).gte('event_date', today).order('event_date').order('starts_at'),
   ]);
+  // 2026-10-25 OUTAGE FIX: if the server itself is failing (5xx / timeout / schema-cache reload / network),
+  // do NOT overwrite good state with empties. Keep what is on screen, show the stale bar, retry with backoff.
+  // A permanent per-query error (RLS, missing RPC) is NOT in this class and still falls through as before.
+  const results = [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pn, pp, cy, cm, mw, fa, ft, fr, stx, mch, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, qsv, exf, exs];
+  const outage = results.filter(r => r && r.error && isServerHiccup(r.error));
+  if (outage.length) {
+    if (seq !== loadAll._seq) return;
+    loadAll._fail = (loadAll._fail || 0) + 1;
+    const wait = Math.min(30000, 1500 * Math.pow(2, loadAll._fail - 1));
+    console.warn('loadAll: ' + outage.length + ' server-side failures (' + (outage[0].error.code || outage[0].error.message) + ') — keeping last good data, retry in ' + wait + ' ms');
+    staleBar(true, loadAll._fail);
+    clearTimeout(loadAll._retryT); loadAll._retryT = setTimeout(loadAll, wait);
+    if (S._loadedOnce || outage.length >= results.length / 2) return;   // first load with a partial outage: render what came back, retry fills the rest
+  } else { loadAll._fail = 0; staleBar(false); }
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   // Re-apply taps the server has not visibly confirmed yet. A patch is retired only once a snapshot
   // taken strictly after its write resolved agrees with it (or 60 s pass, in case the write failed silently).
@@ -1275,14 +1327,21 @@ function subscribeRealtime(){
       // ignore the echo of our own writes — they're already on screen
       if (Date.now() - (S.lastWrite || 0) < 2500) { clearTimeout(rtTimer); rtTimer = setTimeout(() => { if (!uiBusy() && !uiScrolling()) loadAll(); else S._dirty = true; }, 2600); return; }
       clearTimeout(rtTimer);
+      // 2026-10-25: dns_sync and friends write every minute; one realtime-triggered reload per 15 s is plenty
+      const sinceLoad = Date.now() - (loadAll._lastStart || 0);
       rtTimer = setTimeout(() => {
         if (uiBusy()) { S._dirty = true; return; }
         if (uiScrolling()) { clearTimeout(rtTimer); rtTimer = setTimeout(() => { if (!uiBusy() && !uiScrolling()) loadAll(); else S._dirty = true; }, 1200); return; } // don't rebuild mid-scroll
         loadAll();
-      }, 600);
+      }, Math.max(600, 15000 - sinceLoad));
     })
     .subscribe();
 }
+/* coming back to the app after it sat in the background: refresh once if the last load is >45 s old */
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !S._loadedOnce) return;
+  if (Date.now() - (loadAll._lastStart || 0) > 45000 && !uiBusy()) loadAll();
+});
 
 /* ================= task helpers ================= */
 /* local calendar day of a timestamptz — NOT the UTC slice. Tasks finished after
