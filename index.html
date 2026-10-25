@@ -5804,12 +5804,15 @@ function mxRange(per, off){
 }
 function mxFlowOk(t, flow){
   const c = t.category || '';
-  if (flow === 'out') return +t.amount < 0 && c !== 'transfers' && c !== 'investing';
-  if (flow === 'in') return +t.amount > 0 && c !== 'transfers' && c !== 'investing';
+  // 2026-10-25: signed, category-driven (matches lifeos_money_week): spending = everything that is not
+  // transfers/investing/income, refunds included as negatives; income = the income category net, so a
+  // payroll reversal cancels the payroll instead of showing up as a $2.3k purchase.
+  if (flow === 'out') return c !== 'transfers' && c !== 'investing' && c !== 'income';
+  if (flow === 'in') return c === 'income';
   if (flow === 'invest') return c === 'investing';
   return c === 'transfers';
 }
-const mxAmt = t => Math.abs(+t.amount || 0);
+const mxAmt = t => { const a = +t.amount || 0, f = mx().flow; return f === 'out' ? -a : f === 'in' ? a : Math.abs(a); };   // signed per flow
 function mxAcctShort(a){ const m = String(a.name || '').match(/\((\d+)\)\s*$/); const base = String(a.name || '').replace(/\s*\(\d+\)\s*$/, '').replace(/^(chase|pnc|discover|amazon|total)\s+/i, '').split(/\s+/)[0]; return (base || a.institution || 'acct') + (m ? ' ' + m[1] : ''); }
 function mxPayeeKey(t){ return String(t.payee || t.description || '?').replace(/\s+#?\d{3,}.*$/, '').replace(/\s{2,}/g, ' ').trim().slice(0, 28) || '?'; }
 function mxGroupKey(t, by){
@@ -5847,7 +5850,7 @@ function mxTrend(rows, R, per){
   const today = todayISO();
   const lblEvery = per === 'month' ? 5 : per === 'quarter' ? 2 : 1;
   const lbl = (k, i) => { if (i % lblEvery && i !== keys.length - 1) return ''; if (per === 'week') return new Date(k + 'T12:00:00').toLocaleDateString('en-US', {weekday: 'narrow'}); if (per === 'month') return String(+k.slice(8)); if (per === 'quarter') return mDateLbl(k).replace(' ', ' '); return new Date(k + '-15T12:00:00').toLocaleDateString('en-US', {month: 'short'}).slice(0, 1); };
-  return {keys, cats, rows: keys.map((k, i) => ({label: lbl(k, i), hot: keyOf(today) === k, parts: cats.concat('_other').map(c => ({v: per_[k][c] || 0, color: c === '_other' ? '#4B5563' : mcatColor(c), title: `${k} ${c === '_other' ? 'everything else' : c}: ${money$(per_[k][c] || 0)}`}))}))};
+  return {keys, cats, rows: keys.map((k, i) => ({label: lbl(k, i), hot: keyOf(today) === k, parts: cats.concat('_other').map(c => ({v: Math.max(0, per_[k][c] || 0), color: c === '_other' ? '#4B5563' : mcatColor(c), title: `${k} ${c === '_other' ? 'everything else' : c}: ${money$(per_[k][c] || 0)}`}))}))};
 }
 function mxListHTML(){
   const {x, listed} = mxFiltered();
@@ -5900,7 +5903,7 @@ function moneySpendingHTML(){
   const gRows = groups.slice(0, x.by === 'payee' ? 15 : 20).map(g => `
     <div style="display:flex;gap:8px;align-items:center;padding:4px 0;cursor:pointer;${x.cat === g.k ? 'background:rgba(255,255,255,.04);margin:0 -6px;padding-left:6px;padding-right:6px;border-radius:8px' : ''}" data-v="${esc(g.k)}" onclick="mxSet('cat',this.dataset.v)">
       <span style="flex:0 0 98px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${g.k === 'uncategorized' ? 'color:var(--dim)' : ''}">${esc(g.k)}</span>
-      <div style="flex:1;height:9px;border-radius:99px;background:rgba(255,255,255,.05);overflow:hidden"><div style="width:${Math.round(g.amt / gmax * 100)}%;height:100%;background:${x.by === 'cat' ? mcatColor(g.k) : 'var(--grad)'};opacity:.85"></div></div>
+      <div style="flex:1;height:9px;border-radius:99px;background:rgba(255,255,255,.05);overflow:hidden"><div style="width:${Math.max(0, Math.round(g.amt / gmax * 100))}%;height:100%;background:${x.by === 'cat' ? mcatColor(g.k) : 'var(--grad)'};opacity:.85"></div></div>
       <span class="mono dim" style="flex:0 0 30px;font-size:10px;text-align:right">${tot ? Math.round(g.amt / tot * 100) : 0}%</span>
       <span class="mono" style="flex:0 0 52px;font-size:11.5px;text-align:right">${fmtR(g.amt)}</span>
       <span style="flex:0 0 46px;text-align:right;font-size:10px">${pgroups[g.k] ? (() => { const d = Math.round((g.amt - pgroups[g.k]) / pgroups[g.k] * 100); return `<span class="mono" style="color:${(x.flow === 'in' ? d >= 0 : d <= 0) ? 'var(--done)' : 'var(--accent-hi)'}">${d >= 0 ? '+' : ''}${d}%</span>`; })() : '<span class="dim">new</span>'}</span>
