@@ -3585,7 +3585,7 @@ function bodyTrendHTML(){
   const NEED = 480, H = 130, P = 10, LB = 18;
   const rows = b.map(x => { const deep = +x.deep_min || 0, rem = +x.rem_min || 0, core = Math.max(0, (+x.asleep_min || 0) - deep - rem);
     return {key: x.date, label: nightLbl(x.date), hot: x.date === calTodayISO(), parts: [
-      {v: deep, color: '#6366F1', title: `${x.date} deep ${deep}m`}, {v: rem, color: '#A78BFA', title: `${x.date} REM ${rem}m`}, {v: core, color: '#3B3F6B', title: `${x.date} core ${core}m`}]}; });
+      {v: deep, color: '#6366F1', title: `${x.date} deep ${deep}m`}, {v: rem, color: '#A78BFA', title: `${x.date} REM ${rem}m`}, {v: core, color: '#4B5085', title: `${x.date} core ${core}m`}]}; });
   const max = Math.max(NEED + 60, ...b.map(x => +x.asleep_min || 0));
   const needY = H - P - LB - (NEED / max) * (H - 2 * P - LB);
   let bars = VIZ.bars(rows, {w: 560, h: H, max, labels: true});
