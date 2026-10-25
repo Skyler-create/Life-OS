@@ -3562,20 +3562,50 @@ function bodyCardHTML(mode){
     <div class="bodyrow">${rR}${rS}<div class="bodytxt"><div class="bl" style="color:${lc}">${b.label}</div><div class="bw">${esc(bodyWhy(b))}</div>${spark}</div></div></div>`;
 }
 function bodyTrendHTML(){
-  const b = (S.body || []).slice(-7);
+  /* Sleep — last 7 nights (2026-10-25, interactive). Three averages up top (asleep, bedtime, wake — that is it),
+     stacked deep/REM/core bars against the 8 h need line with a tap/hover tooltip per night, then readiness +
+     sleep score as an interactive line. Prior-week deltas come from nights 8-14 of the same feed. */
+  const all = (S.body || []).slice(), b = all.slice(-7), prev = all.slice(-14, -7);
   if (b.length < 2) return '';
-  const last = b[b.length - 1], W = 560;
-  const fmt = d => d.slice(5).replace('-', '/');
-  const avg = k => Math.round(b.reduce((s, x) => s + (+x[k] || 0), 0) / b.length);
-  return `<div class="card"><h2>Body — last ${b.length} nights</h2>
-    <div class="chart-head"><span class="hero sm" style="color:${READY_COL(last.ready)[0]}">${last.ready}</span><span class="dim">readiness · ${last.label} · avg ${avg('ready')}</span>
-      <span class="hero sm" style="margin-left:auto;color:#C4B5FD">${last.sleep}</span><span class="dim">sleep · avg ${avg('sleep')}</span></div>
-    <div class="chart">${VIZ.area(b.map(x => x.ready), {w: W, h: 120, min: 0, max: 100, target: 60, targetLabel: '60', color: '#34D399',
-      dots: (i) => READY_COL(b[i].ready)[0], titles: (i, v) => `${b[i].date}: readiness ${v} (${b[i].label})`})}</div>
-    <div class="chart">${VIZ.area(b.map(x => x.sleep), {w: W, h: 80, min: 0, max: 100, color: '#A78BFA', dots: () => '#C4B5FD', dotR: 2.6,
-      titles: (i, v) => `${b[i].date}: sleep ${v} · ${hmin(b[i].asleep_min)} · asleep ${clock12(b[i].bed)}`})}
-      <div class="xl"><span>${fmt(b[0].date)}</span><span>asleep at: ${b.slice(-7).map(x => clock12(x.bed)).join(' · ')}</span><span>${fmt(last.date)}</span></div></div>
-    <div class="dim mono" style="font-size:10px;margin-top:6px">sleep = duration vs ${hmin(480)} need · deep+REM · efficiency · bedtime vs your usual · readiness adds 7-night debt + bedtime spread${last.vitals ? ' + HRV/RHR' : ' (HRV/RHR join automatically if they ever sync)'}</div></div>`;
+  const last = b[b.length - 1];
+  const nightLbl = d => new Date(d + 'T12:00:00').toLocaleDateString('en-US', {weekday: 'short'});
+  const tMin = (s, pivot) => { if (!s) return null; const [h, m] = s.split(':').map(Number); let v = h * 60 + m; if (v < pivot) v += 1440; return v; };   // clock → minutes, wrapped past midnight
+  const tClock = v => { if (v == null) return '—'; const m = Math.round(v) % 1440; return clock12(String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0')); };
+  const avg = a => { const v = a.filter(x => x != null && !isNaN(x)); return v.length ? v.reduce((s, x) => s + x, 0) / v.length : null; };
+  const avgDur = avg(b.map(x => +x.asleep_min)), prevDur = avg(prev.map(x => +x.asleep_min));
+  const avgBed = avg(b.map(x => tMin(x.bed, 18 * 60))), avgWake = avg(b.map(x => tMin(x.wake, 4 * 60)));
+  const bedSpread = (() => { const v = b.map(x => tMin(x.bed, 18 * 60)).filter(x => x != null); if (v.length < 2) return null; const m = avg(v); return Math.sqrt(avg(v.map(x => (x - m) ** 2))); })();
+  const dDur = avgDur != null && prevDur != null ? Math.round(avgDur - prevDur) : null;
+  const tiles = VIZ.tiles([
+    VIZ.tile(hmin(avgDur), 'avg asleep', {color: '#A78BFA', colored: true, sub: dDur != null ? `${dDur >= 0 ? '+' : '−'}${Math.abs(dDur)}m vs prior wk` : `${b.length} nights`}),
+    VIZ.tile(tClock(avgBed), 'avg bedtime', {color: '#818CF8', sub: bedSpread != null ? `± ${Math.round(bedSpread)}m night to night` : ''}),
+    VIZ.tile(tClock(avgWake), 'avg wake', {color: '#FBBF24', sub: `readiness avg ${Math.round(avg(b.map(x => +x.ready)) || 0)}`}),
+  ]);
+  // stacked deep / REM / core minutes per night, 8 h need line
+  const NEED = 480, H = 130, P = 10, LB = 18;
+  const rows = b.map(x => { const deep = +x.deep_min || 0, rem = +x.rem_min || 0, core = Math.max(0, (+x.asleep_min || 0) - deep - rem);
+    return {key: x.date, label: nightLbl(x.date), hot: x.date === calTodayISO(), parts: [
+      {v: deep, color: '#6366F1', title: `${x.date} deep ${deep}m`}, {v: rem, color: '#A78BFA', title: `${x.date} REM ${rem}m`}, {v: core, color: '#3B3F6B', title: `${x.date} core ${core}m`}]}; });
+  const max = Math.max(NEED + 60, ...b.map(x => +x.asleep_min || 0));
+  const needY = H - P - LB - (NEED / max) * (H - 2 * P - LB);
+  let bars = VIZ.bars(rows, {w: 560, h: H, max, labels: true});
+  bars = bars.replace('</svg>', `<line x1="${P}" y1="${needY.toFixed(1)}" x2="${560 - P}" y2="${needY.toFixed(1)}" stroke="rgba(255,255,255,.35)" stroke-dasharray="3 5"/><text x="${560 - P}" y="${(needY - 4).toFixed(1)}" text-anchor="end" font-size="11" font-family="Consolas,monospace" fill="rgba(255,255,255,.45)">8h</text></svg>`);
+  const barTip = i => { const x = b[i]; return `<b>${new Date(x.date + 'T12:00:00').toLocaleDateString('en-US', {weekday: 'short', month: 'short', day: 'numeric'})}</b> · <span class="mono">${hmin(x.asleep_min)}</span> asleep${x.debt_min > 0 ? ` <span class="mono" style="color:var(--accent-hi)">−${x.debt_min}m</span>` : ' <span style="color:var(--done)">✓</span>'}
+    <div class="dim">${clock12(x.bed)} → ${clock12(x.wake)} · deep ${x.deep_min ?? '—'}m · REM ${x.rem_min ?? '—'}m${x.efficiency != null ? ` · ${Math.round(x.efficiency)}% efficient` : ''}</div>
+    <div class="dim">sleep score <span class="mono" style="color:#C4B5FD">${x.sleep}</span> · readiness <span class="mono" style="color:${READY_COL(x.ready)[0]}">${x.ready}</span> ${x.label ? '· ' + esc(x.label) : ''}</div>`; };
+  const lineTip = i => { const x = b[i]; return `<b>${new Date(x.date + 'T12:00:00').toLocaleDateString('en-US', {weekday: 'short', month: 'short', day: 'numeric'})}</b> · readiness <span class="mono" style="color:${READY_COL(x.ready)[0]}">${x.ready}</span> · sleep <span class="mono" style="color:#C4B5FD">${x.sleep}</span>
+    <div class="dim">${esc(x.label || '')}${x.debt_min > 30 ? ` · ${hmin(x.debt_min)} debt` : ''}${x.bed_sd_min != null && x.bed_sd_min > 45 ? ` · bedtime ±${x.bed_sd_min}m` : ''}</div>`; };
+  return `<div class="card"><h2>Sleep — last ${b.length} nights</h2>
+    ${tiles}
+    <div class="chart" style="margin-top:10px">${mBarsWrap('slb', rows, bars, {tip: barTip})}</div>
+    <div class="elegend" style="margin:4px 0 10px"><span><i style="background:#6366F1"></i>deep</span><span><i style="background:#A78BFA"></i>REM</span><span><i style="background:#4B5085"></i>core</span><span class="dim">dotted = 8h need</span></div>
+    <div class="chart-head"><span class="hero sm" style="color:${READY_COL(last.ready)[0]}">${last.ready}</span><span class="dim">readiness · ${esc(last.label || '')}</span>
+      <span class="hero sm" style="margin-left:auto;color:#C4B5FD">${last.sleep}</span><span class="dim">sleep score</span></div>
+    <div class="chart">${mLineChart('sll', b.map(x => x.date), [
+      {vals: b.map(x => +x.ready), color: '#34D399', fill: true},
+      {vals: b.map(x => +x.sleep), color: '#A78BFA', dash: '4 4', sw: 1.6, glow: false, end: false},
+    ], {h: 150, base: 60, tip: lineTip, fmtY: v => Math.round(v)})}</div>
+    <div class="dim mono" style="font-size:10px;margin-top:4px">touch a bar or the line for that night · dotted line = 60 readiness</div></div>`;
 }
 
 function rMeter(){
