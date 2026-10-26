@@ -2330,7 +2330,7 @@ function rToday(){
     return rows.length ? `<div class="pname">FROM TODAY'S PLAN</div>` + rows.map(taskRowHTML).join('') : '';
   })();
   if (isDesk()) return todayDeskHTML({shCard, meter, bar, evCard, sorted, planSection, open, today});
-  return wakeChallengeHTML() + goalConfirmsHTML() + shCard + meter + bodyCardHTML() + capacityWarnHTML() + planBlocksHTML() + replanCardHTML() + creditsCardHTML() + caffeineCardHTML() + sleepNightsCardHTML() + waitingOnHTML() + evCard +
+  return goalConfirmsHTML() + shCard + meter + bodyCardHTML() + capacityWarnHTML() + planBlocksHTML() + replanCardHTML() + creditsCardHTML() + caffeineCardHTML() + sleepNightsCardHTML() + waitingOnHTML() + evCard +
     (bar ? `<div class="card"><h2>Today's energy</h2>${bar}</div>` : '') +
     chipsHTML() +
     (sorted.length ? sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — add a task below or check TASKS.</div>`) +
@@ -3159,7 +3159,11 @@ function wakeCard(){
   }
   return S._wakeCard;
 }
+/* 2026-10-25: the Morning card is off the TODAY page — daily learning lives in EXPLORE now
+   (Skyler: "if there's an explore page, then get rid of the daily learning thingy"). Functions kept for
+   the CARDS tab; wakeChallengeHTML is no longer rendered anywhere. */
 function wakeChallengeHTML(){
+  if (true) return '';
   if (!wakeChallengeNeeded()) return '';
   const c = wakeCard();
   if (!c) return `<div class="card" style="border-color:var(--accent)"><h2>☀️ Morning card</h2>
@@ -3470,7 +3474,7 @@ function todayDeskHTML(p){
     .replace(/id="(vz[^"]+)"/g, 'id="$1b"').replace(/url\(#(vz[^)]+)\)/g, 'url(#$1b)');   // own gradient ids — the hidden copy can't serve them
   // columns
   const rows = p.sorted.length ? p.sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — press / to add a task.</div>`;
-  const c1 = wakeChallengeHTML() + goalConfirmsHTML() + p.shCard +
+  const c1 = goalConfirmsHTML() + p.shCard +
     chipsHTML() + rows + p.planSection;
   const showCap = !(d && d.available != null) || d.status === 'over';
   const c2 = planBlocksHTML() + (showCap ? capacityWarnHTML() : '') + creditsCardHTML() + replanCardHTML();
