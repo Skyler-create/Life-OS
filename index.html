@@ -146,7 +146,7 @@ details.goal>summary::-webkit-details-marker{display:none}
    the wrapper's bottom strip sitting under the fixed glass nav/addbar was
    unreachable — late evening (≈10:30 PM+) got cut off. 132px = main's own
    bottom-bar clearance. Taps on the tail are inert (outside .daygrid). */
-.gridwrap::after{content:"";display:block;height:210px}  /* s36: bigger tail so midnight always clears the bars */
+.gridwrap::after{content:"";display:block;height:210px}  /* s36: cycle card above YC grid pushed it lower — bigger tail so midnight always clears the bars */
 .tmeta .due-today{color:var(--focus)}
 .tmeta .overdue{color:var(--accent)}
 .tmeta .hard{color:var(--accent)}
@@ -249,6 +249,7 @@ details.bsec>.ginner{padding:0 10px 10px}
 .cal-h button{padding:4px 14px;color:var(--dim);font-size:16px;border:1px solid var(--line);border-radius:999px;
   background:rgba(255,255,255,.02)}
 .cal-h button:active{color:var(--text);border-color:var(--dim)}
+.cal-h button.ycnav{padding:7px 20px;font-size:22px;line-height:1}  /* bigger prev/next tap targets on the YC header */
 .cal-g{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
 .cal-g .dow{text-align:center;font-family:var(--mono);font-size:9px;color:var(--dim);letter-spacing:1px;padding:4px 0 6px}
 .cal-d{position:relative;aspect-ratio:1;border-radius:10px;font-size:12px;color:var(--text);border:1px solid transparent;background:none}
@@ -500,8 +501,31 @@ details.bsec>.ginner{padding:0 10px 10px}
     #0E1017;
   background-size:22px 22px, auto, auto}
 
+/* her calendar — violet-rose, unmistakably not your red */
+main[data-view="yc"] .evblk{
+  background:linear-gradient(165deg, rgba(192,132,252,.28), rgba(168,85,247,.12) 55%, rgba(112,50,180,.16));
+  border-color:rgba(216,180,254,.38);border-left-color:#C084FC;
+  box-shadow:0 6px 16px -6px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.09)}
+main[data-view="yc"] .evblk b{color:#E4C8FF}
+main[data-view="yc"] .wk-col.now{
+  background:linear-gradient(180deg,rgba(192,132,252,.14),rgba(192,132,252,.03) 30%,rgba(192,132,252,.02));
+  box-shadow:1px 0 0 rgba(192,132,252,.35) inset, -1px 0 0 rgba(192,132,252,.35) inset}
+main[data-view="yc"] .wk-col-h.now .dn{
+  background:linear-gradient(135deg,#C084FC,#9333EA);box-shadow:0 3px 12px rgba(168,85,247,.5)}
+main[data-view="yc"] .mo-cell.today{border-color:rgba(192,132,252,.4);box-shadow:0 0 18px -6px rgba(192,132,252,.4)}
+main[data-view="yc"] .mo-cell.today .mo-d{background:linear-gradient(135deg,#C084FC,#9333EA);box-shadow:0 2px 8px rgba(168,85,247,.4)}
+main[data-view="yc"] .seg button.on{background:linear-gradient(135deg,#A855F7,#7C3AED);box-shadow:0 2px 12px rgba(168,85,247,.45)}
+main[data-view="yc"] .nowline{background:linear-gradient(90deg,#E9D5FF,#A855F7 55%,rgba(168,85,247,.25));box-shadow:0 0 10px rgba(192,132,252,.55)}
+main[data-view="yc"] .nowline::before{background:#E9D5FF;box-shadow:0 0 10px rgba(192,132,252,.9), 0 0 22px rgba(192,132,252,.45)}
+
+/* her cycle on the month grid: actual period days solid rose, estimates a soft ring */
+.mo-cell.cyca{background:rgba(251,113,133,.14);border-color:rgba(251,113,133,.3)}
+.mo-cell.cyca .mo-d{color:#FDA4AF}
+.mo-cell.cycp{box-shadow:inset 0 0 0 1px rgba(251,113,133,.35);background:rgba(251,113,133,.05)}
+
 /* the time cursor goes COOL BLUE everywhere (s31, Skyler's ask) — a red line
-   on a red theme camouflaged; blue cuts through. */
+   on a red theme camouflaged; blue cuts through. YC's stays violet via the
+   higher-specificity data-view override above. */
 .nowline{background:linear-gradient(90deg,#BAE6FD,#38BDF8 55%,rgba(56,189,248,.25));
   box-shadow:0 0 10px rgba(56,189,248,.6)}
 .nowline::before{background:#E0F2FE;
@@ -1032,8 +1056,8 @@ document.getElementById('a-email').value = OWNER;
    load and painted immediately on the next open, with a "cached · refreshing" pill until fresh data lands.
    MONEY data is deliberately NOT cached (PIN-gated server side; it never touches localStorage). */
 const SNAP_KEYS = ['tasks','goals','goalLogsToday','brief','logs','todayLog','prevLog','credits','planBlocks','settings','wakeTargets',
-  'events','freezes','dayLoad','scoreNow','weekHealth','focusOpen','caff','tonight','sleepNights','body','people',
-  'waitingOn','dayTags','sleepStats','adherence'];   // TODAY essentials only — jobs/quests/explore/news reload live
+  'events','freezes','ttEvents','dayLoad','scoreNow','weekHealth','focusOpen','caff','tonight','sleepNights','body','people',
+  'waitingOn','cycle','cycleMarks','dayTags','sleepStats','adherence'];   // TODAY essentials only — jobs/quests/explore/news reload live
 const SNAP_MIN  = ['tasks','goals','goalLogsToday','brief','logs','todayLog','prevLog','credits','planBlocks','settings','scoreNow','focusOpen'];
 function saveSnapshot(){
   // iOS Safari gives ~5 MB of localStorage per origin and chatHistory etc. live there too: cap the snapshot at
@@ -1117,6 +1141,9 @@ async function loadAll(){
     db.from('lifeos_settings').select('key,value'),
   ];
   const Q2 = [
+    db.from('timetree_events').select('*')
+      .or(`start_ts.gte.${new Date(Date.now() - 60 * 864e5).toISOString()},start_date.gte.${new Date(Date.now() - 60 * 864e5).toLocaleDateString('sv-SE')}`)
+      .order('start_ts', {ascending: true, nullsFirst: true}).limit(1000),
     db.from('day_load').select('*').gte('date', today).order('date').limit(3),
     db.rpc('lifeos_score', {d: today}),
     db.rpc('lifeos_week_health'),
@@ -1129,6 +1156,8 @@ async function loadAll(){
     db.from('cards').select('*').not('proposed_at', 'is', null).order('proposed_at').limit(12),
     db.rpc('lifeos_retention'),
     db.from('people').select('*').order('month').order('day'),
+    db.rpc('lifeos_cycle'),
+    db.from('cycle_marks').select('*').order('date'),
     db.rpc('lifeos_money_week'),
     db.from('fin_accounts').select('*').order('institution').order('name'),
     db.from('fin_transactions').select('*').gte('posted', new Date(Date.now() - 400 * 864e5).toLocaleDateString('sv-SE'))
@@ -1166,11 +1195,11 @@ async function loadAll(){
   }
   const W2 = await Promise.all(Q2);
   clearTimeout(loadAll._slowT);
-  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pp, mw, fa, ft, fr, stx, mch, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, qsv, exf, exs] = W1.concat(W2);
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pp, cy, cm, mw, fa, ft, fr, stx, mch, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, qsv, exf, exs] = W1.concat(W2);
   // 2026-10-25 OUTAGE FIX: if the server itself is failing (5xx / timeout / schema-cache reload / network),
   // do NOT overwrite good state with empties. Keep what is on screen, show the stale bar, retry with backoff.
   // A permanent per-query error (RLS, missing RPC) is NOT in this class and still falls through as before.
-  const results = [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pp, mw, fa, ft, fr, stx, mch, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, qsv, exf, exs];
+  const results = [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pp, cy, cm, mw, fa, ft, fr, stx, mch, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, qsv, exf, exs];
   const outage = results.filter(r => r && r.error && isServerHiccup(r.error));
   if (outage.length) {
     if (seq !== loadAll._seq) return;
@@ -1195,6 +1224,7 @@ async function loadAll(){
   S.focusOpen = (fs.data || [])[0] || null;
   S.credits = cr.data || null;
   S.planBlocks = pb.data || [];
+  S.ttEvents = tt.data || [];
   S.dayLoad = (dload.data || []).find(r => r.date === today) || (dload.data || [])[0] || null;
   S.scoreNow = scn.data || null;   // C7: server is the ONLY score implementation
   S.weekHealth = wh.data || null;  // C4: "am I okay this week" (server-computed)
@@ -1206,6 +1236,8 @@ async function loadAll(){
   S.cardInbox = ci.data || [];     // C3: proposed cards awaiting approve/reject
   S.retention = rt.data || null;   // C3: per-topic retention health
   S.people = pp.data || [];        // people & dates
+  S.cycle = cy.data || null;       // her cycle: estimates, never scripts
+  S.cycleMarks = cm.data || [];    // actual period start marks
   S.money = mw.data || null;       // finance engine: single-source weekly read
   S.finAccounts = fa.data || [];
   S.finTx = ft.data || [];
@@ -1751,7 +1783,7 @@ async function saveReflection(){
 }
 
 /* ================= rendering ================= */
-const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['cal','CAL'],['quests','QUESTS'],['explore','EXPLORE'],['chat','CHAT'],['reflect','REFLECT'],['coffee','COFFEE'],['time','TIME'],['log','LOG'],['trends','TRENDS'],['money','MONEY'],['jobs','JOBS'],['cards','CARDS'],['settings','SETTINGS']];
+const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['cal','CAL'],['quests','QUESTS'],['explore','EXPLORE'],['chat','CHAT'],['reflect','REFLECT'],['coffee','COFFEE'],['yc','YC'],['time','TIME'],['log','LOG'],['trends','TRENDS'],['money','MONEY'],['jobs','JOBS'],['cards','CARDS'],['settings','SETTINGS']];
 function setView(v){ S.view = v; S.editing = null; localStorage.setItem('view', v); render(); }
 function setFilt(f){ S.filt = f; localStorage.setItem('filt', f); render(); }
 
@@ -1774,7 +1806,7 @@ function render(){
   chip.innerHTML = `<span class="flame">${sc >= 3 ? '🔥' : '·'}</span><b>${sc}</b><span style="font-size:10px">d</span>${sh ? ' ' + '🛡'.repeat(sh) : ''}`;
   chip.classList.toggle('hot', sc >= 3);
   const main = document.getElementById('main');
-  main.dataset.view = S.view;   // v4: per-view CSS theming
+  main.dataset.view = S.view;   // v4: per-view CSS theming (YC tab = her palette)
   // Preserve scroll position on re-renders of the SAME view (adding a task,
   // toggling, editing all call render() and would otherwise jump to top).
   // Switching tabs is a different view → falls through to a natural top reset.
@@ -1785,6 +1817,7 @@ function render(){
   if (S.view === 'brief')   { main.innerHTML = rBrief(); if (S.bionic) main.querySelectorAll('.md').forEach(bionicify); markBriefRead(); }
   if (S.view === 'reflect') { main.innerHTML = rReflect(); updateScorePreview(); }
   if (S.view === 'coffee')  main.innerHTML = rCoffee();
+  if (S.view === 'yc')      main.innerHTML = rYC();
   if (S.view === 'log')     main.innerHTML = rLog();
   if (S.view === 'time')    main.innerHTML = rTime();
   if (S.view === 'trends')  main.innerHTML = rTrends();
@@ -1813,7 +1846,7 @@ function render(){
   // 24h grids open scrolled to 6 AM; keep the user's grid scroll across re-renders
   const gw = document.getElementById('gridScroll');
   if (gw) {
-    const key = S.view + ':' + S.calView + ':' + (S.calSel || '');
+    const key = S.view + ':' + S.calView + ':' + (S.calSel || '') + ':' + (S.ycView || '') + ':' + (S.ycSel || '');
     if (S._gsKey !== key) { gw.scrollTop = +gw.dataset.h6 || 0; S._gsKey = key; S._gsPos = gw.scrollTop; }
     else gw.scrollTop = S._gsPos ?? (+gw.dataset.h6 || 0);
   } else { S._gsKey = null; }
@@ -1909,9 +1942,9 @@ function render(){
     // tab-switch band is roughly 20-70px from either edge.
     const EDGE = 70;
     const fromEdge = swX < EDGE || swX > window.innerWidth - EDGE;
-    if (S.view === 'cal' && !fromEdge) {
+    if ((S.view === 'cal' || S.view === 'yc') && !fromEdge) {
       const dir = dx < 0 ? 1 : -1;
-      const pageFn = navCal;
+      const pageFn = S.view === 'yc' ? navYC : navCal;   // YC tab pages her calendar, same feel as CAL
       const w = Math.min(window.innerWidth, 640);
       mainEl.style.transition = 'transform .13s ease-in, opacity .13s ease-in';
       mainEl.style.transform = `translateX(${-dir * w}px)`; mainEl.style.opacity = '0';
@@ -3017,7 +3050,7 @@ async function saveWakeTarget(dow, field, value){
 function tzPickerHTML(){
   const cur = (S.settings && S.settings.tz) || 'America/New_York';
   const zones = [['America/New_York','Eastern'],['America/Chicago','Central'],['America/Denver','Mountain'],
-    ['America/Los_Angeles','Pacific'],['America/Phoenix','Arizona'],['Asia/Taipei','Taipei'],['UTC','UTC']];
+    ['America/Los_Angeles','Pacific'],['America/Phoenix','Arizona'],['Asia/Taipei','Taipei (YC)'],['UTC','UTC']];
   const open = S.openGroups.has('g:tz') ? 'open' : '';
   return `<details class="bsec" style="margin-top:8px" ${open} ontoggle="tgGoal('tz', this.open)">
     <summary style="padding:8px 10px;cursor:pointer;font-size:12px">🌐 Time zone — ${esc(cur.split('/').pop().replace('_',' '))}</summary>
@@ -3287,7 +3320,7 @@ const isDesk = () => DESK_MQ.matches;
   if (!document.getElementById('app').classList.contains('hidden')) render();
 });
 const NAV_GROUPS = [['Daily', ['today', 'brief', 'tasks', 'cal', 'quests', 'explore', 'reflect']], ['Insight', ['trends', 'time', 'log']],
-  ['Life', ['coffee', 'money', 'jobs', 'cards', 'chat']], ['', ['settings']]];
+  ['Life', ['coffee', 'money', 'jobs', 'cards', 'yc', 'chat']], ['', ['settings']]];
 const NAV_ICON = {
   today: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2.5 12h2M19.5 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   tasks: '<rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="M8 12.2l2.8 2.8L16 9.5"/>',
@@ -3298,6 +3331,7 @@ const NAV_ICON = {
   chat: '<path d="M20.5 12a8.5 8.5 0 0 1-12.3 7.6L3.5 20.5l1-4.4A8.5 8.5 0 1 1 20.5 12z"/>',
   reflect: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
   coffee: '<path d="M4 9h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z"/><path d="M17 11h1.5a2.5 2.5 0 0 1 0 5H17M8 2.5v3M12 2.5v3"/>',
+  yc: '<path d="M12 20s-7.5-4.6-7.5-10.2A4.2 4.2 0 0 1 12 7.3a4.2 4.2 0 0 1 7.5 2.5C19.5 15.4 12 20 12 20z"/>',
   time: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
   log: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
   trends: '<path d="M3 17l5.5-5.5 4 4L20 8"/><path d="M15 8h5v5"/>',
@@ -3343,7 +3377,7 @@ function deskLayout(main){
   const kids = [...main.children];
   const cardsOnly = kids.length > 1 && kids.every(k => k.matches('.card, details.bsec, .empty'));
   const masonry = v !== 'today' && MASONRY_VIEWS.has(v) && cardsOnly;
-  const widecal = v === 'cal';
+  const widecal = v === 'cal' || v === 'yc';
   main.classList.toggle('masonry', masonry);
   main.classList.toggle('widecal', widecal);
   main.classList.toggle('narrow', v !== 'today' && !masonry && !widecal);
@@ -4092,6 +4126,259 @@ document.addEventListener('change', async e => {
     await refreshScore(); updateScorePreview();
   }
 });
+
+/* --- YC (TimeTree, read-only) — same calendar format as CAL, but her events only --- */
+/* HER wall clock: the whole tab is laid out on Asia/Taipei days (fixed UTC+8,
+   no DST), exactly like TimeTree shows her. Shift the epoch +8h and read UTC
+   fields. Rendering in viewer-local time shifted her morning events onto the
+   previous ET day — they looked "missing". */
+const TPE_MS = 8 * 3600000;
+const tpeWall = ts => new Date(ts + TPE_MS);              // wall-clock via getUTC*
+const w2iso = w => w.toISOString().slice(0, 10);
+const tpeTodayISO = () => w2iso(tpeWall(Date.now()));
+const tpeNowMins = () => { const w = tpeWall(Date.now()); return w.getUTCHours() * 60 + w.getUTCMinutes(); };
+/* your-time label for a segment: "11 PM" (+ "Jul 24" when it's a different local day than her date) */
+function yourTimeLabel(ts0, herIso){
+  if (!ts0) return '';
+  const d = new Date(ts0);
+  const t = d.toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit'});
+  const sameDay = d.toLocaleDateString('sv-SE') === herIso;
+  return t + (sameDay ? '' : ' ' + d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'}));
+}
+/* map timetree_events -> {iso: [{date,start_time,end_time,title,ts0,ts1}]} (all-day expanded across its range) */
+function ttEvByDay(){
+  const map = {};
+  const push = (iso, ev) => { if (iso) (map[iso] = map[iso] || []).push(ev); };
+  (S.ttEvents || []).forEach(e => {
+    const title = e.title || '(untitled)';
+    if (e.all_day || (!e.start_ts && e.start_date)) {
+      const s = e.start_date; if (!s) return;
+      const startD = fromISO(s), endD = e.end_date ? fromISO(e.end_date) : null;
+      if (!endD || endD <= startD) { push(s, {date:s, start_time:null, end_time:null, title}); }
+      else { for (let d = new Date(startD); d < endD; d.setDate(d.getDate()+1)) {   // DTEND is exclusive for all-day
+        const iso = d.toLocaleDateString('sv-SE'); push(iso, {date:iso, start_time:null, end_time:null, title}); } }
+    } else if (e.start_ts) {
+      const hm = w => w.toISOString().slice(11, 16);       // her wall-clock HH:MM
+      const t0 = +new Date(e.start_ts);
+      const t1 = e.end_ts ? +new Date(e.end_ts) : t0 + 3600000;
+      const s = tpeWall(t0), en = tpeWall(t1);
+      const sIso = w2iso(s), eIso = w2iso(en);
+      if (sIso === eIso) {
+        push(sIso, {date:sIso, start_time:hm(s), end_time:hm(en), title, ts0:t0, ts1:t1});
+      } else {
+        // spans her midnight / multiple days -> split into per-day segments
+        push(sIso, {date:sIso, start_time:hm(s), end_time:'24:00', title, ts0:t0, ts1:t1});
+        let cur = new Date(Date.UTC(s.getUTCFullYear(), s.getUTCMonth(), s.getUTCDate() + 1));
+        const endDay = new Date(Date.UTC(en.getUTCFullYear(), en.getUTCMonth(), en.getUTCDate()));
+        while (cur < endDay) { const i2 = w2iso(cur); push(i2, {date:i2, start_time:'00:00', end_time:'24:00', title, ts0:t0, ts1:t1}); cur.setUTCDate(cur.getUTCDate() + 1); }
+        if (en.getUTCHours() * 60 + en.getUTCMinutes() > 0) push(eIso, {date:eIso, start_time:'00:00', end_time:hm(en), title, ts0:t0, ts1:t1});
+      }
+    }
+  });
+  return map;
+}
+function setYCView(v){ S.ycView = v; localStorage.setItem('ycView', v); render(); }
+function ycToday(){ S.ycSel = tpeTodayISO(); const d = fromISO(S.ycSel); S.ycY = d.getFullYear(); S.ycM = d.getMonth(); render(); }
+function selYCDay(iso){ S.ycSel = iso; S.ycView = 'day'; localStorage.setItem('ycView','day'); const d = fromISO(iso); S.ycY = d.getFullYear(); S.ycM = d.getMonth(); render(); }
+function navYC(dir){
+  if (S.ycView === 'month') { let m = S.ycM + dir, y = S.ycY; if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; } S.ycM = m; S.ycY = y; }
+  else { const d = fromISO(S.ycSel); d.setDate(d.getDate() + (S.ycView === 'week' ? 7 : 1) * dir); S.ycSel = d.toLocaleDateString('sv-SE'); S.ycY = d.getFullYear(); S.ycM = d.getMonth(); }
+  render();
+}
+/* her cycle — context strip on the YC tab. Estimates from her real dates,
+   framed as weather, not a script. */
+const CYC_PHASE = {
+  period:     {icon: '🌸', label: 'period',                          color: '#FB7185'},
+  pms:        {icon: '🌙', label: 'PMS window — period coming soon', color: 'var(--focus)'},
+  follicular: {icon: '🌱', label: 'follicular — post-period rebound', color: 'var(--done)'},
+  mid:        {icon: '☀️', label: 'mid-cycle — ovulation window',     color: '#C084FC'},
+  luteal:     {icon: '🌾', label: 'luteal — the wind-down half',      color: '#A78BFA'},
+  unknown:    {icon: '❔', label: 'past the usual estimate',          color: 'var(--dim)'},
+};
+/* rotating considerate-boyfriend reminders — a different one each day, per
+   phase. Patterns, not rules: the footer still says ask, don't assume. */
+const CYC_TIPS = {
+  period: [
+    'Cramps and low energy usually hit hardest the first day or two. Open with "how are you feeling?" before your own day, and keep the call low-pressure.',
+    'You can still take care of her from far away — order a warm meal or her comfort snack to her place. A small gesture across the distance lands big right now.',
+    'Patience runs thin on period days. If she seems short on the call, let it slide tonight and don\'t take the edge personally — it\'s the week, not you.',
+    'Skip fixing it. "That sounds really rough, I\'m sorry" beats any solution — she wants to feel heard, not problem-solved.',
+    'Ask "what do you need right now?" instead of guessing, then actually follow through — even a heating-pad reminder or a good-night playlist counts.',
+    'Some period days she wants closeness, some she wants space. Read her energy at the start of the call and follow her lead — don\'t force either.',
+    'A quick "thinking of you, go rest" text mid-day her time hits harder than you\'d expect when she\'s not feeling great. Low effort, high payoff.',
+    'Her sleep and appetite can be off this week. Keep the call gentle and let her tap out early if she\'s tired — reschedule the big talks for the good days.',
+  ],
+  pms: [
+    'The days before her period can bring mood swings and a shorter fuse. Lead with patience — and never, ever say "is it your hormones".',
+    'Small annoyances can feel huge this week. Reassurance lands better than logic — "you\'re right, that\'s frustrating" goes further than fixing it.',
+    'PMS often brings bloating, fatigue, and being hard on herself. A genuine compliment or a "you\'re doing great" is rarely wrong right now.',
+    'If she seems off on the call, it\'s probably not about you. Stay soft, ask gentle questions, and save the big topics for next week.',
+    'Her energy dips before it starts. Suggest cozy, low-stakes plans — a movie over video call beats anything demanding.',
+    'Cravings are real this week. Surprising her with a food delivery to her place is an easy way to say "I\'ve got you" from across the distance.',
+    'Sleep can get restless right before her period. If she\'s wiped on the call, let her crash early instead of stretching it out.',
+    'Give a little extra grace with slow replies and short texts right now — she\'s running on less. A patient "no rush, rest up" reassures more than it seems.',
+  ],
+  follicular: [
+    'Post-period rebound: energy and mood typically climb day by day. Great stretch for plans and new ideas.',
+    'She likely feels the most like herself this week — a good window for the bigger conversations you have been saving.',
+    'Rising-energy phase. Adventures, projects, and future-talk land especially well right now.',
+    'Optimism usually runs higher here. Plan something for you two to look forward to.',
+    'The easiest stretch of the cycle for most people — enjoy it, and bank goodwill for the harder weeks.',
+  ],
+  mid: [
+    'Mid-cycle is typically peak energy and peak affection — she may want extra closeness and attention. Give it generously.',
+    'These are usually her most social, confident days. Big date energy — match it.',
+    'Affection often peaks around ovulation. Do not leave the flirty texts on read.',
+    'High-energy days — she may be up for spontaneity that would flop in other weeks.',
+    'Confidence and connection run high mid-cycle. Compliments hit different right now — spend them freely.',
+  ],
+  luteal: [
+    'Luteal = the wind-down half after mid-cycle: energy slowly fades toward her period. Nothing is wrong — plans just land better earlier in the day.',
+    'In this stretch, comfort starts beating excitement. Cozy beats crowded.',
+    'She may tire faster and crave more comfort (and comfort food) this half. Totally normal — keep evenings gentle.',
+    'Focus and patience taper gradually through the luteal weeks. Fewer demands, more ease.',
+    'The steady part of luteal comes first, PMS at the tail. Enjoy the calm — and be ready to soften as the estimate gets close.',
+  ],
+};
+function cycleCardHTML(){
+  const c = S.cycle;
+  if (!c || c.status !== 'ok') {
+    return `<div class="card"><h2>Her cycle</h2>
+      <div class="dim" style="font-size:12px">Add her period start dates (one per cycle, button below the calendar) and this fills in — cycle day, phase, and a daily heads-up on how she might be feeling.</div></div>`;
+  }
+  const ph = CYC_PHASE[c.phase] || CYC_PHASE.unknown;
+  const pct = Math.min(Math.round(c.day / Math.max(c.avg_len, 1) * 100), 100);
+  const pZone = Math.round(c.period_days / c.avg_len * 100);
+  const pmsZone = Math.round(5 / c.avg_len * 100);
+  const pool = CYC_TIPS[c.phase];
+  const doy = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 864e5);
+  const tip = pool ? pool[(doy + (c.day || 0)) % pool.length] : (c.context || '');
+  return `<div class="card" style="border-color:${c.phase === 'period' || c.phase === 'pms' ? 'rgba(251,113,133,.35)' : 'rgba(255,255,255,.07)'}">
+    <div style="display:flex;align-items:baseline;gap:8px">
+      <h2 style="margin:0;flex:0 0 auto">Her cycle</h2>
+      <span class="mono" style="flex:1;min-width:0;text-align:right;font-size:11px;color:${ph.color}">${ph.icon} day ${c.day} of ~${c.avg_len} · ${ph.label}</span>
+    </div>
+    <div style="position:relative;height:6px;border-radius:99px;background:rgba(255,255,255,.06);margin:10px 0 8px;overflow:hidden">
+      <div style="position:absolute;left:0;top:0;bottom:0;width:${pZone}%;background:rgba(251,113,133,.35)"></div>
+      <div style="position:absolute;right:0;top:0;bottom:0;width:${pmsZone}%;background:rgba(251,191,36,.25)"></div>
+      <div style="position:absolute;left:${pct}%;top:-2px;width:10px;height:10px;margin-left:-5px;border-radius:50%;background:${ph.color};box-shadow:0 0 8px ${ph.color}"></div>
+    </div>
+    <div style="font-size:13px;line-height:1.55">💡 ${esc(tip)}</div>
+    <div class="mono dim" style="font-size:10px;margin-top:6px">patterns from her real dates — everyone differs; ask, don't assume</div>
+  </div>`;
+}
+async function markPeriod(){
+  const d = prompt('Period start date (YYYY-MM-DD)', todayISO());
+  if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) { if (d) toast('format: YYYY-MM-DD'); return; }
+  S.lastWrite = Date.now();
+  const {error} = await db.from('cycle_marks').insert({date: d});
+  toast(error ? '⚠ ' + error.message : '🌸 marked');
+  loadAll();
+}
+function rYC(){
+  if (!S.ycSel) S.ycSel = tpeTodayISO();
+  if (!S.ycView) S.ycView = localStorage.getItem('ycView') || 'day';
+  if (S.ycY == null) { const n = new Date(); S.ycY = n.getFullYear(); S.ycM = n.getMonth(); }
+  const evByDay = ttEvByDay();
+  const sel = fromISO(S.ycSel);
+  let label;
+  if (S.ycView === 'month') label = new Date(S.ycY, S.ycM, 1).toLocaleString('en-US', {month:'long', year:'numeric'});
+  else if (S.ycView === 'day') label = sel.toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric'});
+  else { const mon = new Date(sel); mon.setDate(sel.getDate() - ((sel.getDay()+6)%7)); const sun = new Date(mon); sun.setDate(mon.getDate()+6);
+    label = mon.toLocaleDateString('en-US', {month:'short', day:'numeric'}) + ' – ' + sun.toLocaleDateString('en-US', {month:'short', day:'numeric'}); }
+  const lastSync = (S.ttEvents || []).reduce((mx,e) => (e.updated_at || '') > mx ? e.updated_at : mx, '');
+  const header = `<div class="cal-h" style="margin-bottom:8px">
+    <button class="ycnav" onclick="navYC(-1)">‹</button><span class="mono">${label}</span>
+    <span><button class="btn" style="padding:2px 10px;font-size:10px;margin-right:6px" onclick="ycToday()">today</button><button class="ycnav" onclick="navYC(1)">›</button></span></div>
+  <div class="dim" style="font-size:11px;margin-bottom:8px">YC · TimeTree — read-only (her schedule)${lastSync ? ` · synced ${new Date(lastSync).toLocaleDateString([], {month:'short', day:'numeric'})}` : ''} · her clock (Taipei, +${Math.round((480 + new Date().getTimezoneOffset()) / 60)}h)</div>
+  <div class="chiprow" style="margin-bottom:10px">${['day','week','month'].map(v =>
+    `<button class="schip ${S.ycView === v ? 'on' : ''}" style="flex:1" onclick="setYCView('${v}')">${v.toUpperCase()}</button>`).join('')}</div>`;
+  const body = S.ycView === 'day' ? ycDayHTML(S.ycSel, evByDay)
+             : S.ycView === 'week' ? ycWeekHTML(evByDay)
+             : ycMonthHTML(evByDay);
+  const markBtn = `<button class="btn" style="width:100%;margin-top:8px;font-size:11px;color:var(--dim)" onclick="markPeriod()">+ mark a period start date</button>`;
+  return header + cycleCardHTML() + body + markBtn;
+}
+function ycDayHTML(iso, evByDay){
+  const evs = (evByDay[iso] || []).slice().sort((a,b) => (a.start_time || '').localeCompare(b.start_time || ''));
+  const allday = evs.filter(e => !e.start_time), timed = evs.filter(e => e.start_time);
+  const H0 = 0, H1 = 24, PPH = 48;
+  const blocks = timed.map(e => {
+    const [sh,sm] = e.start_time.split(':').map(Number);
+    let dur = 60; if (e.end_time) { const [eh,em] = e.end_time.split(':').map(Number); dur = Math.max(20, (eh*60+em) - (sh*60+sm)); }
+    const top = Math.max(0, ((sh-H0)*60+sm) * (PPH/60)), h = Math.max(22, dur * (PPH/60));
+    const yt = yourTimeLabel(e.ts0, iso);
+    return `<div class="evblk" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px" title="${esc(e.title)}"><b>${esc(e.start_time)}${e.end_time ? '–' + esc(e.end_time) : ''}</b>${esc(e.title)}${yt ? `<span style="opacity:.55"> · you ${esc(yt)}</span>` : ''}</div>`;
+  }).join('');
+  const rail = [...Array(H1-H0)].map((_,i) => `<div class="hrow" style="top:${i*PPH}px"><span>${hourLabel(H0+i)}</span></div>`).join('');
+  const nowLine = iso === tpeTodayISO() ? (() => { const mins = tpeNowMins() - H0*60; return (mins > 0 && mins < (H1-H0)*60) ? `<div class="nowline" style="top:${(mins*PPH/60).toFixed(0)}px"></div>` : ''; })() : '';
+  return `${allday.map(e => `<div class="evrow"><span class="mono">all-day</span><span>${esc(e.title)}</span></div>`).join('')}
+  <div class="gridwrap" id="gridScroll" data-h6="${6*PPH}" onscroll="S._gsPos=this.scrollTop;S._gsAt=Date.now()">
+    <div class="daygrid" style="height:${(H1-H0)*PPH}px;position:relative">${rail}${blocks}${nowLine}</div></div>
+  ${!evs.length ? '<div class="dim" style="font-size:12px;padding:6px 0">Nothing on her calendar this day.</div>' : ''}
+  <div style="height:10px"></div>`;
+}
+function ycWeekHTML(evByDay){
+  const anchor = fromISO(S.ycSel); const mon = new Date(anchor); mon.setDate(anchor.getDate() - ((anchor.getDay()+6)%7));
+  const H0 = 0, H1 = 24, PPH = 44;
+  const days = [...Array(7)].map((_,i) => { const d = new Date(mon); d.setDate(mon.getDate()+i); return d; });
+  const isos = days.map(d => d.toLocaleDateString('sv-SE'));
+  const tpeToday = tpeTodayISO();
+  const head = `<div class="wk-head"><span class="wk-gutter"></span>${days.map((d,i) => {
+    const iso = isos[i], n = (evByDay[iso] || []).length;
+    return `<button class="wk-col-h ${iso === tpeToday ? 'now' : ''}" onclick="selYCDay('${iso}')">
+      <span class="wd">${d.toLocaleDateString('en-US', {weekday:'narrow'})}</span>
+      <span class="dn">${d.getDate()}</span>${n ? `<i class="td">${n}</i>` : ''}</button>`; }).join('')}</div>`;
+  const allday = isos.map(iso => (evByDay[iso] || []).filter(e => !e.start_time));
+  const adRow = allday.some(a => a.length) ? `<div class="wk-allday"><span class="wk-gutter"></span>${allday.map(a =>
+    `<div class="wk-ad-cell">${a.slice(0,2).map(e => `<div class="wk-banner">${esc(e.title)}</div>`).join('')}${a.length > 2 ? `<div class="wk-banner more">+${a.length-2}</div>` : ''}</div>`).join('')}</div>` : '';
+  const rail = [...Array(H1-H0)].map((_,i) => `<div class="hrow" style="top:${i*PPH}px"><span>${hourLabel(H0+i).replace(' ','')}</span></div>`).join('');
+  const cols = isos.map(iso => {
+    const timed = (evByDay[iso] || []).filter(e => e.start_time);
+    const blocks = timed.map(e => {
+      const [sh,sm] = e.start_time.split(':').map(Number);
+      let dur = 60; if (e.end_time) { const [eh,em] = e.end_time.split(':').map(Number); dur = Math.max(25, (eh*60+em) - (sh*60+sm)); }
+      const top = Math.max(0, ((sh-H0)*60+sm) * (PPH/60)), h = Math.max(18, dur * (PPH/60));
+      return `<div class="wk-ev" style="top:${top.toFixed(0)}px;height:${h.toFixed(0)}px" title="${esc(e.title)}">${esc(e.title)}</div>`;
+    }).join('');
+    const nowline = iso === tpeToday ? (() => { const mins = tpeNowMins() - H0*60; return (mins > 0 && mins < (H1-H0)*60) ? `<div class="nowline" style="top:${(mins*PPH/60).toFixed(0)}px"></div>` : ''; })() : '';
+    return `<div class="wk-col ${iso === tpeToday ? 'now' : ''}" style="position:relative">${blocks}${nowline}</div>`;
+  }).join('');
+  return head + adRow + `<div class="gridwrap" id="gridScroll" data-h6="${6*PPH}" onscroll="S._gsPos=this.scrollTop;S._gsAt=Date.now()">
+    <div class="wk-grid" style="height:${(H1-H0)*PPH}px"><div class="wk-rail">${rail}</div>${cols}</div></div>
+  <div class="dim mono" style="font-size:10px;margin-top:6px">tap a day header for the day view</div>`;
+}
+function ycMonthHTML(evByDay){
+  const y = S.ycY, m = S.ycM;
+  const startDow = (new Date(y, m, 1).getDay()+6)%7, days = new Date(y, m+1, 0).getDate();
+  // cycle shading: actual marks (solid rose) + predicted ranges (soft ring)
+  const plen = (S.cycle && S.cycle.period_days) || 4;
+  const cycDays = {};
+  (S.cycleMarks || []).forEach(mk => {
+    for (let i = 0; i < plen; i++) {
+      const d2 = new Date(mk.date + 'T12:00:00'); d2.setDate(d2.getDate() + i);
+      cycDays[d2.toLocaleDateString('sv-SE')] = 'cyca';
+    }
+  });
+  ((S.cycle && S.cycle.upcoming) || []).forEach(r => {
+    const e2 = new Date(r.end + 'T12:00:00');
+    for (let d2 = new Date(r.start + 'T12:00:00'); d2 <= e2; d2.setDate(d2.getDate() + 1)) {
+      const k = d2.toLocaleDateString('sv-SE');
+      if (!cycDays[k]) cycDays[k] = 'cycp';
+    }
+  });
+  let cells = '';
+  for (let i = 0; i < startDow; i++) cells += '<span></span>';
+  for (let d = 1; d <= days; d++) {
+    const iso = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const evs = (evByDay[iso] || []).slice().sort((a,b) => (a.start_time || '').localeCompare(b.start_time || ''));
+    const shown = evs.slice(0,3).map(e => `<div class="mo-chip" style="border-color:#818CF8">${esc(e.title)}</div>`).join('');
+    const more = evs.length > 3 ? `<div class="mo-more">+${evs.length-3}</div>` : '';
+    cells += `<button class="mo-cell ${S.ycSel === iso ? 'selq' : ''} ${iso === tpeTodayISO() ? 'today' : ''} ${cycDays[iso] || ''}" onclick="selYCDay('${iso}')"><span class="mo-d">${d}</span>${shown}${more}</button>`;
+  }
+  return `<div class="card"><div class="cal-g">${['M','T','W','T','F','S','S'].map(d => `<span class="dow">${d}</span>`).join('')}${cells}</div>
+    <div class="elegend" style="margin-top:8px"><span><i style="background:#818CF8"></i>her events</span><span><i style="background:#FB7185"></i>period</span><span><i style="background:rgba(251,113,133,.35)"></i>est.</span><span style="margin-left:auto" class="dim">tap a day</span></div></div>`;
+}
 
 /* --- LOG --- */
 function rLog(){
@@ -5321,7 +5608,7 @@ function fmtR(n){ const v = +n || 0; return Math.abs(v) >= 1000 ? fmt$(v) : (v <
 function pctHTML(v, dec){ if (v == null || isNaN(v)) return '<span class="dim">—</span>'; const d = dec != null ? dec : 1; return `<span style="color:${v > 0 ? 'var(--done)' : v < 0 ? 'var(--accent-hi)' : 'var(--dim)'}">${v > 0 ? '+' : ''}${(+v).toFixed(d)}%</span>`; }
 function deltaChip(cur, prev, invert){ if (!prev) return ''; const d = (cur - prev) / prev * 100; const good = invert ? d <= 0 : d >= 0; return `<span class="mono" style="font-size:11px;font-weight:700;padding:2px 7px;border-radius:999px;background:rgba(255,255,255,.05);text-transform:none;letter-spacing:0;color:${good ? 'var(--done)' : 'var(--accent-hi)'}" title="vs previous period">${d >= 0 ? '▲' : '▼'} ${Math.abs(Math.round(d))}% vs prev</span>`; }
 const MCAT_COLOR = {food_out: '#FF7A5C', groceries: '#4ADE80', shopping: '#FBBF24', travel: '#38BDF8', transport: '#818CF8', subscriptions: '#C4B5FD',
-  fees: '#F472B6', fun: '#FB923C', health: '#2DD4BF', other: '#8A90A0', gifts: '#F9A8D4', bike: '#A3E635', education: '#A78BFA', housing: '#F59E0B',
+  fees: '#F472B6', fun: '#FB923C', health: '#2DD4BF', other: '#8A90A0', gifts_yc: '#F9A8D4', bike: '#A3E635', education: '#A78BFA', housing: '#F59E0B',
   income: '#4ADE80', investing: '#818CF8', transfers: '#6B7280', uncategorized: '#4B5563'};
 const MCAT_FALLBACK = ['#FF7A5C', '#38BDF8', '#FBBF24', '#4ADE80', '#C4B5FD', '#F472B6', '#2DD4BF', '#FB923C', '#A3E635', '#818CF8'];
 function mcatColor(c){ if (MCAT_COLOR[c]) return MCAT_COLOR[c]; let h = 0; for (const ch of String(c || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return MCAT_FALLBACK[h % MCAT_FALLBACK.length]; }
