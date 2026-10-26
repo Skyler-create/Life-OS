@@ -798,8 +798,12 @@ nav button.on{box-shadow:0 4px 18px rgba(225,37,27,.4),inset 0 1px 0 rgba(255,25
   main.desk.narrow > *{max-width:880px;margin-left:auto;margin-right:auto}
   main.desk.widecal > *{max-width:1320px;margin-left:auto;margin-right:auto}
   main.desk.widecal .gridwrap{max-height:calc(100vh - 250px)}
-  main.desk.masonry{columns:400px 3;column-gap:16px}
-  main.desk.masonry > *{break-inside:avoid;-webkit-column-break-inside:avoid;page-break-inside:avoid}
+  /* masonry lives on an auto-height wrapper, NOT on main: main is a fixed-height scroller, and CSS multicol inside a
+     fixed-height box balances to that height and spills the extra columns sideways (the TRENDS/SETTINGS horizontal
+     scrollbar, 2026-10-26). The wrapper grows with its content so the columns balance by content instead. */
+  main.desk.masonry > .mcols{columns:400px 3;column-gap:16px;max-width:1640px;margin:0 auto}
+  main.desk.masonry > .mcols > *{break-inside:avoid;-webkit-column-break-inside:avoid;page-break-inside:avoid}
+  main.desk.narrow > .qstack{max-width:440px}
 
   /* TODAY dashboard */
   .dash{max-width:1640px;margin:0 auto}
@@ -866,6 +870,13 @@ nav button.on{box-shadow:0 4px 18px rgba(225,37,27,.4),inset 0 1px 0 rgba(255,25
 .bodytxt{flex:1;min-width:0}
 .bodytxt .bl{font-family:'Inter',sans-serif;font-weight:800;font-size:19px;letter-spacing:-.02em;line-height:1.1}
 .bodytxt .bw{font-family:var(--mono);font-size:10.5px;color:var(--dim);line-height:1.5;margin-top:4px}
+/* day guide: one plain sentence + up to three cue chips (TODAY hero on desktop, Body card on the phone) */
+.bguide{margin-top:10px;padding-top:9px;border-top:1px solid var(--line);font-size:13px;line-height:1.45;color:var(--text)}
+.hguide{font-size:14px;line-height:1.45;color:var(--text);margin-top:10px}
+.hguide b{font-weight:800}
+.gcues{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+.gcues span{font-family:var(--mono);font-size:10.5px;line-height:1.35;padding:4px 8px;border-radius:8px;color:var(--text);
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08)}
 .bodyrings{position:relative;display:flex;gap:10px;align-items:center}
 .bodykpi{cursor:pointer}
 @media (min-width:1024px){
@@ -1006,10 +1017,11 @@ const PRIO = {high:3, med:2, low:1};
 let S = {
   tasks: [], goals: [], goalLogsToday: [], brief: null, todayLog: null, prevLog: null,
   view: localStorage.getItem('view') || 'today',
-  filt: localStorage.getItem('filt') || 'ALL',
-  addEnergy: localStorage.getItem('addEnergy') || 'FOCUS',
+  // 2026-10-26: a phone that last picked PARALLEL (removed 10/25) kept filt='PARALLEL' → every deck empty; validate stored picks
+  filt: (f => ['ALL', 'DEEP', 'FOCUS', 'LIGHT'].includes(f) ? f : 'ALL')(localStorage.getItem('filt')),
+  addEnergy: (e => ['DEEP', 'FOCUS', 'LIGHT'].includes(e) ? e : 'FOCUS')(localStorage.getItem('addEnergy')),
   showBacklog: false, search: '', editing: null, editMode: false,
-  chat: JSON.parse(localStorage.getItem('chatHistory') || '[]'), sending: false,
+  chat: (() => { try { const v = JSON.parse(localStorage.getItem('chatHistory') || '[]'); return Array.isArray(v) ? v : []; } catch (_) { return []; } })(), sending: false,
   sheet: null, expandAll: false, openGroups: new Set(),
   bionic: localStorage.getItem('bionic') === '1',
   cards: [], showBack: false, calY: null, calM: 0, calSel: null,
@@ -1210,6 +1222,7 @@ async function loadAll(){
     clearTimeout(loadAll._retryT); loadAll._retryT = setTimeout(loadAll, wait);
     if (S._loadedOnce || outage.length >= results.length / 2) return;   // first load with a partial outage: render what came back, retry fills the rest
   } else { loadAll._fail = 0; S._fromCache = false; staleBar(false); }
+  if (seq !== loadAll._seq) return;   // 2026-10-26: drop a stale snapshot BEFORE it overwrites any slice (was checked only after ~35 assignments)
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   // Re-apply taps the server has not visibly confirmed yet. A patch is retired only once a snapshot
   // taken strictly after its write resolved agrees with it (or 60 s pass, in case the write failed silently).
@@ -1376,7 +1389,7 @@ function uiScrolling(){ return Date.now() - Math.max(S._gsAt || 0, S._msAt || 0)
 /* background refresh that arrives while the user is busy: remember it, replay when free */
 function renderSoft(){ if (uiBusy() || uiScrolling()) { S._dirty = true; return; } S._dirty = false; render(); }
 // any scroller in the app (main, grid, sheet, chat log, prep panel): scroll doesn't bubble, so capture it
-document.addEventListener('scroll', () => { S._msAt = Date.now(); }, {capture: true, passive: true});
+document.addEventListener('scroll', e => { if (e.target && e.target.closest && e.target.closest('nav')) return; S._msAt = Date.now(); }, {capture: true, passive: true});   // nav scrollIntoView on tab switch is not a user scroll
 function subscribeRealtime(){
   if (rtChannel) return;
   rtChannel = db.channel('lifeos-sync')
@@ -2645,8 +2658,11 @@ async function loadTimeline(){
   if (S._tlLoading) return; S._tlLoading = true;
   const {data, error} = await db.rpc('lifeos_timeline', {p_days: 14});
   S._tlLoading = false;
-  if (error) { S.timeline = []; S._tlErr = error.message; toast('Timeline load failed: ' + error.message); renderSoft(); return; }   // was: stayed null → refetched + toasted on EVERY render
-  S._tlErr = null; S.timeline = data || []; renderSoft();
+  // 2026-10-26: render directly when the TIME tab is up — the nav scrollIntoView on a tab switch stamps _msAt, so
+  // renderSoft() parked the result as _dirty and the tab sat on "Loading…" until the next tap (phone only)
+  const paint = () => { if (S.view === 'time' && !uiBusy()) render(); else renderSoft(); };
+  if (error) { S.timeline = []; S._tlErr = error.message; toast('Timeline load failed: ' + error.message); paint(); return; }   // was: stayed null → refetched + toasted on EVERY render
+  S._tlErr = null; S.timeline = data || []; paint();
 }
 function reloadTimeline(){ S.timeline = null; S._tlErr = null; loadTimeline(); render(); }
 function rTime(){
@@ -3382,6 +3398,7 @@ function deskLayout(main){
   const cardsOnly = kids.length > 1 && kids.every(k => k.matches('.card, details.bsec, .empty'));
   const masonry = v !== 'today' && MASONRY_VIEWS.has(v) && cardsOnly;
   const widecal = v === 'cal' || v === 'yc';
+  if (masonry) { const w = document.createElement('div'); w.className = 'mcols'; w.append(...kids); main.append(w); }
   main.classList.toggle('masonry', masonry);
   main.classList.toggle('widecal', widecal);
   main.classList.toggle('narrow', v !== 'today' && !masonry && !widecal);
@@ -3431,10 +3448,15 @@ function deskHeroHTML(){
   if (frozen) next = '❄ Vacation mode — streak frozen.';
   else if (sc == null) next = 'Score starts once today has a plan.';
   else if (hit) next = '<b>Streak safe.</b> Everything else today is bonus.';
-  else if ((r.picks || []).length && r.projected != null && r.projected >= 70) next = `Finish <b>${r.picks.map(esc).join('</b> + <b>')}</b> → ~${Math.round(r.projected)}`;
+  else if ((r.picks || []).length && r.projected != null && r.projected >= 70) {
+    // two names max — inbox-born titles run to 100+ chars and turned this line into a paragraph
+    const short = t => { t = String(t); return t.length > 48 ? t.slice(0, 46).replace(/\s+\S*$/, '') + '…' : t; };
+    const picks = r.picks.slice(0, 2).map(p => esc(short(p))), more = r.picks.length - 2;
+    next = `Finish <b>${picks.join('</b> + <b>')}</b>${more > 0 ? ` <span class="dim">+${more} more</span>` : ''} → ~${Math.round(r.projected)}`;
+  }
   else next = 'Most of the plan is needed — start with the heaviest item.';
   const busy = r.fit != null && r.fit < 1 ? `<div class="hsub">busy day · bar scaled to ${Math.round(r.fit * 100)}%</div>` : '';
-  const body = b ? `<div class="hbody"><span style="color:${READY_COL(b.ready)[0]}">${b.label}</span> · ${esc(bodyWhy(b, true))}</div>` : '';
+  const body = b ? `${dayGuideHTML('hero')}<div class="hbody">${esc(bodyWhy(b, true))}</div>` : '';
   return `<div class="card hero-card"><div class="hrings">${rings}</div><div class="htext"><div class="hnext">${next}</div>${busy}${body}</div></div>`;
 }
 
@@ -3510,9 +3532,54 @@ function bodyWhy(b, short){
   const bits = [`${hmin(b.asleep_min)} asleep`];
   if (!short && b.deep_min != null) bits.push(`${b.deep_min}m deep · ${b.rem_min}m REM`);
   if (b.debt_min > 30) bits.push(`${hmin(b.debt_min)} debt`);
-  if (b.bed) bits.push(`asleep ${clock12(b.bed)}`);
+  if (b.bed) bits.push(`fell asleep ${clock12(b.bed)}`);
   if (!short && b.bed_sd_min != null && b.bed_sd_min > 45) bits.push(`bedtime ±${b.bed_sd_min}m`);
   return bits.join(' · ');
+}
+/* ===== DAY GUIDE (2026-10-26) — what to do with today, the way Fitbit's readiness card tells you.
+   Pure render, no API: Fitbit readiness/sleep (S.body), the plan load (S.dayLoad), what's still packed
+   (S.planBlocks), caffeine (S.caff) and the clock. One headline + at most three short cues. */
+function dayGuide(){
+  const b = bodyLatest(); if (!b) return null;
+  const n = new Date(); let hr = n.getHours() + n.getMinutes() / 60; if (hr < 6) hr += 24;   // credit day runs to 6 AM
+  const r = +b.ready || 0, asleep = +b.asleep_min || 0, debt = +b.debt_min || 0, deep = b.deep_min, sd = +b.bed_sd_min || 0;
+  const d = S.dayLoad || {}, c = S.caff || null, cr = S.credits || {};
+  const today = todayISO(), nowM = Math.round(hr * 60);
+  const left = (S.planBlocks || []).filter(x => x.date === today && x.end_min > nowM && x.kind !== 'quest');
+  const deepLeft = left.filter(x => x.energy === 'DEEP'), deepLate = deepLeft.filter(x => x.start_min >= 21 * 60);
+  const h1 = m => `${Math.round((m || 0) / 60 * 10) / 10}h`;
+  const bedTarget = (c && c.bed_clock) || '01:30';
+  const over = d.status === 'over', tight = d.status === 'tight';
+  // headline: readiness band → how hard to push today
+  let label, head;
+  if (r >= 80)      { label = 'Green light'; head = 'Push the hardest DEEP block first — recovered enough to train today, too.'; }
+  else if (r >= 60) { label = 'Steady';      head = 'Normal load: one DEEP block early, FOCUS after it, no new DEEP past 9 PM.'; }
+  else if (r >= 40) { label = 'Run light';   head = 'One must-do, everything else LIGHT. Skip the gym unless it is easy.'; }
+  else              { label = 'Recovery';    head = 'Hard deadlines only — slide everything self-imposed to tomorrow.'; }
+  const tips = [];
+  // time of day
+  if (hr >= 24.5)            tips.push(`Past 12:30 — wind down, asleep by ${clock12(bedTarget)}`);
+  else if (hr >= 23.5)       tips.push('LIGHT only now; no new DEEP');
+  else if (hr >= 21 && deepLate.length) tips.push(`${deepLate.length} DEEP block${deepLate.length > 1 ? 's' : ''} packed after 9 PM — move to tomorrow AM`);
+  // the plan vs what today can hold
+  if (over && d.planned != null) tips.push(`Plan ${h1(d.planned)} vs ${h1(d.available)} free — cut one self-imposed item`);
+  else if (tight) tips.push('Day is tight — protect the first block, defer the rest early');
+  // the night behind you
+  if (asleep && asleep < 390) tips.push(`Short night (${hmin(asleep)}) — expect a 3–4 PM dip, keep LIGHT work there`);
+  else if (debt >= 60)       tips.push(`${hmin(debt)} sleep debt — asleep by ${clock12(bedTarget)} tonight pays it back`);
+  else if (deep != null && deep < 30) tips.push(`Deep sleep only ${deep}m — no caffeine after 5 PM, screens off 30 min before bed`);
+  if (sd > 60 && tips.length < 3) tips.push(`Bedtime drifting ±${Math.round(sd)}m — same time tonight: ${clock12(bedTarget)}`);
+  // caffeine
+  if (c && +c.bed_level > +c.threshold && tips.length < 3) tips.push(`Caffeine already over the bedtime line (${Math.round(c.bed_level)} mg) — none after this`);
+  // credits
+  if (cr.balance != null && cr.balance <= 0 && hr < 23 && tips.length < 3) tips.push('Out of scroll credits — a 25-min FOCUS clock-in earns 5');
+  return {label, head, tips: tips.slice(0, 3), color: READY_COL(r)[0]};
+}
+function dayGuideHTML(mode){
+  const g = dayGuide(); if (!g) return '';
+  const cues = g.tips.length ? `<div class="gcues">${g.tips.map(t => `<span>${esc(t)}</span>`).join('')}</div>` : '';
+  if (mode === 'hero') return `<div class="hguide"><b style="color:${g.color}">${g.label}</b> — ${esc(g.head)}</div>${cues}`;
+  return `<div class="bguide">${esc(g.head)}${cues}</div>`;   // the card's .bl already shows the label
 }
 function bodyCardHTML(mode){
   const b = bodyLatest();
@@ -3528,7 +3595,8 @@ function bodyCardHTML(mode){
   const wk = (S.body || []).slice(-7);
   const spark = wk.length > 1 ? VIZ.area(wk.map(x => x.ready), {w: 200, h: 34, pad: 3, min: 0, max: 100, color: lc, sw: 1.8, stretch: true, style: 'width:100%;height:34px;display:block;margin-top:6px'}) : '';
   return `<div class="card bodycard" onclick="setView('trends')"><h2>Body <span class="dim" style="font-weight:400;text-transform:none;letter-spacing:0">· Fitbit${b.vitals ? ' + HRV' : ''}${stale}</span></h2>
-    <div class="bodyrow">${rR}${rS}<div class="bodytxt"><div class="bl" style="color:${lc}">${b.label}</div><div class="bw">${esc(bodyWhy(b))}</div>${spark}</div></div></div>`;
+    <div class="bodyrow">${rR}${rS}<div class="bodytxt"><div class="bl" style="color:${lc}">${b.label}</div><div class="bw">${esc(bodyWhy(b))}</div>${spark}</div></div>
+    ${dayGuideHTML('card')}</div>`;
 }
 function bodyTrendHTML(){
   /* Sleep — last 7 nights (2026-10-25, interactive). Three averages up top (asleep, bedtime, wake — that is it),
@@ -3574,7 +3642,20 @@ function bodyTrendHTML(){
       {vals: b.map(x => +x.ready), color: '#34D399', fill: true},
       {vals: b.map(x => +x.sleep), color: '#A78BFA', dash: '4 4', sw: 1.6, glow: false, end: false},
     ], {h: 150, base: 60, tip: lineTip, fmtY: v => Math.round(v)})}</div>
+    ${sleepFootHTML()}
     <div class="dim mono" style="font-size:10px;margin-top:4px">touch a bar or the line for that night · dotted line = 60 readiness</div></div>`;
+}
+/* the three rows the old text Sleep card had that the chart doesn't: rhythm verdict, today's capacity, credits earned
+   (2026-10-26: TRENDS showed two Sleep cards saying the same numbers; the old one now renders only when there is no chart) */
+function sleepFootHTML(){
+  const s = S.sleepStats, cr = S.credits || {};
+  if (!s) return '';
+  const bits = [];
+  if (s.consistent != null) bits.push(`<span style="color:${s.consistent ? 'var(--done)' : 'var(--accent-hi)'}">${s.consistent ? 'on rhythm' : `off rhythm · bed ±${s.bed_dev_min}m`}</span>`);
+  const f = +s.capacity_factor || 1;
+  if (f < 1) bits.push(`<span style="color:var(--focus)">capacity ${Math.round(f * 100)}% today</span>`);
+  if (cr.sleep_bonus > 0) bits.push(`<span style="color:var(--done)">+${cr.sleep_bonus} credits (${esc(cr.sleep_tier || '')})</span>`);
+  return bits.length ? `<div class="mono" style="font-size:11px;margin-top:8px;display:flex;flex-wrap:wrap;gap:12px">${bits.join('')}</div>` : '';
 }
 
 function rMeter(){
@@ -4397,7 +4478,7 @@ function rLog(){
   <div class="card"><h2>Streak</h2>
     <table><tr><th>date</th><th>score</th><th>hit</th><th>streak</th></tr>
     ${logs.map(l => `<tr><td>${l.date}</td><td>${l.rest_day ? '<span class="rest">rest</span>' : (l.score ?? '—')}</td>
-      <td>${l.rest_day ? '<span class="rest">—</span>' : (l.streak_hit ? '<span class="hit">✓</span>' : '<span class="miss">✗</span>')}</td>
+      <td>${l.rest_day ? '<span class="rest">—</span>' : l.score == null ? '<span class="dim" title="not scored yet">·</span>' : (l.streak_hit ? '<span class="hit">✓</span>' : '<span class="miss">✗</span>')}</td>
       <td>${l.streak_count ?? ''}</td></tr>`).join('')}</table>
     <div class="dim mono" style="margin-top:6px;font-size:11px">last-7 avg: ${avg}</div>
   </div>
@@ -4671,7 +4752,7 @@ function rTrends(){
   const days = [...Array(14)].map((_, i) => { const d = new Date(); d.setDate(d.getDate() - 13 + i); return d.toLocaleDateString('sv-SE'); });
   const per = days.map(d => {
     const o = {DEEP: 0, FOCUS: 0, LIGHT: 0};
-    S.tasks.forEach(t => { if (t.status === 'done' && localDay(t.completed_at) === d) o[t.energy || 'FOCUS'] += (t.est_minutes || 15); });
+    S.tasks.forEach(t => { if (t.status === 'done' && localDay(t.completed_at) === d) o[ENERGY[t.energy] ? t.energy : 'FOCUS'] += (t.est_minutes || 15); });   // unknown energy (e.g. a legacy PARALLEL row) → FOCUS, never NaN
     return {d, o, total: Object.values(o).reduce((a, b) => a + b, 0)};
   });
   const tISO = todayISO();
@@ -4693,7 +4774,8 @@ function rTrends(){
   const fl = logs.filter(l => l.focus);
   const focusAvg = fl.length ? (fl.reduce((s, l) => s + l.focus, 0) / fl.length).toFixed(1) : '—';
   const deep7 = per.slice(-7).reduce((s, p) => s + p.o.DEEP, 0);
-  return bodyTrendHTML() + tagEffectsHTML() + weekHealthHTML() + whatIfCardHTML() + sleepCardHTML() + adherenceCardHTML() + experimentsCardHTML() + `
+  const bodyTrend = bodyTrendHTML();   // chart card carries the rhythm/capacity/credits rows itself; the text card is the no-Fitbit fallback
+  return bodyTrend + tagEffectsHTML() + weekHealthHTML() + whatIfCardHTML() + (bodyTrend ? '' : sleepCardHTML()) + adherenceCardHTML() + experimentsCardHTML() + `
   <div class="card"><h2>Score — last ${line.length} scored days</h2>${scoreSvg}</div>
   <div class="card"><h2>Done work by energy — 14 days</h2>${barsSvg}
     <div class="elegend" style="margin-top:6px">${Object.keys(ENERGY).map(e => `<span><i style="background:${ENERGY[e].hex}"></i>${e}</span>`).join('')}</div></div>
@@ -5537,7 +5619,7 @@ async function sendChat(){
   }
   S.sending = false;
   S.chat = S.chat.slice(-40);
-  localStorage.setItem('chatHistory', JSON.stringify(S.chat));
+  try { localStorage.setItem('chatHistory', JSON.stringify(S.chat)); } catch (_) { /* quota / private mode */ }
   render();
   loadAll(); // chat may have written to the DB
 }
@@ -5658,7 +5740,7 @@ function mLineChart(id, dates, series, o = {}){
   }).join('');
   MCH[id] = {dates, series, W, H, PL, PR, PT, PB, min, span, n, tip: o.tip};
   const cross = `<g id="${id}-x" style="display:none"><line id="${id}-xv" y1="${PT}" y2="${H - PB + 4}" stroke="rgba(255,255,255,.5)" stroke-dasharray="3 4"/><line id="${id}-xh" x1="${PL}" x2="${W - PR + 4}" stroke="rgba(255,255,255,.35)" stroke-dasharray="3 4"/>${series.map((sr, k) => `<circle id="${id}-d${k}" r="4.5" fill="${sr.color}" stroke="#0E1017" stroke-width="1.5"/>`).join('')}</g>`;
-  return `<div style="position:relative;touch-action:none;user-select:none;-webkit-user-select:none" onpointermove="mChartHover(event,'${id}')" onpointerdown="mChartHover(event,'${id}')" onpointerleave="mChartLeave(event,'${id}')">
+  return `<div class="noswipe" style="position:relative;touch-action:none;user-select:none;-webkit-user-select:none" onpointermove="mChartHover(event,'${id}')" onpointerdown="mChartHover(event,'${id}')" onpointerleave="mChartLeave(event,'${id}')">
     <svg id="${id}" viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">${grid}${xg}${base}${paths}${cross}</svg>
     <div id="${id}-tip" style="display:none;position:absolute;top:0;pointer-events:none;background:#1A1E2B;border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:6px 9px;font-size:11px;line-height:1.45;box-shadow:0 6px 20px rgba(0,0,0,.45);white-space:nowrap;z-index:5"></div>
   </div>`;
@@ -5685,7 +5767,7 @@ function mChartLeave(e, id){ if (e.pointerType && e.pointerType !== 'mouse') ret
 /* bar chart hover/tap: VIZ.bars columns are evenly spaced, so the column under the pointer is pure arithmetic */
 function mBarsWrap(id, rows, svgHTML, o = {}){
   MCH[id] = {rows, W: 560, P: 10, tip: o.tip, bars: true};
-  return `<div style="position:relative;touch-action:none;user-select:none;-webkit-user-select:none" onpointermove="mBarHover(event,'${id}')" onpointerdown="mBarHover(event,'${id}')" onpointerleave="mChartLeave(event,'${id}')">
+  return `<div class="noswipe" style="position:relative;touch-action:none;user-select:none;-webkit-user-select:none" onpointermove="mBarHover(event,'${id}')" onpointerdown="mBarHover(event,'${id}')" onpointerleave="mChartLeave(event,'${id}')">
     <div id="${id}-hl" style="display:none;position:absolute;top:0;bottom:0;background:rgba(255,255,255,.06);border-radius:6px;pointer-events:none"></div>
     <div id="${id}-tip" style="display:none;position:absolute;top:0;pointer-events:none;background:#1A1E2B;border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:6px 9px;font-size:11px;line-height:1.45;box-shadow:0 6px 20px rgba(0,0,0,.45);white-space:nowrap;z-index:5"></div>
     <div id="${id}">${svgHTML}</div></div>`;
@@ -6582,7 +6664,8 @@ function caffCurveSVG(h, big){
   const maxMg = Math.max(c.threshold * 2, c.ceiling * 0.6, ...pts.map(p => +p.mg)) * 1.08;
   const x = m => (m / 1440) * W;
   const y = mg => padT + (H - padT - padB) * (1 - mg / maxMg);
-  const path = pts.map((p, i) => (i ? 'L' : 'M') + x(caffMinsOf(p.clock)).toFixed(1) + ',' + y(+p.mg).toFixed(1)).join(' ');
+  const pm = (p, i) => (i && p.clock === '00:00') ? 1440 : caffMinsOf(p.clock);   // the curve's last point is midnight END of day, not minute 0 (drew a line back to x=0)
+  const path = pts.map((p, i) => (i ? 'L' : 'M') + x(pm(p, i)).toFixed(1) + ',' + y(+p.mg).toFixed(1)).join(' ');
   const nowM = caffMinsOf(caffClockNow());
   const bedM = caffMinsOf(c.bed_clock);
   const bedX = bedM < 360 ? W + 1 : x(bedM);                 // after-midnight bedtime sits off the right edge
