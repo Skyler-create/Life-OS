@@ -1207,11 +1207,11 @@ async function loadAll(){
   }
   const W2 = await Promise.all(Q2);
   clearTimeout(loadAll._slowT);
-  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pp, cy, cm, mw, fa, ft, fr, stx, mch, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, qsv, exf, exs] = W1.concat(W2);
+  const [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pp, cy, cm, mw, fa, ft, fr, stx, mch, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, exf, exs, qsv] = W1.concat(W2);
   // 2026-10-25 OUTAGE FIX: if the server itself is failing (5xx / timeout / schema-cache reload / network),
   // do NOT overwrite good state with empties. Keep what is on screen, show the stale bar, retry with backoff.
   // A permanent per-query error (RLS, missing RPC) is NOT in this class and still falls through as before.
-  const results = [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pp, cy, cm, mw, fa, ft, fr, stx, mch, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, qsv, exf, exs];
+  const results = [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pp, cy, cm, mw, fa, ft, fr, stx, mch, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, exf, exs, qsv];
   const outage = results.filter(r => r && r.error && isServerHiccup(r.error));
   if (outage.length) {
     if (seq !== loadAll._seq) return;
