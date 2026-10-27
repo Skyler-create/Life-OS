@@ -3557,6 +3557,18 @@ function dayGuide(){
   else if (r >= 40) { label = 'Run light';   head = 'One must-do, everything else LIGHT. Skip the gym unless it is easy.'; }
   else              { label = 'Recovery';    head = 'Hard deadlines only — slide everything self-imposed to tomorrow.'; }
   const tips = [];
+  // COMING UP (2026-10-26, after the 66degrees interview nearly slipped): interviews / exams / OAs later today
+  // or tomorrow take the first slot, with their clock time — the only cue here that is not advice
+  const tmr = (() => { const d = new Date(today + 'T12:00:00'); d.setDate(d.getDate() + 1); return d.toLocaleDateString('sv-SE'); })();
+  const key = /interview|exam|midterm|quiz\b|flight|\bOA\b|offer|deadline/i;
+  const toM = s => { const [h, m] = String(s).split(':').map(Number); return h * 60 + (m || 0); };
+  const up = [];
+  allEvents().filter(e => e.title && key.test(e.title) && ((e.date === today && e.start_time && toM(e.start_time) > nowM % 1440) || e.date === tmr))
+    .sort((a, b) => (a.date + (a.start_time || '')).localeCompare(b.date + (b.start_time || '')))
+    .forEach(e => up.push(`${e.date === today ? 'Today' : 'Tomorrow'}${e.start_time ? ' ' + clock12(e.start_time) : ''} — ${e.title}`));
+  S.tasks.filter(t => t.status !== 'done' && t.due === tmr && t.deadline_type === 'hard' && key.test(t.title) && !up.some(u => u.includes(t.title.slice(0, 24))))
+    .forEach(t => up.push(`Tomorrow — ${t.title}`));
+  up.slice(0, 2).forEach(u => tips.push(u.length > 72 ? u.slice(0, 70) + '…' : u));
   // time of day
   if (hr >= 24.5)            tips.push(`Past 12:30 — wind down, asleep by ${clock12(bedTarget)}`);
   else if (hr >= 23.5)       tips.push('LIGHT only now; no new DEEP');
