@@ -894,6 +894,30 @@ nav button.on{box-shadow:0 4px 18px rgba(225,37,27,.4),inset 0 1px 0 rgba(255,25
   .kmeter-alt{display:none!important}
 }
 
+/* 2026-11-01: TODAY columns scroll independently on laptop — hero + day strip stay put, the deck
+   never gets pushed off-screen by the right-hand cards, and you stop scrolling the whole page. */
+@media (min-width:1024px){
+  main#main.desk[data-view="today"]{display:flex;flex-direction:column;overflow:hidden;padding-bottom:0}
+  main#main.desk[data-view="today"] > .dash{display:flex;flex-direction:column;flex:1;min-height:0;width:100%}
+  main#main.desk[data-view="today"] .dash-grid{flex:1;min-height:0;align-items:stretch}
+  main#main.desk[data-view="today"] .dash-col{overflow-y:auto;overscroll-behavior:contain;min-height:0;padding:2px 6px 120px 2px;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.14) transparent}
+  main#main.desk[data-view="today"] .dash-col::-webkit-scrollbar{width:6px}
+  main#main.desk[data-view="today"] .dash-col::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:3px}
+  main#main.desk[data-view="today"] .jump{display:none}
+}
+@media (min-width:1024px) and (max-width:1399px){
+  /* right pair stacks into one column here → the pair scrolls, not its halves */
+  main#main.desk[data-view="today"] .dash-r{overflow-y:auto;overscroll-behavior:contain;min-height:0;padding-bottom:120px;scrollbar-width:thin}
+  main#main.desk[data-view="today"] .dash-r .dash-col{overflow:visible;padding-bottom:0}
+}
+/* 2026-11-01: phone jump pills — sticky inside the main scroller, above everything on TODAY */
+.jump{position:sticky;top:0;z-index:20;display:flex;gap:6px;padding:8px 0 8px;margin:0 -12px 6px;padding-left:12px;padding-right:12px;
+  background:linear-gradient(180deg,var(--bg) 70%,transparent);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.jump button{flex:1;font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);
+  padding:6px 0;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.03)}
+.jump button.on{color:var(--text);border-color:var(--accent-hi);box-shadow:0 0 0 2px rgba(225,37,27,.18)}
+.jsec{scroll-margin-top:48px}
+
 /* v7d: laptop hero strip */
 @media (min-width:1024px){
   .hero-card{display:flex;align-items:center;gap:28px;padding:18px 22px;margin-bottom:14px;
@@ -1798,6 +1822,13 @@ async function saveReflection(){
 /* ================= rendering ================= */
 const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['cal','CAL'],['quests','QUESTS'],['explore','EXPLORE'],['chat','CHAT'],['reflect','REFLECT'],['coffee','COFFEE'],['yc','YC'],['time','TIME'],['log','LOG'],['trends','TRENDS'],['money','MONEY'],['jobs','JOBS'],['cards','CARDS'],['settings','SETTINGS']];
 function setView(v){ S.view = v; S.editing = null; localStorage.setItem('view', v); render(); }
+function jumpTo(id){
+  const el = document.getElementById(id); if (!el) return;
+  const main = document.getElementById('main');
+  const top = el.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop - 44;   // 44 = sticky pill bar
+  main.scrollTo({top: Math.max(0, top), behavior: 'smooth'});
+  document.querySelectorAll('.jump button').forEach(b => b.classList.toggle('on', b.getAttribute('onclick').includes(`'${id}'`)));
+}
 function setFilt(f){ S.filt = f; localStorage.setItem('filt', f); render(); }
 
 function render(){
@@ -1825,6 +1856,7 @@ function render(){
   // Switching tabs is a different view → falls through to a natural top reset.
   const sameView = (render._lastView === S.view);
   const savedScroll = sameView ? main.scrollTop : 0;
+  const savedCols = sameView ? [...main.querySelectorAll('.dash-col, .dash-r')].map(e => e.scrollTop) : [];   // TODAY laptop columns scroll on their own
   if (S.view === 'today')   main.innerHTML = rToday();
   if (S.view === 'tasks')   main.innerHTML = rTasks();
   if (S.view === 'brief')   { main.innerHTML = rBrief(); if (S.bionic) main.querySelectorAll('.md').forEach(bionicify); markBriefRead(); }
@@ -1845,6 +1877,7 @@ function render(){
   render._lastView = S.view;
   deskLayout(main);
   if (sameView) main.scrollTop = savedScroll;
+  if (sameView && savedCols.length) [...main.querySelectorAll('.dash-col, .dash-r')].forEach((e, i) => { if (savedCols[i]) e.scrollTop = savedCols[i]; });
   document.getElementById('addbar').classList.toggle('hidden', !(S.view === 'today' || S.view === 'tasks') || !!S.sheet);
   // New-task sheet: every chip tap re-renders the sheet, which used to reset its
   // scroll to the top AND wipe a half-typed title. Carry both across the rebuild.
@@ -2311,22 +2344,43 @@ function isJobAction(t){
   if (/^apply/i.test(title)) return false;
   return t.project === 'Rat Race' || JOB_RX.test(title) || /\[job reply /.test(t.notes || '');
 }
+/* days from today to t.due (null = undated) */
+function jobDueDays(t){
+  if (!t.due) return null;
+  return Math.round((new Date(t.due + 'T12:00') - new Date(todayISO() + 'T12:00')) / 86400000);
+}
+function jobDueTag(t){
+  const n = jobDueDays(t);
+  if (n == null) return `<span class="mono dim" style="font-size:10px">no date</span>`;
+  const col = n < 0 ? '#FF4D42' : n <= 1 ? '#FF7A5C' : n <= 3 ? '#FBBF24' : '#8A90A0';
+  const wd = new Date(t.due + 'T12:00').toLocaleDateString('en-US', {weekday: 'short', month: 'numeric', day: 'numeric'});
+  const lbl = n < 0 ? `OVERDUE ${-n}d` : n === 0 ? 'TODAY' : n === 1 ? 'tomorrow' : `in ${n}d`;
+  return `<span class="mono" style="font-size:10px;color:${col};font-weight:600">${lbl} · ${wd}</span>`;
+}
+function jobActionRows(list, pfx){
+  return list.map(t => `<div style="margin-top:6px">${jobDueTag(t)}${taskRowHTML(t).replace('id="t-', `id="${pfx}-`)}</div>`).join('');
+}
+/* 2026-11-01: the pinned card became a STRIP. Rule unchanged — every open job action is
+   on TODAY — but only overdue / today / tomorrow rows are expanded; the rest sit behind
+   a count (tap to expand in place) so the stats + deck underneath stay reachable.
+   Full list, always expanded, lives at the top of JOBS. */
 function jobHuntCardHTML(jobs){
   if (!jobs.length) return '';
-  const today = todayISO();
-  const dayMs = 86400000;
-  const tag = t => {
-    if (!t.due) return `<span class="mono dim" style="font-size:10px">no date</span>`;
-    const n = Math.round((new Date(t.due + 'T12:00') - new Date(today + 'T12:00')) / dayMs);
-    const col = n < 0 ? '#FF4D42' : n <= 1 ? '#FF7A5C' : n <= 3 ? '#FBBF24' : '#8A90A0';
-    const wd = new Date(t.due + 'T12:00').toLocaleDateString('en-US', {weekday: 'short', month: 'numeric', day: 'numeric'});
-    const lbl = n < 0 ? `OVERDUE ${-n}d` : n === 0 ? 'TODAY' : n === 1 ? 'tomorrow' : `in ${n}d`;
-    return `<span class="mono" style="font-size:10px;color:${col};font-weight:600">${lbl} · ${wd}</span>`;
-  };
-  const urgent = jobs.filter(t => t.due && t.due <= today).length;
-  return `<div class="card" style="border:1px solid #FF7A5C66"><h2>🎯 Job hunt · ${jobs.length} open${urgent ? ` · <span style="color:#FF4D42">${urgent} due now</span>` : ''}</h2>
-    ${jobs.map(t => `<div style="margin-top:6px">${tag(t)}${taskRowHTML(t).replace('id="t-', 'id="jh-')}</div>`).join('')}
-    <div class="dim mono" style="font-size:10px;margin-top:6px">pinned until done · every OA / interview / recruiter / action item, any due date</div></div>`;
+  const now = jobs.filter(t => { const n = jobDueDays(t); return n != null && n <= 1; });
+  const later = jobs.filter(t => !now.includes(t));
+  const cnt = (f, lbl, col) => { const n = jobs.filter(f).length; return n ? `<span style="color:${col};font-weight:600">${n} ${lbl}</span>` : ''; };
+  const parts = [
+    cnt(t => jobDueDays(t) < 0, 'overdue', '#FF4D42'),
+    cnt(t => jobDueDays(t) === 0, 'today', '#FF7A5C'),
+    cnt(t => jobDueDays(t) === 1, 'tomorrow', '#FBBF24'),
+    cnt(t => { const n = jobDueDays(t); return n == null || n > 1; }, 'upcoming', '#8A90A0')
+  ].filter(Boolean).join('<span class="dim"> · </span>');
+  const open = !!S.jobsStripOpen;
+  const more = later.length ? `<button class="btn" style="width:100%;margin-top:8px;font-size:11px" onclick="S.jobsStripOpen=!S.jobsStripOpen;render()">${open ? '▾ hide' : '▸ show'} ${later.length} upcoming</button>` : '';
+  return `<div class="card jobstrip" id="sec-jobs" style="border:1px solid #FF7A5C66;padding-top:10px;padding-bottom:10px">
+    <h2 style="display:flex;align-items:center;gap:8px;margin-bottom:${now.length || open ? 4 : 0}px"><span>🎯 Jobs</span><span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis">${parts}</span>
+      <button class="btn" style="margin-left:auto;font-size:10px;padding:2px 8px;flex:0 0 auto" onclick="setView('jobs')">all →</button></h2>
+    ${jobActionRows(now, 'jh')}${open ? jobActionRows(later, 'jh') : ''}${more}</div>`;
 }
 function rToday(){
   const today = todayISO();
@@ -2376,8 +2430,17 @@ function rToday(){
     return rows.length ? `<div class="pname">FROM TODAY'S PLAN</div>` + rows.map(taskRowHTML).join('') : '';
   })();
   if (isDesk()) return todayDeskHTML({shCard, meter, bar, evCard, sorted, planSection, open, today, jobCard});
-  return jobCard + goalConfirmsHTML() + shCard + meter + bodyCardHTML() + capacityWarnHTML() + planBlocksHTML() + replanCardHTML() + creditsCardHTML() + caffeineCardHTML() + sleepNightsCardHTML() + waitingOnHTML() + evCard +
+  // phone: sticky jump pills (2026-11-01) — one tap to Jobs / Score / Body / Tasks instead of scrolling the stack
+  const body = bodyCardHTML();
+  const pills = [['sec-jobs', 'Jobs', !!jobCard], ['sec-score', 'Score', !!meter], ['sec-body', 'Body', !!body], ['sec-tasks', 'Tasks', true]]
+    .filter(p => p[2]).map(([id, l]) => `<button onclick="jumpTo('${id}')">${l}</button>`).join('');
+  return `<div class="jump">${pills}</div>` +
+    jobCard + goalConfirmsHTML() + shCard +
+    (meter ? `<div id="sec-score" class="jsec">${meter}</div>` : '') +
+    (body ? `<div id="sec-body" class="jsec">${body}</div>` : '') +
+    capacityWarnHTML() + planBlocksHTML() + replanCardHTML() + creditsCardHTML() + caffeineCardHTML() + sleepNightsCardHTML() + waitingOnHTML() + evCard +
     (bar ? `<div class="card"><h2>Today's energy</h2>${bar}</div>` : '') +
+    `<div id="sec-tasks" class="jsec"></div>` +
     chipsHTML() +
     (sorted.length ? sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — add a task below or check TASKS.</div>`) +
     planSection;
@@ -6406,7 +6469,13 @@ function rJobs(){
   if (!S.jobsView) S.jobsView = localStorage.getItem('jobsView') || 'pipeline';
   const seg = `<div class="seg" style="display:flex;margin-bottom:10px">${[['pipeline','PIPELINE'],['stats','STATS']].map(([v, l]) =>
     `<button class="${S.jobsView === v ? 'on' : ''}" style="flex:1" onclick="S.jobsView='${v}';localStorage.setItem('jobsView','${v}');render()">${l}</button>`).join('')}</div>`;
-  return seg + (S.jobsView === 'stats' ? jobsStatsHTML() : jobsPipelineHTML());
+  // every open job action, fully expanded — the TODAY strip only expands overdue/today/tomorrow
+  const kids = S._kids || {};
+  const acts = S.tasks.filter(t => isJobAction(t) && !(kids[t.id] || []).length).sort((a, b) =>
+    (a.due || '9999').localeCompare(b.due || '9999') || (PRIO[b.priority] || 2) - (PRIO[a.priority] || 2));
+  const actCard = acts.length ? `<div class="card" style="border:1px solid #FF7A5C66"><h2>🎯 Open actions · ${acts.length}</h2>${jobActionRows(acts, 'ja')}
+    <div class="dim mono" style="font-size:10px;margin-top:6px">every OA / interview / recruiter / action item, any due date · also pinned on TODAY</div></div>` : '';
+  return actCard + seg + (S.jobsView === 'stats' ? jobsStatsHTML() : jobsPipelineHTML());
 }
 
 function jobRowHTML(j){
