@@ -5007,7 +5007,19 @@ function allEvents(){
   const list = S.gcalLive
     ? [...S.gcalEvents, ...(S.events || []).filter(e => e.source && e.source !== 'gcal')]
     : (S.events || []);
-  return list.filter(e => !mirror.has(e.gid));
+  // Collapse duplicates of the same slot: the job-mail sweep, the morning brief and Google can each
+  // write the same interview. Keep ONE per date+start (same title, or both titled "interview"),
+  // preferring the Google copy.
+  const rank = {gcal: 0, work: 1, jobmail: 2, brief: 3, ai: 4};
+  const seen = new Map();
+  list.filter(e => !mirror.has(e.gid))
+    .slice().sort((a, b) => (rank[a.source] ?? 9) - (rank[b.source] ?? 9))
+    .forEach(e => {
+      const t = (e.title || '').toLowerCase();
+      const key = e.date + '|' + (e.start_time || '').slice(0, 5) + '|' + (/interview/.test(t) ? 'interview' : t);
+      if (!seen.has(key)) seen.set(key, e);
+    });
+  return list.filter(e => !mirror.has(e.gid) && seen.get(e.date + '|' + (e.start_time || '').slice(0, 5) + '|' + (/interview/.test((e.title || '').toLowerCase()) ? 'interview' : (e.title || '').toLowerCase())) === e);
 }
 
 /* --- two-way event editing (Google Calendar) --- */
