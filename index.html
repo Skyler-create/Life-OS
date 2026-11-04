@@ -1050,6 +1050,7 @@ let S = {
   bionic: localStorage.getItem('bionic') === '1',
   cards: [], showBack: false, calY: null, calM: 0, calSel: null,
   calView: localStorage.getItem('calView') || 'month',
+  calTasks: localStorage.getItem('calTasks') === '1',   // CAL tab: overlay tasks/plan/done/worked (default off = calendar only)
   gcalEvents: [], gcalRange: null, gcalLive: false, gcalLoading: false,
 };
 
@@ -1059,7 +1060,7 @@ const todayISO = () => { const d = new Date(); d.setHours(d.getHours() - 6); ret
 // At 12:40 AM Sunday the calendar says Sunday, even though the credit day is still Saturday.
 const calTodayISO = () => new Date().toLocaleDateString('sv-SE');
 const esc = s => (s ?? '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const toast = m => { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2200); };
+const toast = (m, ms) => { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), ms || 2200); };
 
 /* ================= auth ================= */
 async function signIn(){
@@ -4915,6 +4916,7 @@ function rTrends(){
 /* --- CAL (month view of task due-dates) --- */
 const fromISO = iso => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d); };
 function setCalView(v){ S.calView = v; localStorage.setItem('calView', v); render(); }
+function toggleCalTasks(){ S.calTasks = !S.calTasks; localStorage.setItem('calTasks', S.calTasks ? '1' : '0'); render(); }
 function navCal(dir){
   if (S.calView === 'month') {
     let m = S.calM + dir, y = S.calY;
@@ -4980,7 +4982,7 @@ async function gcalSyncNow(){
   if (S._gcalSyncing) return; S._gcalSyncing = true; toast('Syncing Google Calendar…'); renderSoft();
   try {
     const {data, error} = await db.functions.invoke('gcal-sync', {body: {action: 'sync'}});
-    if (error || !data?.ok) toast('Sync failed: ' + (error?.message || data?.error || ''));
+    if (error || !data?.ok) toast('Sync failed: ' + (error?.message || data?.error || S.settings?.gcal_status || ''), 6000);
     else toast(`Synced — ${data.events} events${data.outbox && data.outbox.done ? ', ' + data.outbox.done + ' pushed' : ''}`);
   } finally { S._gcalSyncing = false; }
   await loadAll();
@@ -5250,6 +5252,7 @@ async function gcalDeleteBlock(b){
 }
 /* shared renderer: plan blocks inside a day column (day view, week view, brief) */
 function planBlockDivs(iso, H0, PPH, mode){
+  if (S.view === 'cal' && !S.calTasks) return '';   // calendar-only mode: no plan blocks on the CAL grid
   return (S.planBlocks || []).filter(b => b.date === iso && b.kind !== 'call').map(b => {
     const col = (ENERGY[b.energy] || {}).hex || '#888';
     const top = (b.start_min - H0 * 60) * (PPH / 60);
@@ -5359,7 +5362,9 @@ function calMaps(){
 function rCal(){
   if (S.calY == null) { const n = new Date(); S.calY = n.getFullYear(); S.calM = n.getMonth(); }
   if (!S.calSel) S.calSel = calTodayISO();
-  const {byDay, evByDay, doneBy, workBy} = calMaps();
+  const m = calMaps();
+  // calendar-only mode (default): just Google/work events. CAL + TASKS re-adds due tasks, done ✓ and clocked-in spans.
+  const {byDay, evByDay, doneBy, workBy} = S.calTasks ? m : {byDay: {}, evByDay: m.evByDay, doneBy: {}, workBy: {}};
   const sel = fromISO(S.calSel);
   let label;
   if (S.calView === 'month') label = new Date(S.calY, S.calM, 1).toLocaleString('en-US', {month: 'long', year: 'numeric'});
@@ -5381,8 +5386,9 @@ function rCal(){
   <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
     <div class="seg" style="flex:1">${['day','week','month'].map(v =>
       `<button class="${S.calView === v ? 'on' : ''}" onclick="setCalView('${v}')">${v.toUpperCase()}</button>`).join('')}</div>
+    <button class="schip ${S.calTasks ? 'on' : ''}" title="toggle tasks / plan / done / worked overlays" onclick="toggleCalTasks()">${S.calTasks ? '+ tasks' : 'cal only'}</button>
     ${GCAL_CLIENT_ID ? (gcalConnected()
-      ? `<button class="schip" style="color:var(--done)" title="tap: sync now · hold: disconnect" onclick="gcalSyncNow()" oncontextmenu="event.preventDefault();gcalDisconnect()">● ${S._gcalSyncing ? 'syncing…' : 'Google ' + gcalAgo()}</button><button class="schip" onclick="openEv(null)">+ event</button>`
+      ? `<button class="schip" style="color:${/^(ok|connected)$/.test(S.settings?.gcal_status || 'ok') ? 'var(--done)' : 'var(--accent-hi)'}" title="${esc(S.settings?.gcal_status || '')} · tap: sync now · hold: disconnect" onclick="gcalSyncNow()" oncontextmenu="event.preventDefault();gcalDisconnect()">● ${S._gcalSyncing ? 'syncing…' : (/^(ok|connected)$/.test(S.settings?.gcal_status || 'ok') ? 'Google ' : 'Google ⚠ ') + gcalAgo()}</button><button class="schip" onclick="openEv(null)">+ event</button>`
       : `<button class="schip" onclick="gcalConnect()">connect Google</button>`) : ''}</div>`;
   loadGcal(`${S.calY}-${String(S.calM + 1).padStart(2, '0')}-15`);
   const body = S.calView === 'day' ? calDayHTML(S.calSel, byDay, evByDay, doneBy, workBy)
@@ -5477,7 +5483,7 @@ function calDayHTML(iso, byDay, evByDay, doneBy, workBy){
     return (mins > 0 && mins < (H1 - H0) * 60) ? `<div class="nowline" style="top:${(mins * PPH / 60).toFixed(0)}px"></div>` : '';
   })() : '';
   const due = byDay[iso] || [];
-  const doneDay = S.tasks.filter(t => t.due === iso && t.status === 'done');
+  const doneDay = S.calTasks ? S.tasks.filter(t => t.due === iso && t.status === 'done') : [];
   return `${allday.map(e => `<div class="evrow" style="cursor:pointer" onclick="openEv(${e._i})"><span class="mono">all-day</span><span>${esc(e.title)}</span></div>`).join('')}
   ${due.length || doneDay.length ? `<div class="pname">due — ${due.length} open${doneDay.length ? ' · ' + doneDay.length + ' done' : ''}</div>` : ''}
   ${due.map(taskRowHTML).join('')}
