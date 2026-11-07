@@ -1432,11 +1432,41 @@ function subscribeRealtime(){
     })
     .subscribe();
 }
-/* coming back to the app after it sat in the background: refresh once if the last load is >45 s old */
+/* coming back to the app after it sat in the background (2026-11-07): always refresh the data,
+   and reload the page if a newer build has been deployed since this copy was loaded. iOS keeps a
+   home-screen PWA paused in memory for days, so without this the old code and old numbers stick. */
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || !S._loadedOnce) return;
-  if (Date.now() - (loadAll._lastStart || 0) > 45000 && !uiBusy()) loadAll();
+  checkForNewBuild();
+  if (Date.now() - (loadAll._lastStart || 0) > 5000 && !uiBusy()) loadAll();
 });
+
+/* ---- build freshness: compare the server's ETag for index.html with the one we loaded ---- */
+const BUILD = { etag: null, checking: false, lastCheck: 0 };
+async function fetchBuildTag(){
+  const r = await fetch('index.html', { method: 'HEAD', cache: 'no-store' });
+  return r.headers.get('etag') || r.headers.get('last-modified') || null;
+}
+fetchBuildTag().then(t => { BUILD.etag = t; }).catch(() => {});
+async function checkForNewBuild(){
+  if (BUILD.checking || !navigator.onLine || Date.now() - BUILD.lastCheck < 10000) return;
+  BUILD.checking = true; BUILD.lastCheck = Date.now();
+  try {
+    const t = await fetchBuildTag();
+    if (!t) return;
+    if (!BUILD.etag) { BUILD.etag = t; return; }
+    if (t !== BUILD.etag && !uiBusy()) {
+      // guard against a reload loop if the server keeps answering with a different tag
+      const k = 'lifeos_reload_' + t;
+      if (sessionStorage.getItem(k)) { BUILD.etag = t; return; }
+      sessionStorage.setItem(k, '1');
+      toast('Updating LifeOS…');
+      if ('serviceWorker' in navigator) { try { const reg = await navigator.serviceWorker.getRegistration(); if (reg) await reg.update(); } catch {} }
+      location.reload();
+    }
+  } catch { /* offline or blocked: try again next time */ }
+  finally { BUILD.checking = false; }
+}
 
 /* ================= task helpers ================= */
 /* local calendar day of a timestamptz — NOT the UTC slice. Tasks finished after
