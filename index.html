@@ -2373,8 +2373,15 @@ function isJobAction(t){
   if (!t || t.status === 'done' || t.bucket !== 'active') return false;
   const title = t.title || '';
   if (/^apply/i.test(title)) return false;
-  return t.project === 'Rat Race' || JOB_RX.test(title) || /\[job reply /.test(t.notes || '');
+  return t.project === 'Rat Race' || JOB_RX.test(title) || /\[job reply /.test(t.notes || '')
+    || (JOB_ANY.test(title) && /\[from email /.test(t.notes || ''));   // 2026-11-09: LLM triage filed 66degrees under "Professional"
 }
+/* 2026-11-09: interviews and offers never collapse. The 66degrees final round (4 days out) sat
+   behind "show N upcoming" while its prerequisites went unseen. They are listed first, always
+   expanded, whatever the date. */
+const JOB_ANY = /(interview|super ?day|final round|online assessment|recruiter|offer letter|identity verification|background check)/i;
+const JOB_BIG = /^(Interview|OFFER)\b|final (round|interview)|super ?day|on-?site/i;
+function isBigJob(t){ return JOB_BIG.test(t.title || ''); }
 /* days from today to t.due (null = undated) */
 function jobDueDays(t){
   if (!t.due) return null;
@@ -2397,8 +2404,10 @@ function jobActionRows(list, pfx){
    Full list, always expanded, lives at the top of JOBS. */
 function jobHuntCardHTML(jobs){
   if (!jobs.length) return '';
-  const now = jobs.filter(t => { const n = jobDueDays(t); return n != null && n <= 1; });
-  const later = jobs.filter(t => !now.includes(t));
+  const big = jobs.filter(isBigJob);
+  const now = jobs.filter(t => { const n = jobDueDays(t); return !big.includes(t) && n != null && n <= 1; });
+  const later = jobs.filter(t => !now.includes(t) && !big.includes(t));
+  const lbl = s => `<div class="mono dim" style="font-size:10px;letter-spacing:.08em;margin-top:8px">${s}</div>`;
   const cnt = (f, lbl, col) => { const n = jobs.filter(f).length; return n ? `<span style="color:${col};font-weight:600">${n} ${lbl}</span>` : ''; };
   const parts = [
     cnt(t => jobDueDays(t) < 0, 'overdue', '#FF4D42'),
@@ -2409,9 +2418,9 @@ function jobHuntCardHTML(jobs){
   const open = !!S.jobsStripOpen;
   const more = later.length ? `<button class="btn" style="width:100%;margin-top:8px;font-size:11px" onclick="S.jobsStripOpen=!S.jobsStripOpen;render()">${open ? '▾ hide' : '▸ show'} ${later.length} upcoming</button>` : '';
   return `<div class="card jobstrip" id="sec-jobs" style="border:1px solid #FF7A5C66;padding-top:10px;padding-bottom:10px">
-    <h2 style="display:flex;align-items:center;gap:8px;margin-bottom:${now.length || open ? 4 : 0}px"><span>🎯 Jobs</span><span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis">${parts}</span>
+    <h2 style="display:flex;align-items:center;gap:8px;margin-bottom:${big.length || now.length || open ? 4 : 0}px"><span>🎯 Jobs</span><span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis">${parts}</span>
       <button class="btn" style="margin-left:auto;font-size:10px;padding:2px 8px;flex:0 0 auto" onclick="setView('jobs')">all →</button></h2>
-    ${jobActionRows(now, 'jh')}${open ? jobActionRows(later, 'jh') : ''}${more}</div>`;
+    ${big.length ? lbl(`INTERVIEWS · ${big.length}`) + jobActionRows(big, 'jh') : ''}${big.length && now.length ? lbl('DO NOW') : ''}${jobActionRows(now, 'jh')}${open ? jobActionRows(later, 'jh') : ''}${more}</div>`;
 }
 function rToday(){
   const today = todayISO();
