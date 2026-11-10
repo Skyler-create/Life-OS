@@ -988,7 +988,7 @@ const CLAUDE_URL = 'https://claude.ai/project/019f2ae4-de05-714c-8cf0-3bd5d2b1b3
    loadAll (a) waits until nothing is in flight before fetching and (b) drops any snapshot that overlapped
    a write. Belt-and-braces: cycleTask records its patch and loadAll re-applies it over a contradicting
    snapshot until a snapshot taken strictly AFTER the write resolved confirms it. */
-const WR = {inflight: 0, lastStart: 0, lastDone: 0};
+const WR = {inflight: 0, lastStart: 0, lastDone: 0, touched: new Map()};   // touched: 't:<table>' | 'r:<rpc>' | 'f:<edge fn>' → when (2026-11-10, targeted reloads)
 /* 2026-10-23 hotfix: supabase-js sends EVERY rpc() as POST, and loadAll itself calls ~25 read-only RPCs
    (credits, score, quests_deck, explore_feed, ...). Counting those as writes made loadAll invalidate its
    own snapshot every time → endless 400 ms refetch loop, blank page, 30 requests in flight. Only RPCs
@@ -1012,12 +1012,26 @@ async function fetchRead(input, init){
   }
   if (lastErr) throw lastErr;
 }
+/* RPCs that only read (everything loadPass calls, plus the on-demand readers). Any OTHER rpc is assumed to write. */
+const READ_RPC = /^lifeos_(adherence|body_scores|caffeine_context|credits|cycle|day_tags|dns_status|experiment_stats|explore_feed|explore_stats|health_days|money_charts|money_week|quests_candidates|quests_deck|retention|score|sleep_nights|sleep_stats|stocks_context|tag_effects|timeline|tonight_line|week_health)$/;
+/* edge functions are called with a plain fetch(): note them too — what they change is unknown, so the next reload is a full one */
+(() => { const nf = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    try { const u = typeof input === 'string' ? input : (input && input.url) || '';
+      const m = u.match(/\/functions\/v1\/([A-Za-z0-9_-]+)/);
+      if (m && ((init && init.method) || (input && input.method) || 'GET').toUpperCase() !== 'GET') WR.touched.set('f:' + m[1], Date.now()); } catch (e) {}
+    return nf(input, init);
+  }; })();
 const trackedFetch = (input, init) => {
   const method = ((init && init.method) || (input && input.method) || 'GET').toUpperCase();
   const url = typeof input === 'string' ? input : (input && input.url) || '';
   const isRpc = url.indexOf('/rest/v1/rpc/') !== -1;
   const isWrite = method !== 'GET' && method !== 'HEAD' && url.indexOf('/rest/v1/') !== -1 && (!isRpc || WRITE_RPC.test(url));
-  if (!isWrite) return fetchRead(input, init);
+  if (method !== 'GET' && method !== 'HEAD') {   // note what this request can have changed, so the reload after it fetches only that
+    const m = url.match(/\/rest\/v1\/(rpc\/)?([A-Za-z0-9_]+)/);
+    if (m && !(m[1] && READ_RPC.test(m[2]))) WR.touched.set((m[1] ? 'r:' : 't:') + m[2], Date.now());
+  }
+  if (!isWrite || url.indexOf('/rest/v1/push_subs') !== -1) return fetchRead(input, init);   // push_subs changes nothing on screen: it must not invalidate a reload
   WR.inflight++; WR.lastStart = Date.now();
   const done = () => { WR.inflight = Math.max(0, WR.inflight - 1); WR.lastDone = Date.now(); };
   return fetch(input, init).then(r => { done(); return r; }, e => { done(); throw e; });
@@ -1146,7 +1160,97 @@ function staleBar(on, n, mode){
                  : mode === 'slow' ? '⏳ server is slow — still loading…'
                  : (S._loadedOnce ? '⚠ server hiccup — showing last data' : '⚠ server hiccup — loading') + ' · retrying' + (n > 1 ? ' (' + n + ')' : '') + '…';
 }
-async function loadAll(){
+/* ---- targeted reloads (2026-11-10) ----
+   Every refresh used to run all 48 queries (~4 MB, ~14 s of database work) whatever had changed, and one fired
+   on every realtime event. Now each query belongs to a GROUP and a refresh fetches only the groups it needs:
+     • a realtime event reloads the groups that table feeds (RT_GROUPS);
+     • the reload after a tap reloads the groups that write feeds (WRITE_GROUPS, from the write tracker);
+     • MONEY / QUESTS / EXPLORE load when their tab is open (LAZY_VIEW), JOBS when its tab or a kit is open;
+     • anything unknown, a cold start and coming back to the app still do a FULL refresh, and a soft full
+       refresh runs once a minute while the app is visible, so nothing can stay stale for long.
+   loadAll() keeps its old meaning for every existing caller. Requests are queued and run one pass at a time
+   (a pass in flight is never thrown away by a newer one; the newer request just rides in the next pass). */
+const QG  = ['tasks','goals','goals','brief','log','cards','cal','cal','focus','credits','plan','settings'];
+const Q2G = ['cal','plan','score','score','sleep','score','exp','misc','misc','cards','cards','people','people','people',
+  'money','money','money','money','money','money','jobs','focus','jobs','jobs','caff','sleep','sleep','sleep','sleep','sleep','sleep',
+  'quests','quests','explore','explore','quests'];
+const ALL_GROUPS = [...new Set(QG.concat(Q2G))];
+/* state slices each group owns that loadPass assigns before its first await (restored when the group is skipped) */
+const GROUP_KEYS = {
+  tasks: ['tasks'], goals: ['goals','goalLogsToday'], brief: ['brief'], cards: ['cards','cardInbox','retention'],
+  cal: ['events','freezes','ttEvents'], focus: ['focusOpen','focusLog'], credits: ['credits'], plan: ['planBlocks','dayLoad'],
+  score: ['scoreNow','weekHealth','adherence'], sleep: ['sleepStats','sleepNights','healthDays','body','dayTags','tonight','tagEffects'],
+  exp: ['experiments'], misc: ['waitingOn','news'], people: ['people','cycle','cycleMarks'],
+  money: ['money','finAccounts','finTx','finRecurring','stocks','moneyCharts'], jobs: ['jobs','kits'], caff: ['caff'],
+  quests: ['questDeck','questCands','questSaved'], explore: ['exFeed','exStats'],
+};
+const LAZY_VIEW = {money: 'money', quests: 'quests', explore: 'explore'};   // group → the only tab that shows it
+/* soft (once-a-minute) refresh: groups that change slowly are re-read only when this old (ms); unlisted = every time */
+const SOFT_TTL = {sleep: 180e3, caff: 180e3, exp: 300e3, misc: 120e3, people: 600e3, cal: 120e3, jobs: 600e3, quests: 600e3, explore: 600e3};
+/* realtime publication = tasks, daily_log, events, briefs, goal_logs, weekly_goals */
+const RT_GROUPS = {
+  tasks: ['tasks','credits','score','plan'], daily_log: ['log','credits','score'], events: ['cal'],
+  briefs: ['brief','credits','score'], goal_logs: ['goals','score'], weekly_goals: ['goals','score'],
+};
+/* what the app's own writes can change. Anything not listed here (task/plan/reflection RPCs, lifeos_settings,
+   edge functions, a write this table has never heard of) falls back to a full refresh. [] = changes nothing on screen. */
+const WRITE_GROUPS = {
+  't:tasks': ['tasks','credits','score','plan','log','goals','focus'],
+  't:daily_log': ['log','credits','score','sleep'],
+  't:goal_logs': ['goals','score','credits'], 't:weekly_goals': ['goals','score','credits'],
+  't:briefs': ['brief','credits','score'],
+  't:events': ['cal'], 't:freezes': ['cal','plan','score','credits'], 't:gcal_outbox': [], 't:push_subs': [],
+  't:focus_sessions': ['focus','credits','score','plan','tasks'],
+  't:credit_spends': ['credits'], 't:plan_blocks': ['plan'],
+  't:cards': ['cards'], 't:card_attempts': ['cards','credits'],
+  't:caffeine_log': ['caff','sleep'], 't:brew_log': ['caff','sleep'], 't:beans': ['caff'],
+  't:cycle_marks': ['people'], 't:people': ['people'], 't:experiments': ['exp'], 't:waiting_on': ['misc'],
+  't:fin_accounts': ['money'], 't:fin_recurring': ['money'], 't:fin_rules': ['money'], 't:fin_transactions': ['money'],
+  't:holdings': ['money'], 't:watch_tickers': ['money'], 't:stock_trade_acks': ['money'],
+  't:job_postings': ['jobs','tasks'],
+  'r:lifeos_quests_swipe': ['quests'], 'r:lifeos_quests_source_swipe': ['quests'], 'r:lifeos_explore_act': ['explore','cards'],
+  'r:lifeos_news_feedback': ['misc'], 'r:lifeos_tag_toggle': ['sleep'], 'r:lifeos_card_review': ['cards','credits','log'],
+  'r:lifeos_card_decide': ['cards'], 'r:lifeos_log_caffeine': ['caff','sleep'], 'r:lifeos_experiment_stop': ['exp'],
+  'r:lifeos_money_unlock': ['money'], 'r:lifeos_money_lock': ['money'], 'r:lifeos_money_set_pin': ['money'], 'r:lifeos_stocks_sync': ['money'],
+};
+/* LD.pending holds group names plus two tokens: '*' = full refresh, '~' = soft full refresh (respects SOFT_TTL) */
+const LD = {pending: new Set(), force: new Set(), stale: new Set(), at: {}, fullStart: 0, everFull: false, hold: false, chain: null, passes: 0, queries: 0};
+function loadAll(opts){
+  const o = (opts && typeof opts === 'object' && (opts.__full || opts.__soft || opts.__flush || opts.__groups)) ? opts : null;
+  if (o && o.__full) LD.pending.add('*');
+  else if (o && o.__soft) LD.pending.add('~');
+  else if (o && o.__groups) o.__groups.forEach(g => { LD.pending.add(g); if (o.__force) LD.force.add(g); });
+  else if (!o) {
+    // an existing caller: "something changed, refresh". Work out what from the writes seen since the last request.
+    const now = Date.now(); let known = true, recent = false; const gs = new Set();
+    WR.touched.forEach((ts, k) => {
+      const m = WRITE_GROUPS[k];
+      if (!m) { known = false; return; }
+      if (!m.length) return;
+      if (now - ts < 8000) recent = true;
+      m.forEach(g => gs.add(g));
+    });
+    WR.touched.clear();
+    if (known && recent) gs.forEach(g => LD.pending.add(g));
+    // nothing was written and a full refresh began a moment ago (sign-in fires twice on a cold start): it already covers this
+    else if (known && !gs.size && LD.hardRunning && now - LD.hardRunning < 1500 && now - (S.lastWrite || 0) > 3000) { /* covered */ }
+    else LD.pending.add('*');
+  }
+  LD.hold = false;   // any new request ends a retry back-off early
+  if (!LD.chain) LD.chain = (async () => {
+    try { while (LD.pending.size && !LD.hold) { try { await loadPass(); } finally { LD.hardRunning = 0; } } }
+    catch (e) { console.warn('loadAll pass failed', e); }
+    finally { LD.chain = null; }
+  })();
+  return LD.chain;
+}
+/* a tab that loads on demand: fetch its group when it is opened and the copy on hand is missing or old */
+function ensureViewData(v){
+  const g = LAZY_VIEW[v] ? v : (v === 'jobs' ? 'jobs' : null);
+  if (!g || !S._loadedOnce || !LD.everFull) return;
+  if (!LD.at[g] || LD.stale.has(g) || Date.now() - LD.at[g] > (g === 'jobs' ? 60e3 : 120e3)) loadAll({__groups: [g]});
+}
+async function loadPass(){
   // Never read while a write is in flight: the snapshot would predate the commit. Also keep the old
   // small grace period for a write that is about to be sent (S.lastWrite stamped, request not yet out).
   const sinceStamp = Date.now() - (S.lastWrite || 0);
@@ -1156,6 +1260,33 @@ async function loadAll(){
   const startedAt = Date.now();   // snapshot is only valid for writes that began AND finished BEFORE this
   loadAll._lastStart = startedAt;
   const today = todayISO();
+  // ---- which groups does this pass fetch? ----
+  const asked = new Set(LD.pending), forced = new Set(LD.force); LD.pending.clear(); LD.force.clear();
+  const hard = asked.has('*') || !LD.everFull, soft = !hard && asked.has('~'), isFull = hard || soft;
+  asked.delete('*'); asked.delete('~');
+  const W = new Set(asked), later = new Set(), kitOpen = !!(S.kitOpen && S.kitOpen.size), age = g => startedAt - (LD.at[g] || 0);
+  if (hard) ALL_GROUPS.forEach(g => W.add(g));
+  else if (soft) ALL_GROUPS.forEach(g => { if (!SOFT_TTL[g] || S.view === g || age(g) >= SOFT_TTL[g]) { W.add(g); if (LAZY_VIEW[g] && g !== 'money' && LD.at[g]) forced.add(g); } });
+  [...W].forEach(g => {
+    if (LAZY_VIEW[g] && S.view !== g && !forced.has(g)) {   // a tab that is not open: load it when it is opened
+      W.delete(g);
+      if (LD.at[g]) LD.stale.add(g); else if (g !== 'money') later.add(g);   // never loaded → fetch once in the background (nav badges)
+    } else if (g === 'jobs' && isFull && !asked.has('jobs') && S.view !== 'jobs' && !kitOpen) {   // 3 MB of kits: not on every refresh
+      W.delete(g);
+      if (!LD.at.jobs || age('jobs') >= 300e3) later.add(g);   // …but still due → its own pass right after this one
+    }
+  });
+  const requeue = () => { W.forEach(g => LD.pending.add(g)); forced.forEach(g => LD.force.add(g)); if (hard) LD.pending.add('*'); else if (soft) LD.pending.add('~'); };
+  const has = g => W.has(g);
+  const doLater = () => {
+    if (later.has('jobs')) setTimeout(() => loadAll({__groups: ['jobs']}), 1200);   // kit labels on TODAY: its own pass, after this one has painted
+    const bg = [...later].filter(g => g !== 'jobs');
+    if (bg.length) setTimeout(() => { if (document.visibilityState === 'visible') loadAll({__groups: bg, __force: true}); }, 3000);
+  };
+  if (!W.size) { doLater(); return; }
+  if (isFull) LD.fullStart = startedAt;
+  LD.hardRunning = hard ? startedAt : 0;
+  LD.passes++;
   clearTimeout(loadAll._slowT);
   loadAll._slowT = setTimeout(() => { if (!S._loadedOnce || S._fromCache) staleBar(true, 0, S._fromCache ? 'cache' : 'slow'); }, 4000);
   // 2026-10-25: two waves instead of one 48-query stampede. Wave 1 = what TODAY needs; it is applied and
@@ -1219,8 +1350,13 @@ async function loadAll(){
     db.rpc('lifeos_explore_stats'),
     db.from('quests').select('*').in('status', ['saved', 'going']).gte('event_date', today).order('event_date').order('starts_at'),
   ];
+  // a query whose group is not part of this pass is never sent (a builder only fires when awaited)
+  const SKIP = {data: undefined, error: null, skipped: true};
+  QG.forEach((g, i) => { if (!has(g)) Q[i] = SKIP; });
+  Q2G.forEach((g, i) => { if (!has(g)) Q2[i] = SKIP; });
+  LD.queries += Q.concat(Q2).filter(q => q !== SKIP).length;
   const W1 = await Promise.all(Q);
-  if (seq === loadAll._seq && !S._loadedOnce && !W1.some(r => r && r.error && isServerHiccup(r.error))) {
+  if (seq === loadAll._seq && !S._loadedOnce && hard && !W1.some(r => r && r.error && isServerHiccup(r.error))) {
     // cold start: paint TODAY from the critical wave right away; the full pass below re-applies everything
     const [t1, g1, gl1, b1, dl1, cd1, ev1, fz1, fs1, cr1, pb1, st1] = W1;
     S.tasks = t1.data || []; S.goals = g1.data || []; S.goalLogsToday = gl1.data || []; S.brief = b1.data || null;
@@ -1239,19 +1375,25 @@ async function loadAll(){
   const results = [t, g, gl, b, dl, cd, ev, fz, fs, cr, pb, st, tt, dload, scn, wh, ss, adh, ex, wo, nw, ci, rt, pp, cy, cm, mw, fa, ft, fr, stx, mch, jp, flog, jpn, jm, caf, sn, hdays, bsc, dtg, tnl, tfx, qdk, qcd, exf, exs, qsv];
   const outage = results.filter(r => r && r.error && isServerHiccup(r.error));
   if (outage.length) {
-    if (seq !== loadAll._seq) return;
+    if (seq !== loadAll._seq) { requeue(); return; }
     loadAll._fail = (loadAll._fail || 0) + 1;
     const wait = Math.min(30000, 1500 * Math.pow(2, loadAll._fail - 1));
     console.warn('loadAll: ' + outage.length + ' server-side failures (' + (outage[0].error.code || outage[0].error.message) + ') — keeping last good data, retry in ' + wait + ' ms');
     staleBar(true, loadAll._fail);
-    clearTimeout(loadAll._retryT); loadAll._retryT = setTimeout(loadAll, wait);
+    requeue(); LD.hold = true;   // same groups again after the back-off (a new request cuts the wait short)
+    clearTimeout(loadAll._retryT); loadAll._retryT = setTimeout(() => loadAll({__flush: true}), wait);
     if (S._loadedOnce || outage.length >= results.length / 2) return;   // first load with a partial outage: render what came back, retry fills the rest
   } else { loadAll._fail = 0; S._fromCache = false; staleBar(false); }
-  if (seq !== loadAll._seq) return;   // 2026-10-26: drop a stale snapshot BEFORE it overwrites any slice (was checked only after ~35 assignments)
+  if (seq !== loadAll._seq) { requeue(); return; }   // 2026-10-26: drop a stale snapshot BEFORE it overwrites any slice (was checked only after ~35 assignments)
+  // Groups this pass did not fetch keep exactly what is on screen: remember their slices now (so a tap made while
+  // the fetch was in flight survives) and put them back after the assignments below. No await in between.
+  const kept = {};
+  ALL_GROUPS.forEach(g => { if (!has(g)) (GROUP_KEYS[g] || []).forEach(k => { if (S[k] !== undefined) kept[k] = S[k]; }); });
+  const keep = () => { for (const k in kept) S[k] = kept[k]; };
   S.tasks = t.data || []; S.goals = g.data || []; S.goalLogsToday = gl.data || [];
   // Re-apply taps the server has not visibly confirmed yet. A patch is retired only once a snapshot
   // taken strictly after its write resolved agrees with it (or 60 s pass, in case the write failed silently).
-  for (const id in PENDING_TASK) {
+  if (has('tasks')) for (const id in PENDING_TASK) {
     const p = PENDING_TASK[id], row = S.tasks.find(x => x.id === id);
     const confirmed = row && p.doneAt && startedAt > p.doneAt && row.status === p.patch.status;
     if (confirmed || Date.now() - p.at > 60000 || !row) { delete PENDING_TASK[id]; continue; }
@@ -1285,7 +1427,8 @@ async function loadAll(){
   S.focusLog = flog.data || [];    // clocked-in history → blue work spans on CAL
   S.stocks = stx.data || null;     // stocks agent: quotes + indicators + latest report
   S.moneyCharts = (mch.data && !mch.data.locked) ? mch.data : null;   // money v2 chart feed (lifeos_money_charts)
-  if (seq !== loadAll._seq) return;   // a newer loadAll is in flight — this snapshot is stale, drop it
+  keep();
+  if (seq !== loadAll._seq) { requeue(); return; }   // a newer loadAll is in flight — this snapshot is stale, drop it
   // RACE FIX (2026-10-21): a tap during an in-flight reload used to get overwritten — the tasks
   // SELECT had been answered BEFORE the UPDATE committed but its response landed AFTER the
   // optimistic render, so the row flipped back to undone (credits stayed: the server row was
@@ -1294,7 +1437,7 @@ async function loadAll(){
   // began after this fetch started invalidates the whole snapshot → drop it and refetch.
   if ((S.lastWrite || 0) >= startedAt || WR.lastStart >= startedAt || WR.lastDone >= startedAt) {   // a write overlapped this fetch → snapshot may be stale
     loadAll._retries = (loadAll._retries || 0) + 1;
-    if (loadAll._retries <= 4) { setTimeout(loadAll, 400); return; }   // 2026-10-23: never loop forever — after 4 overlaps render what we have (PENDING_TASK still protects taps)
+    if (loadAll._retries <= 4) { requeue(); LD.hold = true; setTimeout(() => loadAll({__flush: true}), 400); return; }   // 2026-10-23: never loop forever — after 4 overlaps render what we have (PENDING_TASK still protects taps)
     console.warn('loadAll: writes kept overlapping, rendering the snapshot anyway');
   }
   loadAll._retries = 0;
@@ -1308,8 +1451,9 @@ async function loadAll(){
   S.tonight = tnl.data || null;   // one-sentence tonight line (server)
   S.tagEffects = tfx.data || [];  // per-tag sleep effect sizes, 30 d
   S.healthDays = hdays.data || []; // Fitbit vitals (resting HR, HRV, steps, SpO2, resp) via Apple Health → LifeOS Health shortcut
-  S.expStats = {}; S.expArms = {};
-  try {
+  keep();
+  if (has('exp')) { S.expStats = {}; S.expArms = {}; }
+  if (has('exp')) try {
     const actives = S.experiments.filter(e => e.status === 'active').slice(0, 4);
     if (actives.length) {
       const [ed, ...sts] = await Promise.all([
@@ -1320,18 +1464,27 @@ async function loadAll(){
       actives.forEach((e, i) => { S.expStats[e.id] = sts[i].data || null; });
     }
   } catch (e) { /* experiments card degrades gracefully */ }
-  S.settings = Object.fromEntries((st.data || []).map(r => [r.key, r.value]));
-  try { S.wakeTargets = JSON.parse(S.settings.wake_targets || '{}'); } catch(e){ S.wakeTargets = {}; }
-  const logs = dl.data || [];
-  S.todayLog = logs.find(l => l.date === today) || null;
-  S.prevLog  = logs.find(l => l.date < today) || null;
-  S.logs = logs;
+  if (has('settings')) {
+    S.settings = Object.fromEntries((st.data || []).map(r => [r.key, r.value]));
+    try { S.wakeTargets = JSON.parse(S.settings.wake_targets || '{}'); } catch(e){ S.wakeTargets = {}; }
+  }
+  if (has('log')) {
+    const logs = dl.data || [];
+    S.todayLog = logs.find(l => l.date === today) || null;
+    S.prevLog  = logs.find(l => l.date < today) || null;
+    S.logs = logs;
+  }
+  W.forEach(g => { LD.at[g] = startedAt; LD.stale.delete(g); });
   if (!S._loadedOnce) { S._loadedOnce = true; render(); } else renderSoft();
   clearTimeout(loadAll._snapT); loadAll._snapT = setTimeout(saveSnapshot, 1500);
   subscribeRealtime();
-  captureWake();
-  updatePushBtn();
-  refreshPushSub();
+  if (isFull) {   // once per full refresh, not once per targeted one (refreshPushSub is itself a write)
+    LD.everFull = true;
+    captureWake();
+    updatePushBtn();
+    if (!LD.pushDone) { LD.pushDone = true; refreshPushSub(); }   // the subscription does not change within a session
+  }
+  doLater();
   // Google Calendar: NO automatic re-auth on load. The GIS token client always
   // opens a popup (there is no truly silent refresh in the implicit flow), and on
   // iOS it shows the account chooser every time. Live mode lasts one token (~1h);
@@ -1412,33 +1565,66 @@ function uiBusy(){
 }
 function uiScrolling(){ return Date.now() - Math.max(S._gsAt || 0, S._msAt || 0) < 1200; }
 /* background refresh that arrives while the user is busy: remember it, replay when free */
-function renderSoft(){ if (uiBusy() || uiScrolling()) { S._dirty = true; return; } S._dirty = false; render(); }
+function renderSoft(){
+  // 2026-11-10: a postponed render is only a render. It used to set S._dirty, which made the next render() start a
+  // whole new reload — with small targeted reloads landing all the time that turned every scroll into a full refresh.
+  if (uiBusy() || uiScrolling()) { S._rdirty = true; clearTimeout(renderSoft._t); renderSoft._t = setTimeout(() => { if (S._rdirty) renderSoft(); }, 1300); return; }
+  render();
+}
 // any scroller in the app (main, grid, sheet, chat log, prep panel): scroll doesn't bubble, so capture it
 document.addEventListener('scroll', e => { if (e.target && e.target.closest && e.target.closest('nav')) return; S._msAt = Date.now(); }, {capture: true, passive: true});   // nav scrollIntoView on tab switch is not a user scroll
+/* a daily_log UPDATE that leaves the row exactly as this screen already has it changes nothing here */
+function rtNoise(p){
+  try {
+    if (!p || p.table !== 'daily_log' || p.eventType !== 'UPDATE' || !p.new) return false;
+    const row = (S.logs || []).find(l => l.date === p.new.date); if (!row) return false;
+    const same = (a, b) => {
+      if (a == null && b == null) return true;
+      if (a == null || b == null) return false;
+      if (a === b || String(a) === String(b)) return true;
+      if (typeof a === 'string' && typeof b === 'string' && a.length > 15 && b.length > 15) { const x = Date.parse(a), y = Date.parse(b); return !isNaN(x) && x === y; }
+      return false;
+    };
+    return Object.keys(p.new).every(k => same(p.new[k], row[k]));
+  } catch (e) { return false; }
+}
+function rtFlush(){
+  if (!LD.pending.size) return;
+  if (uiBusy()) { S._pdirty = true; return; }                                             // replayed by the next render()
+  if (uiScrolling()) { clearTimeout(rtTimer); rtTimer = setTimeout(rtFlush, 1200); return; }   // don't rebuild mid-scroll
+  loadAll({__flush: true});
+}
 function subscribeRealtime(){
   if (rtChannel) return;
   rtChannel = db.channel('lifeos-sync')
-    .on('postgres_changes', {event: '*', schema: 'public'}, () => {
-      // ignore the echo of our own writes — they're already on screen
-      if (Date.now() - (S.lastWrite || 0) < 2500) { clearTimeout(rtTimer); rtTimer = setTimeout(() => { if (!uiBusy() && !uiScrolling()) loadAll(); else S._dirty = true; }, 2600); return; }
+    .on('postgres_changes', {event: '*', schema: 'public'}, (p) => {
+      if (rtNoise(p)) return;
+      // 2026-11-10: reload only what this table feeds (was: all 48 queries, at most once per 15 s)
+      const gs = RT_GROUPS[p && p.table];
+      if (gs) gs.forEach(g => LD.pending.add(g)); else LD.pending.add('~');
       clearTimeout(rtTimer);
-      // 2026-10-25: dns_sync and friends write every minute; one realtime-triggered reload per 15 s is plenty
+      // the echo of our own write: it is already on screen, let the write settle first
+      if (Date.now() - (S.lastWrite || 0) < 2500) { rtTimer = setTimeout(rtFlush, 2600); return; }
+      // someone else's change (another device, a routine): show it right away; bursts collapse into one reload
       const sinceLoad = Date.now() - (loadAll._lastStart || 0);
-      rtTimer = setTimeout(() => {
-        if (uiBusy()) { S._dirty = true; return; }
-        if (uiScrolling()) { clearTimeout(rtTimer); rtTimer = setTimeout(() => { if (!uiBusy() && !uiScrolling()) loadAll(); else S._dirty = true; }, 1200); return; } // don't rebuild mid-scroll
-        loadAll();
-      }, Math.max(600, 15000 - sinceLoad));
+      rtTimer = setTimeout(rtFlush, Math.max(700, 2500 - sinceLoad));
     })
     .subscribe();
 }
+/* safety net: tables outside the realtime publication (plan, focus, credits spent on the phone, …) are picked up
+   by a soft full refresh once a minute while the app is on screen; queued groups that were postponed get flushed */
+setInterval(() => {
+  if (document.visibilityState !== 'visible' || !S._loadedOnce || !LD.everFull || uiBusy() || uiScrolling()) return;
+  if (Date.now() - LD.fullStart > 60000) loadAll({__soft: true});
+  else if (LD.pending.size && !LD.chain) loadAll({__flush: true});
+}, 20000);
 /* coming back to the app after it sat in the background (2026-11-07): always refresh the data,
    and reload the page if a newer build has been deployed since this copy was loaded. iOS keeps a
    home-screen PWA paused in memory for days, so without this the old code and old numbers stick. */
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || !S._loadedOnce) return;
   checkForNewBuild();
-  if (Date.now() - (loadAll._lastStart || 0) > 5000 && !uiBusy()) loadAll();
+  if (Date.now() - LD.fullStart > 5000 && !uiBusy()) loadAll({__full: true});
 });
 
 /* ---- build freshness: compare the server's ETag for index.html with the one we loaded ---- */
@@ -1852,7 +2038,7 @@ async function saveReflection(){
 
 /* ================= rendering ================= */
 const VIEWS = [['today','TODAY'],['tasks','TASKS'],['brief','BRIEF'],['cal','CAL'],['quests','QUESTS'],['explore','EXPLORE'],['chat','CHAT'],['reflect','REFLECT'],['coffee','COFFEE'],['yc','YC'],['time','TIME'],['log','LOG'],['trends','TRENDS'],['money','MONEY'],['jobs','JOBS'],['cards','CARDS'],['settings','SETTINGS']];
-function setView(v){ S.view = v; S.editing = null; localStorage.setItem('view', v); render(); }
+function setView(v){ S.view = v; S.editing = null; localStorage.setItem('view', v); render(); ensureViewData(v); }
 function jumpTo(id){
   const el = document.getElementById(id); if (!el) return;
   const main = document.getElementById('main');
@@ -1863,7 +2049,11 @@ function jumpTo(id){
 function setFilt(f){ S.filt = f; localStorage.setItem('filt', f); render(); }
 
 function render(){
-  if (S._dirty && !uiBusy()) { S._dirty = false; setTimeout(loadAll, 0); }
+  S._rdirty = false;
+  if ((S._dirty || S._pdirty) && !uiBusy()) {   // _dirty: a reload was wanted while busy (full) · _pdirty: queued groups are waiting
+    const full = S._dirty; S._dirty = S._pdirty = false;
+    setTimeout(() => loadAll(full ? undefined : {__flush: true}), 0);
+  }
   // parent_id → children map, rebuilt once per render (3-layer tasks)
   S._kids = {};
   S.tasks.forEach(t => { if (t.parent_id) (S._kids[t.parent_id] = S._kids[t.parent_id] || []).push(t); });
@@ -3966,7 +4156,7 @@ function qUp(e){
     document.addEventListener('click', kill, {capture: true, once: true});
     setTimeout(() => document.removeEventListener('click', kill, {capture: true}), 120);
   }
-  if (S._dirty) renderSoft();
+  if (S._dirty || S._rdirty || S._pdirty) renderSoft();
 }
 document.addEventListener('pointermove', qMove, {passive: true});
 document.addEventListener('pointerup', qUp);
