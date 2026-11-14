@@ -2612,6 +2612,50 @@ function jobHuntCardHTML(jobs){
       <button class="btn" style="margin-left:auto;font-size:10px;padding:2px 8px;flex:0 0 auto" onclick="setView('jobs')">all →</button></h2>
     ${big.length ? lbl(`INTERVIEWS · ${big.length}`) + jobActionRows(big, 'jh') : ''}${big.length && now.length ? lbl('DO NOW') : ''}${jobActionRows(now, 'jh')}${open ? jobActionRows(later, 'jh') : ''}${more}</div>`;
 }
+/* 2026-11-14 NEEDS YOU? strip (Skyler: email tasks "just don't have due dates and get hidden in the
+   tasks list… I won't see it if I don't look"). Rule: an email-born task is never undated AND unseen.
+   inbox-triage v7 dates what clearly needs him (+2d, "[due assumed]"); whatever is left undated shows
+   here until he answers it: Today · +2d · ✕ not mine (two-tap, feeds the triage's ignore list).
+   Newest first, 3 shown, the rest behind a count. Job actions stay in the Jobs strip. */
+function isNeedsYou(t){
+  return !!t && t.status !== 'done' && t.bucket === 'active' && !t.due
+    && /\[from email /.test(t.notes || '') && !isJobAction(t);
+}
+function needsYouSrc(t){
+  const m = (t.notes || '').match(/\[from email \d{4}-\d\d-\d\d from ([\s\S]*)\]/);
+  return m ? m[1].replace(/\]\s*\[due assumed[^\]]*$/, '').replace(/\s+/g, ' ').trim() : '';
+}
+async function needsYouDue(id, days){
+  const t = S.tasks.find(x => x.id === id); if (!t) return;
+  const d = new Date(todayISO() + 'T12:00'); d.setDate(d.getDate() + days);
+  const due = d.toLocaleDateString('sv-SE');
+  S.lastWrite = Date.now();
+  const {error} = await db.from('tasks').update({due, deadline_type: t.deadline_type || 'self_imposed'}).eq('id', id);
+  if (error) { toast('❌ ' + error.message); return; }
+  t.due = due; t.deadline_type = t.deadline_type || 'self_imposed';
+  toast(days === 0 ? '📌 On today' : `📅 Due in ${days} days`);
+  render();
+}
+function needsYouCardHTML(list){
+  if (!list.length) return '';
+  const open = !!S.needsOpen, shown = open ? list : list.slice(0, 3), rest = list.length - shown.length;
+  const row = t => {
+    const armed = S._cancelArm === t.id, src = needsYouSrc(t);
+    return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line, rgba(255,255,255,.08))">
+      <div style="font-size:14px;line-height:1.3;cursor:pointer" onclick="S.editing = S.editing === '${t.id}' ? null : '${t.id}'; render()">${esc(t.title)}</div>
+      ${src ? `<div class="dim" style="font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(src)}</div>` : ''}
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn primary" style="flex:1;font-size:12px" onclick="needsYouDue('${t.id}',0)">Today</button>
+        <button class="btn" style="flex:1;font-size:12px" onclick="needsYouDue('${t.id}',2)">+2d</button>
+        <button class="btn" style="flex:1;font-size:12px${armed ? ';background:#FF4D42;border-color:#FF4D42;color:#fff' : ''}" onclick="${armed ? `dismissTask('${t.id}')` : `armCancel('${t.id}')`}">${armed ? 'sure?' : '✕ not mine'}</button>
+      </div>${S.editing === t.id ? editorHTML(t) : ''}</div>`;
+  };
+  const more = (rest > 0 || open) && list.length > 3
+    ? `<button class="btn" style="width:100%;margin-top:8px;font-size:11px" onclick="S.needsOpen=!S.needsOpen;render()">${open ? '▾ show less' : '▸ show ' + rest + ' more'}</button>` : '';
+  return `<div class="card" id="sec-needs" style="border:1px solid #FBBF2466;padding-top:10px;padding-bottom:10px">
+    <h2 style="display:flex;align-items:center;gap:8px;margin-bottom:0"><span>📬 Needs you?</span><span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:12px;color:#FBBF24">${list.length} from email, no date</span></h2>
+    ${shown.map(row).join('')}${more}</div>`;
+}
 function rToday(){
   const today = todayISO();
   const kids = S._kids || {};
@@ -2620,6 +2664,7 @@ function rToday(){
     (a.due || '9999').localeCompare(b.due || '9999') || (PRIO[b.priority] || 2) - (PRIO[a.priority] || 2));
   const jobIds = new Set(jobs.map(t => t.id));
   const jobCard = jobHuntCardHTML(jobs);
+  const needCard = needsYouCardHTML(active.filter(isNeedsYou).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')));
   const todays = active.filter(t =>
     (t.due && t.due <= today && t.status !== 'done') ||
     t.status === 'in_progress' || isPartialToday(t) || isDoneToday(t));
@@ -2659,13 +2704,13 @@ function rToday(){
     });
     return rows.length ? `<div class="pname">FROM TODAY'S PLAN</div>` + rows.map(taskRowHTML).join('') : '';
   })();
-  if (isDesk()) return todayDeskHTML({shCard, meter, bar, evCard, sorted, planSection, open, today, jobCard});
+  if (isDesk()) return todayDeskHTML({shCard, meter, bar, evCard, sorted, planSection, open, today, jobCard, needCard});
   // phone: sticky jump pills (2026-11-01) — one tap to Jobs / Score / Body / Tasks instead of scrolling the stack
   const body = bodyCardHTML();
-  const pills = [['sec-jobs', 'Jobs', !!jobCard], ['sec-score', 'Score', !!meter], ['sec-body', 'Body', !!body], ['sec-tasks', 'Tasks', true]]
+  const pills = [['sec-jobs', 'Jobs', !!jobCard], ['sec-needs', 'Inbox', !!needCard], ['sec-score', 'Score', !!meter], ['sec-body', 'Body', !!body], ['sec-tasks', 'Tasks', true]]
     .filter(p => p[2]).map(([id, l]) => `<button onclick="jumpTo('${id}')">${l}</button>`).join('');
   return `<div class="jump">${pills}</div>` +
-    jobCard + goalConfirmsHTML() + shCard +
+    jobCard + needCard + goalConfirmsHTML() + shCard +
     (meter ? `<div id="sec-score" class="jsec">${meter}</div>` : '') +
     (body ? `<div id="sec-body" class="jsec">${body}</div>` : '') +
     capacityWarnHTML() + planBlocksHTML() + replanCardHTML() + creditsCardHTML() + caffeineCardHTML() + sleepNightsCardHTML() + waitingOnHTML() + evCard +
@@ -3822,7 +3867,7 @@ function todayDeskHTML(p){
     .replace(/id="(vz[^"]+)"/g, 'id="$1b"').replace(/url\(#(vz[^)]+)\)/g, 'url(#$1b)');   // own gradient ids — the hidden copy can't serve them
   // columns
   const rows = p.sorted.length ? p.sorted.map(taskRowHTML).join('') : `<div class="empty">Nothing on deck — press / to add a task.</div>`;
-  const c1 = (p.jobCard || '') + goalConfirmsHTML() + p.shCard +
+  const c1 = (p.jobCard || '') + (p.needCard || '') + goalConfirmsHTML() + p.shCard +
     chipsHTML() + rows + p.planSection;
   const showCap = !(d && d.available != null) || d.status === 'over';
   const c2 = planBlocksHTML() + (showCap ? capacityWarnHTML() : '') + creditsCardHTML() + replanCardHTML();
