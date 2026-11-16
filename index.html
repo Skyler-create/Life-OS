@@ -6767,7 +6767,64 @@ function rJobs(){
     (a.due || '9999').localeCompare(b.due || '9999') || (PRIO[b.priority] || 2) - (PRIO[a.priority] || 2));
   const actCard = acts.length ? `<div class="card" style="border:1px solid #FF7A5C66"><h2>🎯 Open actions · ${acts.length}</h2>${jobActionRows(acts, 'ja')}
     <div class="dim mono" style="font-size:10px;margin-top:6px">every OA / interview / recruiter / action item, any due date · also pinned on TODAY</div></div>` : '';
-  return actCard + seg + (S.jobsView === 'stats' ? jobsStatsHTML() : jobsPipelineHTML());
+  return actCard + outreachCardHTML() + seg + (S.jobsView === 'stats' ? jobsStatsHTML() : jobsPipelineHTML());
+}
+/* 2026-11-16 OUTREACH drafts. The nightly cloud run writes cold emails + follow-ups into
+   job_outreach (no Gmail connector, no laptop). Each row here opens Gmail's compose window
+   pre-filled in the skylerlang17 account; Skyler presses Send, then taps "sent". */
+const OUTREACH_FROM = 'skylerlang17@gmail.com';
+async function loadOutreach(){
+  if (S._outreachBusy) return;
+  S._outreachBusy = true;
+  try {
+    const {data, error} = await db.from('job_outreach_drafts').select('*').order('ready_at', {ascending: false});
+    S.outreach = error ? [] : (data || []);
+    S.outreachErr = error ? error.message : null;
+  } catch (e) { S.outreach = []; S.outreachErr = e.message; }
+  S._outreachBusy = false;
+  if (S.view === 'jobs') render();
+}
+function outreachComposeURL(o){
+  const q = new URLSearchParams({view: 'cm', fs: '1', to: o.email || '', su: o.subject || '', body: o.body || ''});
+  return 'https://mail.google.com/mail/?authuser=' + encodeURIComponent(OUTREACH_FROM) + '&' + q.toString();
+}
+function outreachCardHTML(){
+  if (S.outreach === undefined) { loadOutreach(); return ''; }
+  const rows = S.outreach || [];
+  if (!rows.length) return S.outreachErr ? `<div class="card"><h2>✉ Outreach</h2><div class="dim" style="font-size:12px">⚠ ${esc(S.outreachErr)}</div></div>` : '';
+  const open = S.outreachOpen || null;
+  return `<div class="card" style="border:1px solid #818CF866"><h2>✉ Outreach to send · ${rows.length}</h2>${rows.map(o => {
+    const key = o.id + o.kind, isOpen = open === key;
+    const conf = o.email_confidence && o.email_confidence !== 'verified' ? ` <span style="color:#FBBF24">· ${esc(o.email_confidence)} address</span>` : '';
+    return `<div style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,.04)">
+      <div style="display:flex;gap:8px;align-items:center">
+        <div style="flex:1;min-width:0;cursor:pointer" onclick="S.outreachOpen=${isOpen ? 'null' : `'${key}'`};render()">
+          <div style="font-size:13px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${o.kind === 'followup' ? '↻ ' : ''}${esc(o.company || '')} <span class="dim">· ${esc(o.name || '')}</span></div>
+          <div class="dim" style="font-size:10px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${esc(o.title || '')}${conf}</div>
+        </div>
+        <a class="btn primary" style="flex:0 0 auto;font-size:11px;padding:4px 10px;text-decoration:none" href="${esc(outreachComposeURL(o))}" target="_blank" rel="noopener">Compose</a>
+        <a class="btn" style="flex:0 0 auto;font-size:11px;padding:4px 8px;text-decoration:none" title="Open in the phone's mail app" href="${esc('mailto:' + encodeURIComponent(o.email || '') + '?subject=' + encodeURIComponent(o.subject || '') + '&body=' + encodeURIComponent(o.body || ''))}">app</a>
+        <button class="btn" style="flex:0 0 auto;font-size:11px;padding:4px 8px" onclick="outreachMark('${o.id}','${o.kind}','sent')">✓ sent</button>
+        <button class="btn" style="flex:0 0 auto;font-size:11px;padding:4px 8px" title="Not sending this one" onclick="outreachMark('${o.id}','${o.kind}','skip')">✕</button>
+      </div>
+      ${isOpen ? `<div style="margin-top:6px;padding:8px;background:rgba(129,140,248,.06);border-radius:8px;font-size:12px;line-height:1.5">
+        <div class="dim mono" style="font-size:10px">to ${esc(o.email || '')}${o.source_url ? ` · <a href="${esc(o.source_url)}" target="_blank" rel="noopener" style="color:inherit">source</a>` : ''}</div>
+        <div style="font-weight:600;margin:4px 0">${esc(o.subject || '')}</div>
+        <div style="white-space:pre-wrap">${esc(o.body || '')}</div></div>` : ''}
+    </div>`; }).join('')}
+    <div class="dim mono" style="font-size:10px;margin-top:6px">Compose opens Gmail as ${OUTREACH_FROM} · you press Send · then tap ✓ sent · ↻ = follow-up</div></div>`;
+}
+async function outreachMark(id, kind, what){
+  S.lastWrite = Date.now();
+  const now = new Date().toISOString();
+  const patch = kind === 'followup'
+    ? (what === 'sent' ? {followup_sent_at: now} : {followup_sent_at: now, notes: 'follow-up skipped ' + now.slice(0, 10)})
+    : (what === 'sent' ? {status: 'sent', sent_at: now, followup_due: new Date(Date.now() + 7 * 864e5).toLocaleDateString('sv-SE')} : {status: 'skipped'});
+  const {error} = await db.from('job_outreach').update(patch).eq('id', id);
+  if (error) { toast('⚠ ' + error.message); return; }
+  toast(what === 'sent' ? '✓ marked sent' : 'skipped');
+  S.outreach = (S.outreach || []).filter(o => !(o.id === id && o.kind === kind));
+  render();
 }
 
 function jobRowHTML(j){
